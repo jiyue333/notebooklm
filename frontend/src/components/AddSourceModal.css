@@ -1,0 +1,188 @@
+/* ============================================
+   AddSourceModal – Tidyflux-inspired Style
+   ============================================ */
+
+.add-source-overlay {
+    position: fixed;
+    inset: 0;
+    background: transparent;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.add-source-modal {
+    position: relative;
+    width: 92%;
+    max-width: 560px;
+    min-width: 380px;
+    max-height: 80vh;
+    min-height: 280px;
+    background: var(--card-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border-radius: var(--radius);
+    box-shadow: var(--card-shadow);
+    overflow: auto;
+    padding: 32px 36px;
+    resize: both;
+}
+
+.add-source-close {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    background: none;
+    border: none;
+    color: var(--meta-color);
+    font-size: 1rem;
+    cursor: pointer;
+    border-radius: 50%;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+}
+
+.add-source-close:hover {
+    background: var(--hover-bg);
+    color: var(--title-color);
+}
+
+.add-source-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--title-color);
+    margin-bottom: 4px;
+    text-align: center;
+}
+
+.add-source-subtitle {
+    font-size: 0.82rem;
+    color: var(--meta-color);
+    text-align: center;
+    margin-bottom: 24px;
+}
+
+/* Search box */
+.add-source-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    box-shadow: var(--card-shadow);
+    margin-bottom: 16px;
+}
+
+.add-source-search span {
+    font-size: 0.9rem;
+}
+
+.add-source-search input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    font-size: 0.9rem;
+    font-family: inherit;
+    color: var(--text-color);
+    outline: none;
+}
+
+.add-source-search input::placeholder {
+    color: var(--text-secondary);
+}
+
+/* Tags */
+.add-source-tags {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+
+.add-source-tag {
+    padding: 5px 14px;
+    border: none;
+    border-radius: 20px;
+    background: var(--card-bg);
+    box-shadow: var(--card-shadow);
+    font-size: 0.78rem;
+    font-family: inherit;
+    color: var(--meta-color);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.add-source-tag.active {
+    color: var(--accent-color);
+    font-weight: 600;
+}
+
+.add-source-tag:hover {
+    box-shadow: var(--card-shadow-hover);
+}
+
+/* Dropzone */
+.add-source-dropzone {
+    border: 2px dashed var(--border-color);
+    border-radius: var(--radius);
+    padding: 28px 16px;
+    text-align: center;
+    transition: all 0.2s;
+    margin-bottom: 20px;
+    cursor: pointer;
+}
+
+.add-source-dropzone:hover {
+    border-color: var(--accent-color);
+    background: color-mix(in srgb, var(--accent-color), transparent 96%);
+}
+
+.add-source-dropzone-content p:first-child {
+    font-size: 1.5rem;
+    margin-bottom: 4px;
+}
+
+.add-source-dropzone-content p {
+    font-size: 0.82rem;
+    color: var(--meta-color);
+}
+
+/* Action buttons */
+.add-source-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    flex-wrap: nowrap;
+}
+
+.add-source-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 18px;
+    border: none;
+    border-radius: var(--radius);
+    background: var(--card-bg);
+    box-shadow: var(--card-shadow);
+    font-size: 0.82rem;
+    font-family: inherit;
+    color: var(--text-color);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.add-source-btn:hover {
+    background: var(--hover-bg);
+    box-shadow: var(--card-shadow-hover);
+}
+
+.add-source-btn-icon {
+    font-size: 1rem;
+}

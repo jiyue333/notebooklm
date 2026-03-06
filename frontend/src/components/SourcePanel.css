@@ -1,0 +1,677 @@
+/* ============================================
+   SourcePanel – Tidyflux-inspired Style
+   ============================================ */
+
+/* Add source button */
+.sp-add-source-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 12px;
+    border: 2px dashed var(--border-color);
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--accent-color);
+    font-size: 0.85rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    margin-bottom: 12px;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.sp-add-source-btn:hover {
+    border-color: var(--accent-color);
+    background: color-mix(in srgb, var(--accent-color), transparent 95%);
+}
+
+.sp-add-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    color: var(--accent-color);
+}
+
+.sp-add-icon svg {
+    width: 18px;
+    height: 18px;
+}
+
+/* Search area */
+.sp-search-area {
+    margin-bottom: 10px;
+    flex-shrink: 0;
+}
+
+.sp-search-box {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    box-shadow: var(--card-shadow);
+    margin-bottom: 8px;
+}
+
+.sp-search-icon {
+    display: flex;
+    align-items: center;
+    color: var(--meta-color);
+}
+
+.sp-search-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
+.sp-search-input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: var(--text-color);
+    font-size: 0.85rem;
+    font-family: inherit;
+    outline: none;
+}
+
+.sp-search-input::placeholder {
+    color: var(--text-secondary);
+}
+
+/* Search actions row */
+.sp-search-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Mode selector */
+.sp-mode-selector {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 1;
+}
+
+.sp-mode-drop-wrapper {
+    position: relative;
+}
+
+.sp-mode-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 100px;
+    background: var(--card-bg);
+    font-size: 0.78rem;
+    font-family: inherit;
+    color: var(--meta-color);
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+
+.sp-mode-btn.active {
+    color: var(--accent-color);
+    font-weight: 600;
+    border-color: var(--accent-color);
+    background: color-mix(in srgb, var(--accent-color), transparent 92%);
+}
+
+.sp-mode-btn:hover {
+    border-color: var(--accent-color);
+    color: var(--accent-color);
+}
+
+.sp-mode-btn-icon {
+    display: flex;
+    align-items: center;
+}
+
+.sp-mode-btn-icon svg {
+    width: 15px;
+    height: 15px;
+}
+
+.sp-mode-caret {
+    display: flex;
+    align-items: center;
+    opacity: 0.6;
+}
+
+.sp-mode-caret svg {
+    width: 14px;
+    height: 14px;
+}
+
+/* Mode dropdown */
+.sp-mode-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    min-width: 240px;
+    background: var(--card-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-radius: var(--radius);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.2), 0 0 0 1px var(--border-color);
+    padding: 6px;
+    z-index: 100;
+    animation: fadeIn 0.15s ease-out;
+}
+
+[data-theme="dark"] .sp-mode-dropdown {
+    background: color-mix(in srgb, var(--bg-color), #fff 8%);
+}
+
+.sp-mode-option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 12px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+    color: var(--text-color);
+    transition: background 0.15s;
+}
+
+.sp-mode-option:hover {
+    background: var(--hover-bg);
+}
+
+.sp-mode-option.active .sp-mode-option-label {
+    color: var(--accent-color);
+    font-weight: 600;
+}
+
+.sp-mode-option-icon {
+    display: flex;
+    align-items: center;
+    color: var(--accent-color);
+    flex-shrink: 0;
+}
+
+.sp-mode-option-icon svg {
+    width: 20px;
+    height: 20px;
+}
+
+.sp-mode-option-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.sp-mode-option-label {
+    display: block;
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: var(--title-color);
+}
+
+.sp-mode-option-desc {
+    display: block;
+    font-size: 0.72rem;
+    color: var(--meta-color);
+    margin-top: 2px;
+}
+
+.sp-mode-option-check {
+    display: flex;
+    align-items: center;
+    color: var(--accent-color);
+    flex-shrink: 0;
+}
+
+.sp-mode-option-check svg {
+    width: 18px;
+    height: 18px;
+}
+
+/* Submit button */
+.sp-submit-btn {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 50%;
+    background: var(--accent-color);
+    color: #fff;
+    cursor: pointer;
+    margin-left: auto;
+    flex-shrink: 0;
+    transition: box-shadow 0.2s;
+}
+
+.sp-submit-btn svg {
+    width: 14px;
+    height: 14px;
+}
+
+.sp-submit-btn:hover {
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-color), transparent 50%);
+}
+
+.sp-submit-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Spinner */
+.sp-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    display: inline-block;
+}
+
+.sp-searching {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+    color: var(--meta-color);
+    font-size: 0.85rem;
+    flex-shrink: 0;
+}
+
+.sp-searching .sp-spinner {
+    border-color: color-mix(in srgb, var(--accent-color), transparent 60%);
+    border-top-color: var(--accent-color);
+}
+
+.sp-panel-body-results {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+/* Results card */
+.sp-results-card {
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    box-shadow: var(--card-shadow);
+    overflow: hidden;
+    margin-top: 8px;
+    animation: fadeIn 0.3s ease-out;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+.sp-results-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.sp-results-icon {
+    display: flex;
+    color: var(--accent-color);
+}
+
+.sp-results-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
+.sp-results-title {
+    flex: 1;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--title-color);
+}
+
+.sp-view-btn {
+    padding: 4px 12px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--accent-color), transparent 85%);
+    color: var(--accent-color);
+    font-size: 0.78rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.sp-view-btn:hover {
+    background: color-mix(in srgb, var(--accent-color), transparent 75%);
+}
+
+/* Result items */
+.sp-results-list {
+    padding: 6px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+}
+
+.sp-result-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
+}
+
+.sp-result-icon {
+    font-size: 1rem;
+    flex-shrink: 0;
+    color: var(--accent-color);
+}
+
+.sp-result-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
+.sp-result-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.sp-result-title {
+    display: block;
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--title-color);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sp-result-desc {
+    display: block;
+    font-size: 0.72rem;
+    color: var(--meta-color);
+    margin-top: 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sp-result-more {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    font-size: 0.78rem;
+    color: var(--accent-color);
+    flex-shrink: 0;
+}
+
+.sp-result-more-icon {
+    display: flex;
+}
+
+.sp-result-more-icon svg {
+    width: 14px;
+    height: 14px;
+}
+
+/* Footer */
+.sp-results-footer {
+    display: flex;
+    gap: 8px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--border-color);
+    flex-shrink: 0;
+}
+
+.sp-delete-btn {
+    padding: 6px 16px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--meta-color);
+    font-size: 0.82rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.sp-delete-btn:hover {
+    border-color: var(--meta-color);
+}
+
+.sp-import-btn {
+    padding: 6px 16px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--accent-color);
+    color: #fff;
+    font-size: 0.82rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: box-shadow 0.15s;
+}
+
+.sp-import-btn:hover {
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-color), transparent 50%);
+}
+
+/* ============================================
+   Discover View (expanded)
+   ============================================ */
+.sp-breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+}
+
+.sp-breadcrumb-link {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    border: none;
+    background: transparent;
+    color: var(--accent-color);
+    font-size: 0.85rem;
+    font-family: inherit;
+    cursor: pointer;
+    padding: 0;
+}
+
+.sp-breadcrumb-link svg {
+    width: 16px;
+    height: 16px;
+}
+
+.sp-breadcrumb-link:hover {
+    text-decoration: underline;
+}
+
+.sp-breadcrumb-sep {
+    color: var(--meta-color);
+    font-size: 0.85rem;
+}
+
+.sp-breadcrumb-current {
+    color: var(--title-color);
+    font-weight: 600;
+}
+
+.sp-discover-body {
+    padding: 8px 12px !important;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.sp-discover-summary {
+    font-size: 0.85rem;
+    color: var(--text-color);
+    line-height: 1.6;
+    padding: 8px 0;
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.sp-discover-list {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin-top: 8px;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.sp-discover-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--title-color);
+    border-bottom: 1px solid var(--border-color);
+    background: var(--hover-bg);
+}
+
+.sp-checkbox {
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid var(--border-color);
+    border-radius: 5px;
+    background: transparent;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.15s;
+    color: #fff;
+}
+
+.sp-checkbox svg {
+    width: 14px;
+    height: 14px;
+}
+
+.sp-checkbox.checked {
+    background: var(--accent-color);
+    border-color: var(--accent-color);
+}
+
+.sp-discover-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-color);
+    transition: background 0.15s;
+    flex-shrink: 0;
+}
+
+.sp-discover-item:last-child {
+    border-bottom: none;
+}
+
+.sp-discover-item:hover {
+    background: var(--hover-bg);
+}
+
+.sp-discover-item-icon {
+    font-size: 1rem;
+    flex-shrink: 0;
+    color: var(--accent-color);
+}
+
+.sp-discover-item-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.sp-discover-item-title {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--title-color);
+    line-height: 1.3;
+}
+
+.sp-discover-item-desc {
+    display: block;
+    font-size: 0.72rem;
+    color: var(--meta-color);
+    margin-top: 3px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.sp-discover-link {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: none;
+    background: transparent;
+    color: var(--meta-color);
+    cursor: pointer;
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: all 0.15s;
+}
+
+.sp-discover-link svg {
+    width: 16px;
+    height: 16px;
+}
+
+.sp-discover-link:hover {
+    color: var(--accent-color);
+    background: var(--hover-bg);
+}
+
+.sp-discover-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    margin-top: 8px;
+    flex-shrink: 0;
+}
+
+.sp-discover-count {
+    font-size: 0.82rem;
+    color: var(--meta-color);
+}
+
+.sp-discover-list-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+}

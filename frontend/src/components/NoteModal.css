@@ -1,0 +1,306 @@
+/* ============================================
+   NoteModal – Markdown Editor Modal
+   ============================================ */
+.note-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    animation: fadeIn 0.2s ease-out;
+}
+
+.note-modal {
+    width: 700px;
+    max-width: 92vw;
+    max-height: 85vh;
+    background: var(--card-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border-radius: var(--radius-lg, 16px);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--border-color);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: modalSlideUp 0.25s ease-out;
+}
+
+[data-theme="dark"] .note-modal {
+    background: color-mix(in srgb, var(--bg-color), #fff 6%);
+}
+
+@keyframes modalSlideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px) scale(0.96);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+/* Header */
+.note-modal-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 18px 10px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.note-modal-title-input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: var(--title-color);
+    font-size: 1.05rem;
+    font-weight: 700;
+    font-family: inherit;
+    outline: none;
+    padding: 4px 0;
+}
+
+.note-modal-title-input::placeholder {
+    color: var(--text-secondary);
+    font-weight: 400;
+}
+
+.note-modal-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.note-modal-tab {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 12px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--meta-color);
+    font-size: 0.78rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.note-modal-tab svg {
+    width: 14px;
+    height: 14px;
+}
+
+.note-modal-tab.active {
+    background: color-mix(in srgb, var(--accent-color), transparent 88%);
+    color: var(--accent-color);
+    font-weight: 600;
+}
+
+.note-modal-tab:hover:not(.active) {
+    background: var(--hover-bg);
+}
+
+.note-modal-del-btn,
+.note-modal-close-btn {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    cursor: pointer;
+    color: var(--meta-color);
+    transition: all 0.15s;
+}
+
+.note-modal-del-btn svg,
+.note-modal-close-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
+.note-modal-del-btn:hover {
+    color: #e74c3c;
+    background: color-mix(in srgb, #e74c3c, transparent 90%);
+}
+
+.note-modal-close-btn:hover {
+    color: var(--accent-color);
+    background: var(--hover-bg);
+}
+
+/* Body */
+.note-modal-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 450px;
+}
+
+/* Editor */
+.note-modal-editor {
+    flex: 1;
+    width: 100%;
+    padding: 18px;
+    border: none;
+    background: transparent;
+    color: var(--text-color);
+    font-size: 0.92rem;
+    font-family: 'SF Mono', Menlo, Monaco, Consolas, monospace;
+    line-height: 1.7;
+    resize: none;
+    outline: none;
+    overflow-y: auto;
+}
+
+.note-modal-editor::placeholder {
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-style: italic;
+}
+
+/* Preview */
+.note-modal-preview {
+    flex: 1;
+    padding: 18px;
+    overflow-y: auto;
+    font-size: 0.92rem;
+    line-height: 1.8;
+    color: var(--text-color);
+}
+
+.note-modal-preview h1 {
+    font-size: 1.4em;
+    font-weight: 700;
+    color: var(--title-color);
+    margin: 0 0 0.5em;
+}
+
+.note-modal-preview h2 {
+    font-size: 1.2em;
+    font-weight: 700;
+    color: var(--title-color);
+    margin: 1em 0 0.4em;
+}
+
+.note-modal-preview h3 {
+    font-size: 1.05em;
+    font-weight: 700;
+    color: var(--title-color);
+    margin: 0.8em 0 0.3em;
+}
+
+.note-modal-preview p {
+    margin: 0 0 0.8em;
+}
+
+.note-modal-preview ul,
+.note-modal-preview ol {
+    padding-left: 20px;
+    margin-bottom: 0.8em;
+}
+
+.note-modal-preview strong {
+    font-weight: 700;
+    color: var(--title-color);
+}
+
+.note-modal-preview code {
+    background: var(--hover-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    font-family: 'SF Mono', Menlo, Monaco, Consolas, monospace;
+    font-size: 0.88em;
+}
+
+.note-modal-preview pre {
+    background: var(--hover-bg);
+    padding: 12px;
+    border-radius: var(--radius);
+    margin: 0.8em 0;
+    overflow-x: auto;
+    font-size: 0.85em;
+}
+
+.note-modal-preview pre code {
+    background: transparent;
+    padding: 0;
+}
+
+.note-modal-preview blockquote {
+    border-left: 3px solid var(--accent-color);
+    padding: 8px 14px;
+    margin: 0.8em 0;
+    background: color-mix(in srgb, var(--accent-color), transparent 95%);
+    border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.note-modal-preview a {
+    color: var(--accent-color);
+    text-decoration: underline;
+}
+
+.note-modal-empty {
+    color: var(--text-secondary);
+    font-style: italic;
+    text-align: center;
+    padding: 40px 0;
+}
+
+/* Footer */
+.note-modal-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 18px;
+    border-top: 1px solid var(--border-color);
+    flex-shrink: 0;
+}
+
+.note-modal-cancel-btn {
+    padding: 8px 20px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--meta-color);
+    font-size: 0.85rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.note-modal-cancel-btn:hover {
+    border-color: var(--meta-color);
+    color: var(--title-color);
+}
+
+.note-modal-save-btn {
+    padding: 8px 24px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--accent-color);
+    color: #fff;
+    font-size: 0.85rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s;
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-color), transparent 60%);
+}
+
+.note-modal-save-btn:hover {
+    opacity: 0.9;
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-color), transparent 40%);
+}

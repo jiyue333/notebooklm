@@ -1,0 +1,509 @@
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { useTheme } from '../contexts/ThemeContext';
+import { mockNotebooks, mockUser } from '../data/mockData';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
+import rehypeSlug from 'rehype-slug';
+import SettingsModal from '../components/SettingsModal';
+import AddSourceModal from '../components/AddSourceModal';
+import SourcePanel from '../components/SourcePanel';
+import NoteModal from '../components/NoteModal';
+import './NotebookPage.css';
+
+/* ============================================
+   Resizer Hook
+   ============================================ */
+function useResizer(direction, initialSize, minSize, maxSize, inverted = false) {
+    const [size, setSize] = useState(initialSize);
+    const sizeRef = useRef(initialSize);
+    sizeRef.current = size;
+
+    const onMouseDown = useCallback((e) => {
+        e.preventDefault();
+        const startPos = direction === 'horizontal' ? e.clientX : e.clientY;
+        const startSize = sizeRef.current;
+        document.body.style.cursor = direction === 'horizontal' ? 'col-resize' : 'row-resize';
+        document.body.style.userSelect = 'none';
+
+        const onMouseMove = (ev) => {
+            const currentPos = direction === 'horizontal' ? ev.clientX : ev.clientY;
+            const delta = inverted ? (startPos - currentPos) : (currentPos - startPos);
+            setSize(Math.min(maxSize, Math.max(minSize, startSize + delta)));
+        };
+        const onMouseUp = () => {
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        };
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+    }, [direction, minSize, maxSize, inverted]);
+
+    return [size, onMouseDown, setSize];
+}
+
+/* ============================================
+   Extract TOC from markdown
+   ============================================ */
+function extractToc(markdown) {
+    if (!markdown) return [];
+    const lines = markdown.split('\n');
+    const toc = [];
+    let inCode = false;
+    let skippedFirst = false;
+    lines.forEach(line => {
+        if (line.trim().startsWith('```')) { inCode = !inCode; return; }
+        if (inCode) return;
+        const m = line.match(/^(#{1,4})\s+(.+)$/);
+        if (m) {
+            const level = m[1].length;
+            const title = m[2].trim();
+            if (level === 1 && !skippedFirst) { skippedFirst = true; return; }
+            const id = title.toLowerCase().replace(/[^\w\u4e00-\u9fff]+/g, '-').replace(/(^-|-$)/g, '');
+            toc.push({ id, title, level });
+        }
+    });
+    return toc;
+}
+
+/* ============================================
+   Strip first h1 from markdown
+   ============================================ */
+function stripFirstH1(markdown) {
+    if (!markdown) return '';
+    const lines = markdown.split('\n');
+    let found = false;
+    const result = [];
+    for (const line of lines) {
+        if (!found && /^#\s+/.test(line)) { found = true; continue; }
+        result.push(line);
+    }
+    return result.join('\n').replace(/^\n+/, '');
+}
+
+/* ============================================
+   SVG Icons – Tidyflux filled style (currentColor)
+   ============================================ */
+const I = {
+    back: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" /></svg>,
+    translate: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z" /></svg>,
+    summary: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L14.85 9.15L22 12L14.85 14.85L12 22L9.15 14.85L2 12L9.15 9.15L12 2Z" /></svg>,
+    chat: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12z" /><path d="M7 9h2v2H7zm4 0h2v2h-2zm4 0h2v2h-2z" /></svg>,
+    more: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" /></svg>,
+    addNote: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M14.06 9.02l.92.92L5.92 19H5v-.92l9.06-9.06M17.66 3c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z" /></svg>,
+    edit: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M14.06 9.02l.92.92L5.92 19H5v-.92l9.06-9.06M17.66 3c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z" /></svg>,
+    theme: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69zM12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6zm0-10c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4z" /></svg>,
+    settings: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" /></svg>,
+    close: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>,
+    send: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" /></svg>,
+    sparkle: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L14.85 9.15L22 12L14.85 14.85L12 22L9.15 14.85L2 12L9.15 9.15L12 2Z" /></svg>,
+    note: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z" /></svg>,
+    toc: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z" /></svg>,
+    font: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9.93 13.5h4.14L12 7.98 9.93 13.5zM20 2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-4.05 16.5l-1.14-3H9.17l-1.12 3H5.96l5.11-13h1.86l5.11 13h-2.09z" /></svg>,
+    deleteChat: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" /></svg>,
+    // Source-type icons (rendered in theme color via CSS)
+    arxiv: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L14.85 9.15L22 12L14.85 14.85L12 22L9.15 14.85L2 12L9.15 9.15L12 2Z" /></svg>,
+    github: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" /></svg>,
+    paper: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zM13 9V3.5L18.5 9H13z" /></svg>,
+    research: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z" /></svg>,
+    article: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z" /></svg>,
+};
+
+/* Map article type → icon */
+function getArticleIcon(type) {
+    switch (type) {
+        case 'github': return I.github;
+        case 'paper': return I.paper;
+        case 'research': return I.research;
+        case 'article': return I.article;
+        default: return I.paper;
+    }
+}
+
+/* ============================================
+   Mock Notes Data
+   ============================================ */
+const defaultNotes = [
+    { id: 1, title: 'YOLO 目标检测技术核心要点总结', content: '## 核心要点\n\n- YOLO 系列在密集场景下的优势\n- YOLOv5 → YOLOv11 的演进路线\n- 与传统方法的性能对比', type: 'Briefing Doc', sources: 8, time: '65 天前' },
+    { id: 2, title: '论文阅读笔记', content: '### Count2Density\n\n需要关注 Count2Density 的方法论\n\n> 利用计数信息来生成密度图', type: '笔记', sources: 3, time: '昨天' },
+];
+
+/* ============================================
+   Notebook Page
+   ============================================ */
+export default function NotebookPage() {
+    const { id } = useParams();
+    const navigate = useNavigate();
+    const { theme, toggleTheme } = useTheme();
+
+    const notebook = mockNotebooks.find(nb => nb.id === id) || mockNotebooks[0];
+    const [selectedArticle, setSelectedArticle] = useState(
+        notebook.articles.length > 0 ? notebook.articles[0] : null
+    );
+    const [searchQuery, setSearchQuery] = useState('');
+    const [showSettings, setShowSettings] = useState(false);
+    const [showAddSource, setShowAddSource] = useState(false);
+    const [sourceExpanded, setSourceExpanded] = useState(false);
+    const [showArticleMenu, setShowArticleMenu] = useState(false);
+    const menuRef = useRef(null);
+
+    // AI features
+    const [showSummary, setShowSummary] = useState(false);
+    const [summaryText, setSummaryText] = useState('');
+    const [summaryLoading, setSummaryLoading] = useState(false);
+    const [showAiChat, setShowAiChat] = useState(false);
+    const [chatMessages, setChatMessages] = useState([]);
+    const [chatInput, setChatInput] = useState('');
+    const [showTranslation, setShowTranslation] = useState(false);
+
+    // Article settings
+    const [fontSize, setFontSize] = useState(1.05);
+    const [pageWidth, setPageWidth] = useState(720);
+
+    // Notes state
+    const [notes, setNotes] = useState(defaultNotes);
+    const [noteModalData, setNoteModalData] = useState(null); // null = closed, object = open
+
+    // Layout resizers — same default for visual alignment, but independent dragging
+    const [leftWidth, onLeftResize] = useResizer('horizontal', 300, 200, 450);
+    const [rightWidth, onRightResize] = useResizer('horizontal', 360, 260, 560, true);
+    const [leftTopH, onLeftSplit] = useResizer('vertical', 440, 120, 650);
+    const [rightTopH, onRightSplit] = useResizer('vertical', 440, 120, 650);
+
+    // Close dropdown on outside click
+    useEffect(() => {
+        const handler = (e) => {
+            if (menuRef.current && !menuRef.current.contains(e.target)) {
+                setShowArticleMenu(false);
+            }
+        };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+    }, []);
+
+    // Reset AI features when switching articles
+    useEffect(() => {
+        setShowSummary(false);
+        setSummaryText('');
+        setSummaryLoading(false);
+        setShowTranslation(false);
+    }, [selectedArticle?.id]);
+
+    const toc = useMemo(() => selectedArticle ? extractToc(selectedArticle.content) : [], [selectedArticle]);
+    const strippedContent = useMemo(() => selectedArticle ? stripFirstH1(selectedArticle.content) : '', [selectedArticle]);
+
+    // AI Summary
+    const handleSummary = () => {
+        if (showSummary) { setShowSummary(false); return; }
+        setShowSummary(true);
+        setSummaryLoading(true);
+        setSummaryText('');
+        setTimeout(() => {
+            setSummaryText('本文介绍了基于 YOLO (You Only Look Once) 系列算法的人群密度估计方法。YOLO 将目标检测转化为回归问题，具有速度快、全局信息利用充分、泛化能力强等优势。文章详细对比了 YOLOv5 到 YOLOv11 各版本的核心改进，并探讨了基于检测、密度图和混合方法等三类人群密度估计技术路线。');
+            setSummaryLoading(false);
+        }, 2000);
+    };
+
+    const handleTranslate = () => setShowTranslation(!showTranslation);
+
+    const handleToggleChat = () => {
+        setShowAiChat(!showAiChat);
+        if (!showAiChat) setSourceExpanded(false);
+    };
+
+    const handleSendChat = () => {
+        if (!chatInput.trim()) return;
+        setChatMessages(prev => [...prev, { role: 'user', content: chatInput }]);
+        setChatInput('');
+        setTimeout(() => {
+            setChatMessages(prev => [...prev, { role: 'assistant', content: '这是一个模拟的 AI 回复。在实际使用中，这里会调用 LLM API 来根据文章内容回答您的问题。' }]);
+        }, 1200);
+    };
+
+    const clearChat = () => setChatMessages([]);
+
+    // Note handlers – use modal
+    const openNewNote = () => {
+        const newNote = { id: Date.now(), title: '', content: '', type: '笔记', sources: 0, time: '刚刚' };
+        setNoteModalData(newNote);
+    };
+
+    const openExistingNote = (note) => {
+        setNoteModalData(note);
+    };
+
+    const handleSaveNote = (updatedNote) => {
+        setNotes(prev => {
+            const exists = prev.find(n => n.id === updatedNote.id);
+            if (exists) return prev.map(n => n.id === updatedNote.id ? updatedNote : n);
+            return [updatedNote, ...prev];
+        });
+    };
+
+    const handleDeleteNote = (noteId) => {
+        setNotes(prev => prev.filter(n => n.id !== noteId));
+    };
+
+    // Translation renderer
+    const renderComponents = useMemo(() => {
+        if (!showTranslation) return {};
+        return {
+            p: ({ children, ...props }) => (
+                <div className="nb-translated-block">
+                    <p {...props}>{children}</p>
+                    <p className="nb-translation"><em>[Translation will appear here after API call]</em></p>
+                </div>
+            ),
+        };
+    }, [showTranslation]);
+
+    return (
+        <div className="notebook-page">
+            {/* Top Bar */}
+            <header className="nb-topbar">
+                <div className="nb-topbar-left">
+                    <button className="nb-icon-btn" onClick={() => navigate('/home')} title="返回">{I.back}</button>
+                    <div className="nb-topbar-title">
+                        <span className="nb-topbar-emoji">{notebook.emoji}</span>
+                        <h1>{notebook.title}</h1>
+                    </div>
+                </div>
+                <div className="nb-topbar-right">
+                    <button className="nb-icon-btn" onClick={toggleTheme} title="切换主题">{I.theme}</button>
+                    <button className="nb-icon-btn" onClick={() => setShowSettings(true)} title="设置">{I.settings}</button>
+                    <div className="nb-avatar">{mockUser.name.charAt(0)}</div>
+                </div>
+            </header>
+
+            {/* Main Layout */}
+            <div className="nb-layout">
+                {/* ====== LEFT COLUMN ====== */}
+                <div className="nb-left" style={{ width: leftWidth }}>
+                    <div className="nb-panel nb-left-top" style={{ height: leftTopH }}>
+                        <div className="nb-panel-header">
+                            <span className="nb-panel-icon">{I.toc}</span>
+                            <span className="nb-panel-title">文章目录</span>
+                        </div>
+                        <div className="nb-panel-body nb-list-panel-body">
+                            {toc.length > 0 ? (
+                                <ul className="nb-toc-list nb-list-scroll">
+                                    {toc.map((item, idx) => (
+                                        <li key={idx} className={`nb-toc-item nb-toc-level-${item.level}`}>
+                                            <a href={`#${item.id}`}>{item.title}</a>
+                                        </li>
+                                    ))}
+                                </ul>
+                            ) : (
+                                <div className="nb-empty-hint"><p>选择一篇文章查看目录</p></div>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="nb-resizer nb-resizer-h" onMouseDown={onLeftSplit} />
+
+                    <div className="nb-panel nb-left-bottom" style={{ flex: 1 }}>
+                        <div className="nb-panel-header">
+                            <span className="nb-panel-icon">{I.paper}</span>
+                            <span className="nb-panel-title">来源文章</span>
+                            <span className="nb-panel-badge">{notebook.articles.length}</span>
+                        </div>
+                        <div className="nb-panel-body nb-list-panel-body">
+                            {notebook.articles.length > 0 ? (
+                                <ul className="nb-article-list nb-list-scroll">
+                                    {notebook.articles.map(article => (
+                                        <li
+                                            key={article.id}
+                                            className={`nb-article-item ${selectedArticle?.id === article.id ? 'active' : ''}`}
+                                            onClick={() => setSelectedArticle(article)}
+                                        >
+                                            <span className="nb-article-icon">{getArticleIcon(article.type)}</span>
+                                            <span className="nb-article-title-text">{article.title}</span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            ) : (
+                                <div className="nb-empty-hint"><p>暂无来源文章</p></div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="nb-resizer nb-resizer-v" onMouseDown={onLeftResize} />
+
+                {/* ====== CENTER COLUMN ====== */}
+                <div className="nb-center">
+                    {selectedArticle ? (
+                        <>
+                            <div className="nb-article-toolbar">
+                                <div className="nb-toolbar-left">
+                                    <h2 className="nb-toolbar-title">{selectedArticle.title}</h2>
+                                    <div className="nb-toolbar-meta">
+                                        <span>{selectedArticle.author || '未知来源'}</span>
+                                        <span>·</span>
+                                        <span>{selectedArticle.date || ''}</span>
+                                    </div>
+                                </div>
+                                <div className="nb-toolbar-right">
+                                    <button className={`nb-icon-btn ${showTranslation ? 'active' : ''}`} title="翻译" onClick={handleTranslate}>{I.translate}</button>
+                                    <button className={`nb-icon-btn ${showSummary ? 'active' : ''}`} title="AI 摘要" onClick={handleSummary}>{I.summary}</button>
+                                    <button className={`nb-icon-btn ${showAiChat ? 'active' : ''}`} title="AI 助手" onClick={handleToggleChat}>{I.chat}</button>
+                                    <div className="nb-toolbar-menu-wrapper" ref={menuRef}>
+                                        <button className="nb-icon-btn" title="更多设置" onClick={() => setShowArticleMenu(!showArticleMenu)}>{I.more}</button>
+                                        {showArticleMenu && (
+                                            <div className="nb-toolbar-dropdown">
+                                                <div className="nb-dropdown-section">
+                                                    <label className="nb-dropdown-label">{I.font} 字体大小</label>
+                                                    <div className="nb-dropdown-slider">
+                                                        <span>小</span>
+                                                        <input type="range" min="0.8" max="1.4" step="0.05" value={fontSize} onChange={(e) => setFontSize(parseFloat(e.target.value))} />
+                                                        <span className="nb-slider-value">{fontSize.toFixed(2)}em</span>
+                                                        <span>大</span>
+                                                    </div>
+                                                </div>
+                                                <div className="nb-dropdown-section">
+                                                    <label className="nb-dropdown-label">页面宽度</label>
+                                                    <div className="nb-dropdown-slider">
+                                                        <span>窄</span>
+                                                        <input type="range" min="500" max="1000" step="20" value={pageWidth} onChange={(e) => setPageWidth(parseInt(e.target.value))} />
+                                                        <span className="nb-slider-value">{pageWidth}</span>
+                                                        <span>宽</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="nb-center-body">
+                                <div className="nb-article-content" style={{ fontSize: `${fontSize}rem`, maxWidth: `${pageWidth}px` }}>
+                                    {showSummary && (
+                                        <div className="nb-summary-card">
+                                            <div className="nb-summary-header">
+                                                <span className="nb-summary-icon">{I.sparkle}</span>
+                                                <span className="nb-summary-label">摘要</span>
+                                                <button className="nb-icon-btn-sm" onClick={() => setShowSummary(false)}>{I.close}</button>
+                                            </div>
+                                            <div className="nb-summary-body">
+                                                {summaryLoading ? (
+                                                    <div className="nb-summary-loading"><span className="nb-spinner" /><span>正在生成摘要...</span></div>
+                                                ) : (<p>{summaryText}</p>)}
+                                            </div>
+                                        </div>
+                                    )}
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSlug]} components={renderComponents}>
+                                        {strippedContent}
+                                    </ReactMarkdown>
+                                </div>
+                            </div>
+                        </>
+                    ) : (
+                        <div className="nb-empty-center">
+                            <div className="nb-empty-center-icon">{I.paper}</div>
+                            <h3>选择一篇文章开始阅读</h3>
+                            <p>点击左侧来源文章列表中的任意文章</p>
+                        </div>
+                    )}
+                </div>
+
+                <div className="nb-resizer nb-resizer-v" onMouseDown={onRightResize} />
+
+                {/* ====== RIGHT COLUMN ====== */}
+                <div className="nb-right" style={{ width: rightWidth }}>
+                    {showAiChat ? (
+                        <div className="nb-panel nb-right-full nb-chat-panel">
+                            <div className="nb-panel-header nb-chat-header">
+                                <span className="nb-panel-title">AI 助手</span>
+                                <div className="nb-chat-header-actions">
+                                    <button className="nb-icon-btn-sm" onClick={clearChat} title="清空对话">{I.deleteChat}</button>
+                                    <button className="nb-icon-btn-sm" onClick={() => setShowAiChat(false)} title="关闭">{I.close}</button>
+                                </div>
+                            </div>
+                            <div className="nb-chat-messages">
+                                {chatMessages.length === 0 && (
+                                    <div className="nb-chat-welcome">
+                                        <div className="nb-chat-welcome-icon">{I.sparkle}</div>
+                                        <p className="nb-chat-welcome-title">有什么想问的?</p>
+                                        <p className="nb-chat-welcome-hint">已加载当前文章内容，你可以提问、讨论或请求分析</p>
+                                        <div className="nb-chat-quick-actions">
+                                            <button onClick={() => setChatInput('创建详细摘要')}>创建详细摘要</button>
+                                        </div>
+                                    </div>
+                                )}
+                                {chatMessages.map((msg, idx) => (
+                                    <div key={idx} className={`nb-chat-msg nb-chat-msg-${msg.role}`}>
+                                        <div className={`nb-chat-bubble nb-chat-bubble-${msg.role}`}>{msg.content}</div>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="nb-chat-input-area">
+                                <div className="nb-chat-input-wrapper">
+                                    <input className="nb-chat-input" placeholder="输入你的问题..." value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendChat()} />
+                                    <button className="nb-chat-send-btn" onClick={handleSendChat} disabled={!chatInput.trim()}>{I.send}</button>
+                                </div>
+                            </div>
+                        </div>
+                    ) : sourceExpanded ? (
+                        <div className="nb-panel nb-right-full">
+                            <SourcePanel searchQuery={searchQuery} setSearchQuery={setSearchQuery} onAddSource={() => setShowAddSource(true)} expanded onCollapse={() => setSourceExpanded(false)} />
+                        </div>
+                    ) : (
+                        <>
+                            <div className="nb-panel nb-right-top" style={{ height: rightTopH }}>
+                                <SourcePanel searchQuery={searchQuery} setSearchQuery={setSearchQuery} onAddSource={() => setShowAddSource(true)} expanded={false} onExpand={() => setSourceExpanded(true)} />
+                            </div>
+
+                            <div className="nb-resizer nb-resizer-h" onMouseDown={onRightSplit} />
+
+                            {/* Notes Panel */}
+                            <div className="nb-panel nb-right-bottom" style={{ flex: 1 }}>
+                                <div className="nb-panel-header">
+                                    <span className="nb-panel-icon">{I.note}</span>
+                                    <span className="nb-panel-title">笔记</span>
+                                    <span className="nb-panel-badge">{notes.length}</span>
+                                </div>
+                                <div className="nb-panel-body nb-notes-body">
+                                    <div className="nb-notes-list">
+                                        {notes.map(note => (
+                                            <div key={note.id} className="nb-note-card">
+                                                <div className="nb-note-card-inner" onClick={() => openExistingNote(note)}>
+                                                    <div className="nb-note-card-icon">{I.edit}</div>
+                                                    <div className="nb-note-card-info">
+                                                        <span className="nb-note-card-title">{note.title}</span>
+                                                        <span className="nb-note-card-sub">{note.type} · {note.sources} 个来源 · {note.time}</span>
+                                                    </div>
+                                                    <button className="nb-note-card-more" onClick={(e) => { e.stopPropagation(); handleDeleteNote(note.id); }} title="删除">{I.more}</button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    <div className="nb-note-add-bottom">
+                                        <button className="nb-note-add-pill" onClick={openNewNote}>
+                                            {I.addNote}
+                                            <span>添加笔记</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </>
+                    )}
+                </div>
+            </div>
+
+            {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+            {showAddSource && <AddSourceModal onClose={() => setShowAddSource(false)} />}
+            {noteModalData && (
+                <NoteModal
+                    note={noteModalData}
+                    onClose={() => setNoteModalData(null)}
+                    onSave={handleSaveNote}
+                    onDelete={handleDeleteNote}
+                />
+            )}
+        </div>
+    );
+}
