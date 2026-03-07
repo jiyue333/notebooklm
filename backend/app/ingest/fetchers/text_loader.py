@@ -1,1 +1,0 @@
-"""Ingest module placeholder."""

@@ -470,24 +470,3 @@ Trafilatura 不需要删，但角色要从“主解析器”改成“provider fa
 
 这里也顺带回答你之前那个监控问题：Grafana 不是多余，而是统一值班台；RocketMQ Dashboard 是专项操作台。前者看全链路，后者看队列细节，两者不是替代关系。
 
-## 4. 具体实施计划
-
-第一步先改文档和接口契约，不写业务代码。你要一次性改三件事：把 `sources/search` 改成 `mode` 驱动的同步/异步统一接口；把 `sources/import` 改成 `searchSessionId + searchResultIds`；把 `settings` 改成不回显原始 `apiKey`。这一步很关键，因为它决定后面 migration、service、前端调用是不是会返工。当前契约里 `sources/search` 还是“先同步，deep 以后再任务制”，`sources/import` 还是 `sourceIds`，`settings` 还在直接传 `apiKey`，这些都该在开工前一次改正。
-
-第二步建表和基础索引，只做 migration，不做复杂业务。优先建 `users(settings_json + encrypted key)`、`notebooks`、`notes`、`search_sessions`、`search_results`、`articles`、`article_chunks`、`conversations`、`messages`、`summary_cache`、`jobs`。同时把 `pgvector`、全文检索和 HNSW/GIN 索引建好。做完这一步，你的数据边界就已经稳了。
-
-第三步先完成 P0，但不要小看它。P0 的目标不是“把最简单的接口写完”，而是让前端从 mock 切到真实数据。你自己的 history 里也明确写了，P0 包括 auth、notebooks、notes、settings、account；同时 notebook detail 是中心接口，应该尽快可用。这个阶段最重要的不是优雅，而是**字段对齐、错误码对齐、每个接口都有 trace_id 和结构化日志**。
-
-第四步做 Exa adapter 和搜索会话缓存。`fast/auto` 直接在 API 进程里调 Exa `/search`，请求里带 `highlights.maxCharacters`，拿到结果后写 `search_sessions + search_results`，并把 highlights 落成 `preview_markdown`；`deep` 则创建 `search_session` 和 `job`，由 worker 去跑。这里的验收标准不是“能搜”，而是“每次搜索都能复盘”，也就是你后面可以准确知道用户当时看到了哪些结果、选了哪些结果、导入了哪些结果。
-
-第五步实现 import。import 的关键不是抓网页，而是把“候选结果”稳稳变成“notebook 里的 article”。具体做法是：先从 `search_results` 回查选中的卡片，再做去重，创建 `articles` 占位，拷贝 `preview_markdown`，写入 `jobs`，提交事务，返回 notebook detail，然后异步推进解析链路。到这一步，用户已经能看到导入的 article，也能看到一段预览内容，但真正的 `clean_markdown / toc / article_vector / chunks` 都还在后台补。
-
-第六步实现统一 ingest pipeline。这一步必须把三种输入统一起来：`search_result/url` 走 Exa `/contents` 主路径，失败时回落到 direct fetch + Trafilatura；`text` 直接归一化成 markdown；`file` 走 MarkItDown，再在失败或复杂格式上切 Docling。得到正文后，做 markdown clean、toc extract、content_hash、article_retrieval_text、article_vector、heading-aware chunking、chunk_vector，最后原子替换旧 chunks 并把 `parse_status/chunk_status/index_status` 置到 ready。当前历史文档已经明确这条链路是 `fetch -> parse -> markdown clean -> toc extract -> chunk -> embed -> index`，我这里只是把 provider 和 fallback 路径补清楚了。
-
-第七步做 `/summary` 和 `/chat`。`summary` 先按 `article_id + content_hash + prompt_version + model_provider + model_name + output_language` 查缓存，miss 后再调模型；`chat` 先做会话持久化和路由器，不要一开始就重 RAG。路由规则非常简单：当前文章问题走当前 article；“类似内容/相关资料”走 article-level retrieval；“出处/证据”再下沉到 chunk-level。你之前已经把这条边界说得很清楚了：不是每次聊天都检索，只有相关问题才触发 retrieval。当前 history 里也是这个方向。
-
-第八步补齐观测、评测和压测。最少先有 API latency、search quality、parse/index health、retrieval latency、token/cost/error、RocketMQ/Redis health 这几类面板。压测场景则围绕登录到 notebook detail、note CRUD、`sources/search`、`sources/import`、`sources/upload`、`summary/chat` 这几条链。你自己的 history 已经把压测重点说出来了：真正关键的不是单纯 QPS，而是 provider 耗时、解析耗时、embedding 耗时、chunk 分布、retrieval 耗时和 LLM 首 token / 全量耗时。
-
-这一版方案里，真正决定后续可迭代性的，不是“用了多少新组件”，而是五个定死的点：**搜索按 mode 自动 sync/async 分流；导入参数改成 `searchSessionId + searchResultIds`；用户设置放 `users.settings_json`，只把 `apiKey` 单独加密；article 用 `preview_markdown + clean_markdown` 双层内容解决导入后可见性；检索表示用 `article_retrieval_text`，不引入 `article_summary` 这种会混语义的字段。**
-
-下一步最合理的是直接把这份方案落成 `backend/design.md` 和 `frontend/docs/api-contract.md` 的改写版。
