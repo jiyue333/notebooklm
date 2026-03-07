@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { appApi } from '../services/appApi';
 import './LoginPage.css';
 
 export default function LoginPage() {
@@ -13,9 +14,14 @@ export default function LoginPage() {
         e.preventDefault();
         setError('');
         setIsLoading(true);
-        await new Promise(resolve => setTimeout(resolve, 600));
-        setIsLoading(false);
-        navigate('/home');
+        try {
+            await appApi.auth.login({ username, password });
+            navigate('/home');
+        } catch (err) {
+            setError(err.message || '登录失败，请稍后重试');
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     return (

@@ -1,13 +1,32 @@
-import { useState, useRef } from 'react';
+import { useRef, useState } from 'react';
+import { appApi } from '../services/appApi';
 import './AddSourceModal.css';
 
-export default function AddSourceModal({ onClose }) {
+export default function AddSourceModal({ notebookId, onClose, onImported }) {
     const [searchQuery, setSearchQuery] = useState('');
     const [isDragging, setIsDragging] = useState(false);
+    const [isUploading, setIsUploading] = useState(false);
+    const [error, setError] = useState('');
     const fileInputRef = useRef(null);
 
-    const handleDragOver = (e) => {
-        e.preventDefault();
+    const handleFilesUpload = async (files) => {
+        if (!files?.length) return;
+
+        try {
+            setIsUploading(true);
+            setError('');
+            const detail = await appApi.sources.uploadFiles({ notebookId, files });
+            onImported?.(detail);
+            onClose();
+        } catch (err) {
+            setError(err.message || '上传来源失败');
+        } finally {
+            setIsUploading(false);
+        }
+    };
+
+    const handleDragOver = (event) => {
+        event.preventDefault();
         setIsDragging(true);
     };
 
@@ -15,28 +34,26 @@ export default function AddSourceModal({ onClose }) {
         setIsDragging(false);
     };
 
-    const handleDrop = (e) => {
-        e.preventDefault();
+    const handleDrop = (event) => {
+        event.preventDefault();
         setIsDragging(false);
-        const files = Array.from(e.dataTransfer.files);
-        console.log('Dropped files:', files);
+        handleFilesUpload(Array.from(event.dataTransfer.files));
     };
 
     return (
         <div className="add-source-overlay" onClick={onClose}>
-            <div className="add-source-modal animate-scale-in" onClick={(e) => e.stopPropagation()}>
+            <div className="add-source-modal animate-scale-in" onClick={(event) => event.stopPropagation()}>
                 <button className="add-source-close" onClick={onClose}>✕</button>
 
                 <h2 className="add-source-title">添加来源</h2>
                 <p className="add-source-subtitle">上传文件或搜索网络来源</p>
 
-                {/* Search */}
                 <div className="add-source-search">
                     <span>🔍</span>
                     <input
                         placeholder="搜索或粘贴链接"
                         value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
+                        onChange={(event) => setSearchQuery(event.target.value)}
                     />
                 </div>
 
@@ -45,7 +62,6 @@ export default function AddSourceModal({ onClose }) {
                     <button className="add-source-tag">🔄 Deep Research ▾</button>
                 </div>
 
-                {/* Dropzone */}
                 <div
                     className={`add-source-dropzone ${isDragging ? 'dragging' : ''}`}
                     onDragOver={handleDragOver}
@@ -58,12 +74,12 @@ export default function AddSourceModal({ onClose }) {
                         <p>支持 PDF、图片、文档、音频等</p>
                     </div>
                 </div>
+                {error && <p className="add-source-subtitle">{error}</p>}
 
-                {/* Action buttons */}
                 <div className="add-source-buttons">
-                    <button className="add-source-btn" onClick={() => fileInputRef.current?.click()}>
+                    <button className="add-source-btn" onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
                         <span className="add-source-btn-icon">⬆</span>
-                        上传文件
+                        {isUploading ? '上传中...' : '上传文件'}
                     </button>
                     <button className="add-source-btn">
                         <span className="add-source-btn-icon">🌐</span>
@@ -84,9 +100,8 @@ export default function AddSourceModal({ onClose }) {
                     type="file"
                     multiple
                     style={{ display: 'none' }}
-                    onChange={(e) => {
-                        const files = Array.from(e.target.files);
-                        console.log('Selected files:', files);
+                    onChange={(event) => {
+                        handleFilesUpload(Array.from(event.target.files));
                     }}
                 />
             </div>

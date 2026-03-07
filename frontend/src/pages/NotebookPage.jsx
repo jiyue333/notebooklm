@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useTheme } from '../contexts/ThemeContext';
-import { mockNotebooks, mockUser } from '../data/mockData';
+import { useTheme } from '../contexts/useTheme';
+import { appApi } from '../services/appApi';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -18,7 +18,10 @@ import './NotebookPage.css';
 function useResizer(direction, initialSize, minSize, maxSize, inverted = false) {
     const [size, setSize] = useState(initialSize);
     const sizeRef = useRef(initialSize);
-    sizeRef.current = size;
+
+    useEffect(() => {
+        sizeRef.current = size;
+    }, [size]);
 
     const onMouseDown = useCallback((e) => {
         e.preventDefault();
@@ -124,30 +127,23 @@ function getArticleIcon(type) {
 }
 
 /* ============================================
-   Mock Notes Data
-   ============================================ */
-const defaultNotes = [
-    { id: 1, title: 'YOLO 目标检测技术核心要点总结', content: '## 核心要点\n\n- YOLO 系列在密集场景下的优势\n- YOLOv5 → YOLOv11 的演进路线\n- 与传统方法的性能对比', type: 'Briefing Doc', sources: 8, time: '65 天前' },
-    { id: 2, title: '论文阅读笔记', content: '### Count2Density\n\n需要关注 Count2Density 的方法论\n\n> 利用计数信息来生成密度图', type: '笔记', sources: 3, time: '昨天' },
-];
-
-/* ============================================
    Notebook Page
    ============================================ */
 export default function NotebookPage() {
     const { id } = useParams();
     const navigate = useNavigate();
-    const { theme, toggleTheme } = useTheme();
+    const { toggleTheme } = useTheme();
 
-    const notebook = mockNotebooks.find(nb => nb.id === id) || mockNotebooks[0];
-    const [selectedArticle, setSelectedArticle] = useState(
-        notebook.articles.length > 0 ? notebook.articles[0] : null
-    );
+    const [currentUser, setCurrentUser] = useState(null);
+    const [notebook, setNotebook] = useState(null);
+    const [selectedArticle, setSelectedArticle] = useState(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [showSettings, setShowSettings] = useState(false);
     const [showAddSource, setShowAddSource] = useState(false);
     const [sourceExpanded, setSourceExpanded] = useState(false);
     const [showArticleMenu, setShowArticleMenu] = useState(false);
+    const [isPageLoading, setIsPageLoading] = useState(true);
+    const [pageError, setPageError] = useState('');
     const menuRef = useRef(null);
 
     // AI features
@@ -156,6 +152,7 @@ export default function NotebookPage() {
     const [summaryLoading, setSummaryLoading] = useState(false);
     const [showAiChat, setShowAiChat] = useState(false);
     const [chatMessages, setChatMessages] = useState([]);
+    const [chatConversationId, setChatConversationId] = useState(null);
     const [chatInput, setChatInput] = useState('');
     const [showTranslation, setShowTranslation] = useState(false);
 
@@ -164,7 +161,7 @@ export default function NotebookPage() {
     const [pageWidth, setPageWidth] = useState(720);
 
     // Notes state
-    const [notes, setNotes] = useState(defaultNotes);
+    const [notes, setNotes] = useState([]);
     const [noteModalData, setNoteModalData] = useState(null); // null = closed, object = open
 
     // Layout resizers — same default for visual alignment, but independent dragging
@@ -184,6 +181,44 @@ export default function NotebookPage() {
         return () => document.removeEventListener('mousedown', handler);
     }, []);
 
+    const syncNotebookState = useCallback((detail) => {
+        setNotebook(detail);
+        setNotes(detail.notes || []);
+        setSelectedArticle((prev) => (
+            detail.articles.find((article) => article.id === prev?.id)
+            || detail.articles[0]
+            || null
+        ));
+    }, []);
+
+    useEffect(() => {
+        let isMounted = true;
+
+        const loadNotebookPage = async () => {
+            try {
+                setIsPageLoading(true);
+                setPageError('');
+                const [user, detail] = await Promise.all([
+                    appApi.auth.getCurrentUser(),
+                    appApi.notebooks.getDetail(id),
+                ]);
+                if (!isMounted) return;
+                setCurrentUser(user);
+                syncNotebookState(detail);
+            } catch (err) {
+                if (!isMounted) return;
+                setPageError(err.message || '加载笔记本失败');
+            } finally {
+                if (isMounted) setIsPageLoading(false);
+            }
+        };
+
+        loadNotebookPage();
+        return () => {
+            isMounted = false;
+        };
+    }, [id, syncNotebookState]);
+
     // Reset AI features when switching articles
     useEffect(() => {
         setShowSummary(false);
@@ -196,15 +231,23 @@ export default function NotebookPage() {
     const strippedContent = useMemo(() => selectedArticle ? stripFirstH1(selectedArticle.content) : '', [selectedArticle]);
 
     // AI Summary
-    const handleSummary = () => {
+    const handleSummary = async () => {
         if (showSummary) { setShowSummary(false); return; }
+        if (!notebook || !selectedArticle) return;
         setShowSummary(true);
         setSummaryLoading(true);
         setSummaryText('');
-        setTimeout(() => {
-            setSummaryText('本文介绍了基于 YOLO (You Only Look Once) 系列算法的人群密度估计方法。YOLO 将目标检测转化为回归问题，具有速度快、全局信息利用充分、泛化能力强等优势。文章详细对比了 YOLOv5 到 YOLOv11 各版本的核心改进，并探讨了基于检测、密度图和混合方法等三类人群密度估计技术路线。');
+        try {
+            const result = await appApi.ai.generateSummary({
+                notebookId: notebook.id,
+                articleId: selectedArticle.id,
+            });
+            setSummaryText(result.summary);
+        } catch (err) {
+            setSummaryText(err.message || '生成摘要失败');
+        } finally {
             setSummaryLoading(false);
-        }, 2000);
+        }
     };
 
     const handleTranslate = () => setShowTranslation(!showTranslation);
@@ -214,20 +257,34 @@ export default function NotebookPage() {
         if (!showAiChat) setSourceExpanded(false);
     };
 
-    const handleSendChat = () => {
-        if (!chatInput.trim()) return;
-        setChatMessages(prev => [...prev, { role: 'user', content: chatInput }]);
+    const handleSendChat = async () => {
+        if (!chatInput.trim() || !notebook) return;
+        const prompt = chatInput.trim();
+        const nextMessages = [...chatMessages, { role: 'user', content: prompt }];
+        setChatMessages(nextMessages);
         setChatInput('');
-        setTimeout(() => {
-            setChatMessages(prev => [...prev, { role: 'assistant', content: '这是一个模拟的 AI 回复。在实际使用中，这里会调用 LLM API 来根据文章内容回答您的问题。' }]);
-        }, 1200);
+        try {
+            const result = await appApi.ai.askAssistant({
+                notebookId: notebook.id,
+                articleId: selectedArticle?.id,
+                conversationId: chatConversationId,
+                message: prompt,
+            });
+            setChatConversationId(result.conversationId || chatConversationId);
+            setChatMessages((prev) => [...prev, { role: 'assistant', content: result.reply }]);
+        } catch (err) {
+            setChatMessages((prev) => [...prev, { role: 'assistant', content: `请求失败：${err.message || '请稍后重试'}` }]);
+        }
     };
 
-    const clearChat = () => setChatMessages([]);
+    const clearChat = () => {
+        setChatMessages([]);
+        setChatConversationId(null);
+    };
 
     // Note handlers – use modal
     const openNewNote = () => {
-        const newNote = { id: Date.now(), title: '', content: '', type: '笔记', sources: 0, time: '刚刚' };
+        const newNote = { title: '', content: '', type: '笔记', sources: 0, time: '刚刚' };
         setNoteModalData(newNote);
     };
 
@@ -235,17 +292,29 @@ export default function NotebookPage() {
         setNoteModalData(note);
     };
 
-    const handleSaveNote = (updatedNote) => {
-        setNotes(prev => {
-            const exists = prev.find(n => n.id === updatedNote.id);
-            if (exists) return prev.map(n => n.id === updatedNote.id ? updatedNote : n);
-            return [updatedNote, ...prev];
+    const handleSaveNote = async (updatedNote) => {
+        if (!notebook) return null;
+        const savedNote = await appApi.notes.save(notebook.id, updatedNote);
+        setNotes((prev) => {
+            const exists = prev.find((item) => item.id === savedNote.id);
+            if (exists) return prev.map((item) => (item.id === savedNote.id ? savedNote : item));
+            return [savedNote, ...prev];
         });
+        return savedNote;
     };
 
-    const handleDeleteNote = (noteId) => {
-        setNotes(prev => prev.filter(n => n.id !== noteId));
+    const handleDeleteNote = async (noteId) => {
+        if (!notebook) return;
+        await appApi.notes.remove(notebook.id, noteId);
+        setNotes((prev) => prev.filter((item) => item.id !== noteId));
+        if (noteModalData?.id === noteId) {
+            setNoteModalData(null);
+        }
     };
+
+    const handleSourcesImported = useCallback((detail) => {
+        syncNotebookState(detail);
+    }, [syncNotebookState]);
 
     // Translation renderer
     const renderComponents = useMemo(() => {
@@ -259,6 +328,27 @@ export default function NotebookPage() {
             ),
         };
     }, [showTranslation]);
+
+    if (isPageLoading) {
+        return (
+            <div className="notebook-page">
+                <div className="nb-empty-center">
+                    <h3>正在加载笔记本...</h3>
+                </div>
+            </div>
+        );
+    }
+
+    if (pageError || !notebook) {
+        return (
+            <div className="notebook-page">
+                <div className="nb-empty-center">
+                    <h3>加载失败</h3>
+                    <p>{pageError || '未找到对应的笔记本'}</p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="notebook-page">
@@ -274,7 +364,7 @@ export default function NotebookPage() {
                 <div className="nb-topbar-right">
                     <button className="nb-icon-btn" onClick={toggleTheme} title="切换主题">{I.theme}</button>
                     <button className="nb-icon-btn" onClick={() => setShowSettings(true)} title="设置">{I.settings}</button>
-                    <div className="nb-avatar">{mockUser.name.charAt(0)}</div>
+                    <div className="nb-avatar">{currentUser?.name?.charAt(0) || 'U'}</div>
                 </div>
             </header>
 
@@ -448,12 +538,26 @@ export default function NotebookPage() {
                         </div>
                     ) : sourceExpanded ? (
                         <div className="nb-panel nb-right-full">
-                            <SourcePanel searchQuery={searchQuery} setSearchQuery={setSearchQuery} onAddSource={() => setShowAddSource(true)} expanded onCollapse={() => setSourceExpanded(false)} />
+                            <SourcePanel
+                                notebookId={notebook.id}
+                                searchQuery={searchQuery}
+                                setSearchQuery={setSearchQuery}
+                                onAddSource={() => setShowAddSource(true)}
+                                onCollapse={() => setSourceExpanded(false)}
+                                onSourcesImported={handleSourcesImported}
+                            />
                         </div>
                     ) : (
                         <>
                             <div className="nb-panel nb-right-top" style={{ height: rightTopH }}>
-                                <SourcePanel searchQuery={searchQuery} setSearchQuery={setSearchQuery} onAddSource={() => setShowAddSource(true)} expanded={false} onExpand={() => setSourceExpanded(true)} />
+                                <SourcePanel
+                                    notebookId={notebook.id}
+                                    searchQuery={searchQuery}
+                                    setSearchQuery={setSearchQuery}
+                                    onAddSource={() => setShowAddSource(true)}
+                                    onExpand={() => setSourceExpanded(true)}
+                                    onSourcesImported={handleSourcesImported}
+                                />
                             </div>
 
                             <div className="nb-resizer nb-resizer-h" onMouseDown={onRightSplit} />
@@ -495,7 +599,13 @@ export default function NotebookPage() {
             </div>
 
             {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
-            {showAddSource && <AddSourceModal onClose={() => setShowAddSource(false)} />}
+            {showAddSource && (
+                <AddSourceModal
+                    notebookId={notebook.id}
+                    onClose={() => setShowAddSource(false)}
+                    onImported={handleSourcesImported}
+                />
+            )}
             {noteModalData && (
                 <NoteModal
                     note={noteModalData}

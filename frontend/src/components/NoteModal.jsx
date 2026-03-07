@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import './NoteModal.css';
@@ -14,16 +14,35 @@ export default function NoteModal({ note, onClose, onSave, onDelete }) {
     const [title, setTitle] = useState(note?.title || '');
     const [content, setContent] = useState(note?.content || '');
     const [mode, setMode] = useState('edit'); // 'edit' | 'preview'
+    const [isSaving, setIsSaving] = useState(false);
+    const [error, setError] = useState('');
 
-    const handleSave = () => {
-        onSave({ ...note, title: title.trim() || '无标题笔记', content });
-        onClose();
+    const handleSave = async () => {
+        try {
+            setIsSaving(true);
+            setError('');
+            await onSave({ ...note, title: title.trim() || '无标题笔记', content });
+            onClose();
+        } catch (err) {
+            setError(err.message || '保存笔记失败');
+        } finally {
+            setIsSaving(false);
+        }
     };
 
-    const handleDelete = () => {
+    const handleDelete = async () => {
         if (onDelete && note?.id) {
-            onDelete(note.id);
+            try {
+                setIsSaving(true);
+                setError('');
+                await onDelete(note.id);
+            } catch (err) {
+                setError(err.message || '删除笔记失败');
+                setIsSaving(false);
+                return;
+            }
         }
+        setIsSaving(false);
         onClose();
     };
 
@@ -83,9 +102,12 @@ export default function NoteModal({ note, onClose, onSave, onDelete }) {
                         </div>
                     )}
                 </div>
+                {error && <div className="note-modal-empty">{error}</div>}
                 <div className="note-modal-footer">
-                    <button className="note-modal-cancel-btn" onClick={onClose}>取消</button>
-                    <button className="note-modal-save-btn" onClick={handleSave}>保存</button>
+                    <button className="note-modal-cancel-btn" onClick={onClose} disabled={isSaving}>取消</button>
+                    <button className="note-modal-save-btn" onClick={handleSave} disabled={isSaving}>
+                        {isSaving ? '保存中...' : '保存'}
+                    </button>
                 </div>
             </div>
         </div>

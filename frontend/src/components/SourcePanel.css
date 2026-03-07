@@ -295,6 +295,21 @@
     border-top-color: var(--accent-color);
 }
 
+.sp-feedback-error,
+.sp-feedback-empty {
+    margin: 8px 4px 0;
+    font-size: 0.78rem;
+    line-height: 1.5;
+}
+
+.sp-feedback-error {
+    color: var(--danger-color, #c0392b);
+}
+
+.sp-feedback-empty {
+    color: var(--meta-color);
+}
+
 .sp-panel-body-results {
     display: flex;
     flex-direction: column;

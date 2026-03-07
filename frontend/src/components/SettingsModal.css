@@ -111,6 +111,57 @@
     padding: 16px 20px 20px;
 }
 
+.settings-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 20px 16px;
+    border-top: 1px solid var(--border-color);
+    flex-shrink: 0;
+}
+
+.settings-status {
+    min-height: 20px;
+    font-size: 0.78rem;
+    color: var(--meta-color);
+}
+
+.settings-footer-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.settings-footer-secondary,
+.settings-footer-primary {
+    border: none;
+    border-radius: var(--radius);
+    font-size: 0.82rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.settings-footer-secondary {
+    padding: 10px 16px;
+    background: var(--hover-bg);
+    color: var(--text-color);
+}
+
+.settings-footer-primary {
+    padding: 10px 18px;
+    background: var(--accent-color);
+    color: #fff;
+}
+
+.settings-footer-secondary:hover,
+.settings-footer-primary:hover,
+.settings-save-btn:hover {
+    opacity: 0.9;
+}
+
 .settings-tab-content {
     animation: fadeIn 0.2s ease;
 }

@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useTheme } from '../contexts/ThemeContext';
-import { mockNotebooks, mockUser } from '../data/mockData';
+import { useTheme } from '../contexts/useTheme';
+import { appApi } from '../services/appApi';
 import SettingsModal from '../components/SettingsModal';
 import './HomePage.css';
 
@@ -10,10 +10,42 @@ export default function HomePage() {
     const { theme, toggleTheme } = useTheme();
     const [showSettings, setShowSettings] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
+    const [user, setUser] = useState(null);
+    const [notebooks, setNotebooks] = useState([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState('');
 
-    const filteredNotebooks = mockNotebooks.filter(nb =>
+    useEffect(() => {
+        let isMounted = true;
+
+        const loadHomeData = async () => {
+            try {
+                setIsLoading(true);
+                setError('');
+                const [currentUser, notebookItems] = await Promise.all([
+                    appApi.auth.getCurrentUser(),
+                    appApi.notebooks.list(),
+                ]);
+                if (!isMounted) return;
+                setUser(currentUser);
+                setNotebooks(notebookItems);
+            } catch (err) {
+                if (!isMounted) return;
+                setError(err.message || '加载首页数据失败');
+            } finally {
+                if (isMounted) setIsLoading(false);
+            }
+        };
+
+        loadHomeData();
+        return () => {
+            isMounted = false;
+        };
+    }, []);
+
+    const filteredNotebooks = useMemo(() => notebooks.filter((nb) => (
         nb.title.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    )), [notebooks, searchQuery]);
 
     return (
         <div className="home-page">
@@ -51,7 +83,7 @@ export default function HomePage() {
                         </svg>
                     </button>
                     <div className="home-avatar">
-                        {mockUser.name.charAt(0)}
+                        {user?.name?.charAt(0) || 'U'}
                     </div>
                 </div>
             </header>
@@ -60,6 +92,8 @@ export default function HomePage() {
             <main className="home-main">
                 <div className="home-content">
                     <h2 className="home-section-title">最近打开过的笔记本</h2>
+                    {error && <p className="home-section-title">{error}</p>}
+                    {isLoading && <p className="home-section-title">正在加载笔记本...</p>}
 
                     <div className="home-grid">
                         {/* Create New */}
