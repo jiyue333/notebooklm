@@ -155,6 +155,10 @@ export default function NotebookPage() {
     const [chatConversationId, setChatConversationId] = useState(null);
     const [chatInput, setChatInput] = useState('');
     const [showTranslation, setShowTranslation] = useState(false);
+    const [translationText, setTranslationText] = useState('');
+    const [translationLoading, setTranslationLoading] = useState(false);
+    const [translationLanguage, setTranslationLanguage] = useState('');
+    const [translationError, setTranslationError] = useState('');
 
     // Article settings
     const [fontSize, setFontSize] = useState(1.05);
@@ -225,10 +229,22 @@ export default function NotebookPage() {
         setSummaryText('');
         setSummaryLoading(false);
         setShowTranslation(false);
+        setTranslationText('');
+        setTranslationLoading(false);
+        setTranslationLanguage('');
+        setTranslationError('');
     }, [selectedArticle?.id]);
 
-    const toc = useMemo(() => selectedArticle ? extractToc(selectedArticle.content) : [], [selectedArticle]);
+    const toc = useMemo(() => {
+        if (showTranslation && translationText) {
+            return extractToc(translationText);
+        }
+        return selectedArticle ? extractToc(selectedArticle.content) : [];
+    }, [selectedArticle, showTranslation, translationText]);
     const strippedContent = useMemo(() => selectedArticle ? stripFirstH1(selectedArticle.content) : '', [selectedArticle]);
+    const renderedArticleContent = useMemo(() => (
+        showTranslation && translationText ? stripFirstH1(translationText) : strippedContent
+    ), [showTranslation, translationText, strippedContent]);
 
     // AI Summary
     const handleSummary = async () => {
@@ -250,7 +266,34 @@ export default function NotebookPage() {
         }
     };
 
-    const handleTranslate = () => setShowTranslation(!showTranslation);
+    const handleTranslate = async () => {
+        if (showTranslation) {
+            setShowTranslation(false);
+            return;
+        }
+        if (!notebook || !selectedArticle) return;
+
+        setShowTranslation(true);
+        setTranslationLoading(true);
+        setTranslationText('');
+        setTranslationError('');
+
+        try {
+            const settings = await appApi.settings.get();
+            const targetLanguage = settings.outputLanguage || '中文';
+            setTranslationLanguage(targetLanguage);
+            const result = await appApi.ai.translateArticle({
+                notebookId: notebook.id,
+                articleId: selectedArticle.id,
+                targetLanguage,
+            });
+            setTranslationText(result.translatedContent || '');
+        } catch (err) {
+            setTranslationError(err.message || '翻译失败');
+        } finally {
+            setTranslationLoading(false);
+        }
+    };
 
     const handleToggleChat = () => {
         setShowAiChat(!showAiChat);
@@ -315,19 +358,6 @@ export default function NotebookPage() {
     const handleSourcesImported = useCallback((detail) => {
         syncNotebookState(detail);
     }, [syncNotebookState]);
-
-    // Translation renderer
-    const renderComponents = useMemo(() => {
-        if (!showTranslation) return {};
-        return {
-            p: ({ children, ...props }) => (
-                <div className="nb-translated-block">
-                    <p {...props}>{children}</p>
-                    <p className="nb-translation"><em>[Translation will appear here after API call]</em></p>
-                </div>
-            ),
-        };
-    }, [showTranslation]);
 
     if (isPageLoading) {
         return (
@@ -484,8 +514,28 @@ export default function NotebookPage() {
                                             </div>
                                         </div>
                                     )}
-                                    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSlug]} components={renderComponents}>
-                                        {strippedContent}
+                                    {showTranslation && (
+                                        <div className="nb-summary-card nb-translation-card">
+                                            <div className="nb-summary-header">
+                                                <span className="nb-summary-icon">{I.translate}</span>
+                                                <span className="nb-summary-label">
+                                                    {translationLoading ? '正在翻译...' : `译文${translationLanguage ? ` · ${translationLanguage}` : ''}`}
+                                                </span>
+                                                <button className="nb-icon-btn-sm" onClick={() => setShowTranslation(false)}>{I.close}</button>
+                                            </div>
+                                            <div className="nb-summary-body">
+                                                {translationLoading ? (
+                                                    <div className="nb-summary-loading"><span className="nb-spinner" /><span>正在生成译文...</span></div>
+                                                ) : translationError ? (
+                                                    <p>{translationError}</p>
+                                                ) : (
+                                                    <p>当前内容已切换为译文视图。</p>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSlug]}>
+                                        {renderedArticleContent}
                                     </ReactMarkdown>
                                 </div>
                             </div>

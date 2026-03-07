@@ -9,6 +9,7 @@ const tabs = [
     { id: 'language', label: '语言', icon: '🌐' },
     { id: 'appearance', label: '外观', icon: '🎨' },
     { id: 'model', label: '模型', icon: '🤖' },
+    { id: 'search', label: '搜索', icon: '🔎' },
     { id: 'account', label: '账户', icon: '👤' },
 ];
 
@@ -27,8 +28,16 @@ const createInitialSettings = () => ({
     modelProvider: '自定义',
     modelName: 'gpt-4o',
     apiUrl: 'http://host.docker.internal:8317/v1/chat/completions',
-    apiKey: '',
+    searchProvider: 'exa',
     username: '',
+    apiKey: '',
+    searchApiKey: '',
+    hasApiKey: false,
+    apiKeyMasked: '',
+    hasSearchApiKey: false,
+    searchApiKeyMasked: '',
+    clearApiKey: false,
+    clearSearchApiKey: false,
     oldPassword: '',
     newPassword: '',
     confirmPassword: '',
@@ -63,6 +72,10 @@ export default function SettingsModal({ onClose }) {
                     ...prev,
                     ...currentSettings,
                     username: currentUser.name || currentSettings.username || '',
+                    apiKey: '',
+                    searchApiKey: '',
+                    clearApiKey: false,
+                    clearSearchApiKey: false,
                     oldPassword: '',
                     newPassword: '',
                     confirmPassword: '',
@@ -83,7 +96,21 @@ export default function SettingsModal({ onClose }) {
 
     const update = (key, value) => {
         setFeedback('');
-        setSettings((prev) => ({ ...prev, [key]: value }));
+        setSettings((prev) => {
+            if (key === 'apiKey') {
+                return { ...prev, apiKey: value, clearApiKey: false };
+            }
+            if (key === 'searchApiKey') {
+                return { ...prev, searchApiKey: value, clearSearchApiKey: false };
+            }
+            if (key === 'clearApiKey') {
+                return { ...prev, clearApiKey: value, apiKey: value ? '' : prev.apiKey };
+            }
+            if (key === 'clearSearchApiKey') {
+                return { ...prev, clearSearchApiKey: value, searchApiKey: value ? '' : prev.searchApiKey };
+            }
+            return { ...prev, [key]: value };
+        });
     };
 
     const buildSettingsPayload = () => {
@@ -93,11 +120,19 @@ export default function SettingsModal({ onClose }) {
         if (activeTab === 'appearance') {
             return { themeColor: settings.themeColor, colorMode: settings.colorMode };
         }
+        if (activeTab === 'search') {
+            return {
+                searchProvider: settings.searchProvider,
+                ...(settings.searchApiKey.trim() ? { searchApiKey: settings.searchApiKey.trim() } : {}),
+                ...(settings.clearSearchApiKey ? { clearSearchApiKey: true } : {}),
+            };
+        }
         return {
             modelProvider: settings.modelProvider,
             modelName: settings.modelName,
             apiUrl: settings.apiUrl,
-            apiKey: settings.apiKey,
+            ...(settings.apiKey.trim() ? { apiKey: settings.apiKey.trim() } : {}),
+            ...(settings.clearApiKey ? { clearApiKey: true } : {}),
         };
     };
 
@@ -107,7 +142,11 @@ export default function SettingsModal({ onClose }) {
             setFeedback('');
 
             if (activeTab === 'account') {
-                await appApi.settings.updateProfile({ username: settings.username });
+                const profile = await appApi.settings.updateProfile({ username: settings.username });
+                setSettings((prev) => ({
+                    ...prev,
+                    username: profile.name || prev.username,
+                }));
                 if (settings.oldPassword || settings.newPassword || settings.confirmPassword) {
                     await appApi.settings.updatePassword({
                         oldPassword: settings.oldPassword,
@@ -116,7 +155,15 @@ export default function SettingsModal({ onClose }) {
                     });
                 }
             } else {
-                await appApi.settings.update(buildSettingsPayload());
+                const nextSettings = await appApi.settings.update(buildSettingsPayload());
+                setSettings((prev) => ({
+                    ...prev,
+                    ...nextSettings,
+                    apiKey: '',
+                    searchApiKey: '',
+                    clearApiKey: false,
+                    clearSearchApiKey: false,
+                }));
                 if (activeTab === 'appearance' && settings.colorMode !== 'auto') {
                     setTheme(settings.colorMode);
                 }
@@ -275,13 +322,70 @@ export default function SettingsModal({ onClose }) {
 
                                     <div className="settings-section">
                                         <label className="settings-section-title">API Key</label>
+                                        {settings.hasApiKey && !settings.clearApiKey && (
+                                            <p className="settings-hint">已保存 Key：{settings.apiKeyMasked || '已配置'}。留空则保持不变。</p>
+                                        )}
+                                        {settings.clearApiKey && (
+                                            <p className="settings-hint">当前将清除已保存的 API Key。</p>
+                                        )}
                                         <input
                                             className="settings-input"
                                             type="password"
-                                            placeholder="sk-..."
+                                            placeholder={settings.hasApiKey ? '留空则不修改，输入新值则替换' : 'sk-...'}
                                             value={settings.apiKey}
                                             onChange={(event) => update('apiKey', event.target.value)}
                                         />
+                                        {settings.hasApiKey && (
+                                            <button
+                                                className="settings-save-btn"
+                                                onClick={() => update('clearApiKey', !settings.clearApiKey)}
+                                            >
+                                                {settings.clearApiKey ? '保留已保存 Key' : '清除已保存 Key'}
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeTab === 'search' && (
+                                <div className="settings-tab-content">
+                                    <div className="settings-section">
+                                        <label className="settings-section-title">搜索引擎 Provider</label>
+                                        <p className="settings-hint">当前搜索来源发现统一走后端 Search Provider。现阶段只开放 Exa，并需要配置对应 API Key。</p>
+                                        <div className="settings-select-wrapper">
+                                            <select
+                                                className="settings-select"
+                                                value={settings.searchProvider}
+                                                onChange={(event) => update('searchProvider', event.target.value)}
+                                            >
+                                                <option value="exa">Exa</option>
+                                            </select>
+                                            <span className="settings-select-arrow">▾</span>
+                                        </div>
+                                    </div>
+                                    <div className="settings-section">
+                                        <label className="settings-section-title">Exa API Key</label>
+                                        {settings.hasSearchApiKey && !settings.clearSearchApiKey && (
+                                            <p className="settings-hint">已保存 Key：{settings.searchApiKeyMasked || '已配置'}。留空则保持不变。</p>
+                                        )}
+                                        {settings.clearSearchApiKey && (
+                                            <p className="settings-hint">当前将清除已保存的搜索 API Key。</p>
+                                        )}
+                                        <input
+                                            className="settings-input"
+                                            type="password"
+                                            placeholder={settings.hasSearchApiKey ? '留空则不修改，输入新值则替换' : 'exa_...'}
+                                            value={settings.searchApiKey}
+                                            onChange={(event) => update('searchApiKey', event.target.value)}
+                                        />
+                                        {settings.hasSearchApiKey && (
+                                            <button
+                                                className="settings-save-btn"
+                                                onClick={() => update('clearSearchApiKey', !settings.clearSearchApiKey)}
+                                            >
+                                                {settings.clearSearchApiKey ? '保留已保存搜索 Key' : '清除已保存搜索 Key'}
+                                            </button>
+                                        )}
                                     </div>
                                 </div>
                             )}

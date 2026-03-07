@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../contexts/useTheme';
 import { appApi } from '../services/appApi';
 import SettingsModal from '../components/SettingsModal';
+import NotebookModal from '../components/NotebookModal';
 import './HomePage.css';
 
 export default function HomePage() {
@@ -13,6 +14,8 @@ export default function HomePage() {
     const [user, setUser] = useState(null);
     const [notebooks, setNotebooks] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
+    const [isCreatingNotebook, setIsCreatingNotebook] = useState(false);
+    const [notebookModalState, setNotebookModalState] = useState(null);
     const [error, setError] = useState('');
 
     useEffect(() => {
@@ -46,6 +49,46 @@ export default function HomePage() {
     const filteredNotebooks = useMemo(() => notebooks.filter((nb) => (
         nb.title.toLowerCase().includes(searchQuery.toLowerCase())
     )), [notebooks, searchQuery]);
+
+    const handleCreateNotebook = async (payload) => {
+        try {
+            setIsCreatingNotebook(true);
+            setError('');
+            const notebook = await appApi.notebooks.create(payload);
+            setNotebooks((prev) => [notebook, ...prev]);
+            navigate(`/notebook/${notebook.id}`);
+        } catch (err) {
+            setError(err.message || '创建笔记本失败');
+        } finally {
+            setIsCreatingNotebook(false);
+        }
+    };
+
+    const handleUpdateNotebook = async (payload) => {
+        try {
+            setError('');
+            const notebook = await appApi.notebooks.update(payload.id, {
+                title: payload.title,
+                emoji: payload.emoji,
+                color: payload.color,
+            });
+            setNotebooks((prev) => prev.map((item) => (item.id === notebook.id ? { ...item, ...notebook } : item)));
+        } catch (err) {
+            setError(err.message || '更新笔记本失败');
+            throw err;
+        }
+    };
+
+    const handleDeleteNotebook = async (notebookId) => {
+        try {
+            setError('');
+            await appApi.notebooks.remove(notebookId);
+            setNotebooks((prev) => prev.filter((item) => item.id !== notebookId));
+        } catch (err) {
+            setError(err.message || '删除笔记本失败');
+            throw err;
+        }
+    };
 
     return (
         <div className="home-page">
@@ -97,10 +140,20 @@ export default function HomePage() {
 
                     <div className="home-grid">
                         {/* Create New */}
-                        <div className="home-card home-card-new animate-fade-in-up" onClick={() => { }}>
+                        <div
+                            className="home-card home-card-new animate-fade-in-up"
+                            onClick={() => setNotebookModalState({
+                                mode: 'create',
+                                notebook: {
+                                    title: '',
+                                    emoji: '📒',
+                                    color: '#8B7355',
+                                },
+                            })}
+                        >
                             <div className="home-card-new-inner">
                                 <div className="home-card-new-icon"><span>+</span></div>
-                                <span className="home-card-new-text">新建笔记本</span>
+                                <span className="home-card-new-text">{isCreatingNotebook ? '创建中...' : '新建笔记本'}</span>
                             </div>
                         </div>
 
@@ -115,7 +168,13 @@ export default function HomePage() {
                                     <span className="home-card-emoji">{nb.emoji}</span>
                                     <button
                                         className="home-card-menu"
-                                        onClick={(e) => { e.stopPropagation(); }}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setNotebookModalState({
+                                                mode: 'edit',
+                                                notebook: nb,
+                                            });
+                                        }}
                                     >⋮</button>
                                 </div>
                                 <div className="home-card-body">
@@ -129,6 +188,15 @@ export default function HomePage() {
             </main>
 
             {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+            {notebookModalState && (
+                <NotebookModal
+                    mode={notebookModalState.mode}
+                    notebook={notebookModalState.notebook}
+                    onClose={() => setNotebookModalState(null)}
+                    onSave={notebookModalState.mode === 'create' ? handleCreateNotebook : handleUpdateNotebook}
+                    onDelete={notebookModalState.mode === 'edit' ? handleDeleteNotebook : undefined}
+                />
+            )}
         </div>
     );
 }

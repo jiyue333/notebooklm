@@ -144,6 +144,11 @@
     background: color-mix(in srgb, var(--accent-color), transparent 96%);
 }
 
+.add-source-dropzone.dragging {
+    border-color: var(--accent-color);
+    background: color-mix(in srgb, var(--accent-color), transparent 94%);
+}
+
 .add-source-dropzone-content p:first-child {
     font-size: 1.5rem;
     margin-bottom: 4px;
@@ -152,6 +157,31 @@
 .add-source-dropzone-content p {
     font-size: 0.82rem;
     color: var(--meta-color);
+}
+
+.add-source-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.add-source-textarea {
+    min-height: 160px;
+    width: 100%;
+    border: none;
+    resize: vertical;
+    border-radius: var(--radius);
+    background: var(--card-bg);
+    box-shadow: var(--card-shadow);
+    padding: 14px 16px;
+    font-size: 0.9rem;
+    font-family: inherit;
+    color: var(--text-color);
+    outline: none;
+}
+
+.add-source-textarea::placeholder {
+    color: var(--text-secondary);
 }
 
 /* Action buttons */
@@ -183,6 +213,20 @@
     box-shadow: var(--card-shadow-hover);
 }
 
+.add-source-btn-primary {
+    color: white;
+    background: var(--accent-color);
+}
+
+.add-source-btn-primary:hover {
+    background: color-mix(in srgb, var(--accent-color), black 12%);
+}
+
 .add-source-btn-icon {
     font-size: 1rem;
+}
+
+.add-source-error {
+    margin-top: 16px;
+    color: #c53a3a;
 }

@@ -30,21 +30,19 @@ export default function SourcePanel({
     const [view, setView] = useState('default');
     const [isSearching, setIsSearching] = useState(false);
     const [sources, setSources] = useState([]);
+    const [searchSessionId, setSearchSessionId] = useState(null);
+    const [searchModeLabel, setSearchModeLabel] = useState('Auto Research');
     const [error, setError] = useState('');
 
-    const [searchMode, setSearchMode] = useState('web');
-    const [researchMode, setResearchMode] = useState('fast');
-    const [showWebDropdown, setShowWebDropdown] = useState(false);
-    const [showResearchDropdown, setShowResearchDropdown] = useState(false);
-    const webDropRef = useRef(null);
-    const researchDropRef = useRef(null);
+    const [mode, setMode] = useState('auto');
+    const [showModeDropdown, setShowModeDropdown] = useState(false);
+    const modeDropRef = useRef(null);
 
     const selectedCount = sources.filter((source) => source.selected).length;
 
     useEffect(() => {
         const handler = (event) => {
-            if (webDropRef.current && !webDropRef.current.contains(event.target)) setShowWebDropdown(false);
-            if (researchDropRef.current && !researchDropRef.current.contains(event.target)) setShowResearchDropdown(false);
+            if (modeDropRef.current && !modeDropRef.current.contains(event.target)) setShowModeDropdown(false);
         };
         document.addEventListener('mousedown', handler);
         return () => document.removeEventListener('mousedown', handler);
@@ -53,6 +51,8 @@ export default function SourcePanel({
     useEffect(() => {
         setView('default');
         setSources([]);
+        setSearchSessionId(null);
+        setSearchModeLabel('Auto Research');
         setError('');
     }, [notebookId]);
 
@@ -65,9 +65,10 @@ export default function SourcePanel({
             const result = await appApi.sources.search({
                 notebookId,
                 query: searchQuery,
-                searchMode,
-                researchMode,
+                mode,
             });
+            setSearchSessionId(result.searchSessionId || null);
+            setSearchModeLabel(result.modeLabel || 'Auto Research');
             setSources(result.items || []);
             setView('results');
         } catch (err) {
@@ -95,13 +96,18 @@ export default function SourcePanel({
     const handleImport = async () => {
         try {
             setError('');
+            if (!searchSessionId) {
+                throw new Error('缺少搜索会话，请重新搜索后再导入');
+            }
             const detail = await appApi.sources.importSelected({
                 notebookId,
-                sourceIds: sources.filter((source) => source.selected).map((source) => source.id),
+                searchSessionId,
+                searchResultIds: sources.filter((source) => source.selected).map((source) => source.id),
             });
             onSourcesImported?.(detail);
             setView('default');
             setSearchQuery('');
+            setSearchSessionId(null);
             if (onCollapse) onCollapse();
         } catch (err) {
             setError(err.message || '导入来源失败');
@@ -118,16 +124,12 @@ export default function SourcePanel({
         if (onCollapse) onCollapse();
     };
 
-    const webOptions = [
-        { id: 'web', label: 'Web', icon: Ic.web, desc: '搜索互联网上的公开内容' },
+    const modeOptions = [
+        { id: 'fast', label: 'Fast Research', icon: Ic.fastResearch, desc: '低延迟返回候选结果' },
+        { id: 'auto', label: 'Auto Research', icon: Ic.web, desc: '默认平衡模式，适合大多数搜索' },
+        { id: 'deep', label: 'Deep Research', icon: Ic.deepResearch, desc: '更慢但更深入的来源发现' },
     ];
-
-    const researchOptions = [
-        { id: 'fast', label: 'Fast Research', icon: Ic.fastResearch, desc: '非常适合快速获得结果' },
-        { id: 'deep', label: 'Deep Research', icon: Ic.deepResearch, desc: '获取深入报告和结果' },
-    ];
-
-    const currentResearch = researchOptions.find((item) => item.id === researchMode) || researchOptions[0];
+    const currentMode = modeOptions.find((item) => item.id === mode) || modeOptions[1];
 
     const renderSearchBar = () => (
         <div className="sp-search-area">
@@ -143,28 +145,26 @@ export default function SourcePanel({
             </div>
             <div className="sp-search-actions">
                 <div className="sp-mode-selector">
-                    <div className="sp-mode-drop-wrapper" ref={webDropRef}>
+                    <div className="sp-mode-drop-wrapper" ref={modeDropRef}>
                         <button
-                            className={`sp-mode-btn ${searchMode === 'web' ? 'active' : ''}`}
+                            className="sp-mode-btn active"
                             onClick={() => {
-                                setSearchMode('web');
-                                setShowWebDropdown(!showWebDropdown);
-                                setShowResearchDropdown(false);
+                                setShowModeDropdown(!showModeDropdown);
                             }}
                         >
-                            <span className="sp-mode-btn-icon">{Ic.web}</span>
-                            <span>Web</span>
+                            <span className="sp-mode-btn-icon">{currentMode.icon}</span>
+                            <span>{currentMode.label}</span>
                             <span className="sp-mode-caret">{Ic.chevronDown}</span>
                         </button>
-                        {showWebDropdown && (
+                        {showModeDropdown && (
                             <div className="sp-mode-dropdown">
-                                {webOptions.map((option) => (
+                                {modeOptions.map((option) => (
                                     <button
                                         key={option.id}
-                                        className="sp-mode-option active"
+                                        className={`sp-mode-option ${mode === option.id ? 'active' : ''}`}
                                         onClick={() => {
-                                            setSearchMode('web');
-                                            setShowWebDropdown(false);
+                                            setMode(option.id);
+                                            setShowModeDropdown(false);
                                         }}
                                     >
                                         <span className="sp-mode-option-icon">{option.icon}</span>
@@ -172,44 +172,7 @@ export default function SourcePanel({
                                             <span className="sp-mode-option-label">{option.label}</span>
                                             <span className="sp-mode-option-desc">{option.desc}</span>
                                         </div>
-                                        <span className="sp-mode-option-check">{Ic.check}</span>
-                                    </button>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="sp-mode-drop-wrapper" ref={researchDropRef}>
-                        <button
-                            className={`sp-mode-btn ${searchMode === 'research' ? 'active' : ''}`}
-                            onClick={() => {
-                                setSearchMode('research');
-                                setShowResearchDropdown(!showResearchDropdown);
-                                setShowWebDropdown(false);
-                            }}
-                        >
-                            <span className="sp-mode-btn-icon">{currentResearch.icon}</span>
-                            <span>{currentResearch.label}</span>
-                            <span className="sp-mode-caret">{Ic.chevronDown}</span>
-                        </button>
-                        {showResearchDropdown && (
-                            <div className="sp-mode-dropdown">
-                                {researchOptions.map((option) => (
-                                    <button
-                                        key={option.id}
-                                        className={`sp-mode-option ${researchMode === option.id ? 'active' : ''}`}
-                                        onClick={() => {
-                                            setResearchMode(option.id);
-                                            setSearchMode('research');
-                                            setShowResearchDropdown(false);
-                                        }}
-                                    >
-                                        <span className="sp-mode-option-icon">{option.icon}</span>
-                                        <div className="sp-mode-option-info">
-                                            <span className="sp-mode-option-label">{option.label}</span>
-                                            <span className="sp-mode-option-desc">{option.desc}</span>
-                                        </div>
-                                        {researchMode === option.id && <span className="sp-mode-option-check">{Ic.check}</span>}
+                                        {mode === option.id && <span className="sp-mode-option-check">{Ic.check}</span>}
                                     </button>
                                 ))}
                             </div>
@@ -269,7 +232,7 @@ export default function SourcePanel({
                     <div className="sp-results-card">
                         <div className="sp-results-header">
                             <span className="sp-results-icon">{Ic.refresh}</span>
-                            <span className="sp-results-title">{currentResearch.label} 已完成！</span>
+                            <span className="sp-results-title">{searchModeLabel} 已完成！</span>
                             <button className="sp-view-btn" onClick={handleViewDiscover}>查看</button>
                         </div>
                         <div className="sp-results-list">
@@ -293,7 +256,7 @@ export default function SourcePanel({
                         </div>
                         <div className="sp-results-footer">
                             <button className="sp-delete-btn" onClick={() => setView('default')}>删除</button>
-                            <button className="sp-import-btn" onClick={handleImport}>+ 导入</button>
+                            <button className="sp-import-btn" onClick={handleImport} disabled={selectedCount === 0}>+ 导入</button>
                         </div>
                     </div>
                 </div>
@@ -331,7 +294,7 @@ export default function SourcePanel({
                                     <span className="sp-discover-item-title">{source.title}</span>
                                     <span className="sp-discover-item-desc">{source.description}</span>
                                 </div>
-                                <button className="sp-discover-link" title="打开链接">{Ic.openLink}</button>
+                                <button className="sp-discover-link" title="打开链接" onClick={() => window.open(source.url, '_blank', 'noopener,noreferrer')}>{Ic.openLink}</button>
                                 <button className={`sp-checkbox ${source.selected ? 'checked' : ''}`} onClick={() => toggleSource(source.id)}>
                                     {source.selected && Ic.check}
                                 </button>
@@ -341,7 +304,7 @@ export default function SourcePanel({
                 </div>
                 <div className="sp-discover-footer">
                     <span className="sp-discover-count">已选择 {selectedCount} 个来源</span>
-                    <button className="sp-import-btn" onClick={handleImport}>导入</button>
+                    <button className="sp-import-btn" onClick={handleImport} disabled={selectedCount === 0}>导入</button>
                 </div>
                 {error && <p className="sp-feedback-error">{error}</p>}
             </div>

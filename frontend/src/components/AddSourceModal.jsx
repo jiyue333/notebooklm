@@ -3,9 +3,14 @@ import { appApi } from '../services/appApi';
 import './AddSourceModal.css';
 
 export default function AddSourceModal({ notebookId, onClose, onImported }) {
-    const [searchQuery, setSearchQuery] = useState('');
+    const [activeTab, setActiveTab] = useState('file');
+    const [webUrl, setWebUrl] = useState('');
+    const [webTitle, setWebTitle] = useState('');
+    const [textTitle, setTextTitle] = useState('');
+    const [textContent, setTextContent] = useState('');
     const [isDragging, setIsDragging] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState('');
     const fileInputRef = useRef(null);
 
@@ -22,6 +27,44 @@ export default function AddSourceModal({ notebookId, onClose, onImported }) {
             setError(err.message || '上传来源失败');
         } finally {
             setIsUploading(false);
+        }
+    };
+
+    const handleCreateSource = async () => {
+        try {
+            setError('');
+            setIsSubmitting(true);
+
+            if (activeTab === 'web') {
+                if (!webUrl.trim()) {
+                    throw new Error('请输入网站链接');
+                }
+                const detail = await appApi.sources.create({
+                    notebookId,
+                    sourceType: 'web',
+                    url: webUrl.trim(),
+                    title: webTitle.trim() || undefined,
+                });
+                onImported?.(detail);
+                onClose();
+                return;
+            }
+
+            if (!textContent.trim()) {
+                throw new Error('请输入要保存的文字内容');
+            }
+            const detail = await appApi.sources.create({
+                notebookId,
+                sourceType: 'text',
+                title: textTitle.trim() || '粘贴文字来源',
+                content: textContent.trim(),
+            });
+            onImported?.(detail);
+            onClose();
+        } catch (err) {
+            setError(err.message || '添加来源失败');
+        } finally {
+            setIsSubmitting(false);
         }
     };
 
@@ -46,59 +89,113 @@ export default function AddSourceModal({ notebookId, onClose, onImported }) {
                 <button className="add-source-close" onClick={onClose}>✕</button>
 
                 <h2 className="add-source-title">添加来源</h2>
-                <p className="add-source-subtitle">上传文件或搜索网络来源</p>
-
-                <div className="add-source-search">
-                    <span>🔍</span>
-                    <input
-                        placeholder="搜索或粘贴链接"
-                        value={searchQuery}
-                        onChange={(event) => setSearchQuery(event.target.value)}
-                    />
-                </div>
+                <p className="add-source-subtitle">上传文档、添加网站，或保存你粘贴的文字内容</p>
 
                 <div className="add-source-tags">
-                    <button className="add-source-tag active">🌐 Web ▾</button>
-                    <button className="add-source-tag">🔄 Deep Research ▾</button>
+                    <button
+                        className={`add-source-tag ${activeTab === 'file' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('file')}
+                    >
+                        📁 上传文件
+                    </button>
+                    <button
+                        className={`add-source-tag ${activeTab === 'web' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('web')}
+                    >
+                        🌐 网站
+                    </button>
+                    <button
+                        className={`add-source-tag ${activeTab === 'text' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('text')}
+                    >
+                        📋 复制的文字
+                    </button>
                 </div>
 
-                <div
-                    className={`add-source-dropzone ${isDragging ? 'dragging' : ''}`}
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                >
-                    <div className="add-source-dropzone-content">
-                        <p>📁</p>
-                        <p>拖放文件到此处</p>
-                        <p>支持 PDF、图片、文档、音频等</p>
+                {activeTab === 'file' && (
+                    <>
+                        <div
+                            className={`add-source-dropzone ${isDragging ? 'dragging' : ''}`}
+                            onClick={() => fileInputRef.current?.click()}
+                            onDragOver={handleDragOver}
+                            onDragLeave={handleDragLeave}
+                            onDrop={handleDrop}
+                        >
+                            <div className="add-source-dropzone-content">
+                                <p>📁</p>
+                                <p>拖放文件到此处或点击选择文件</p>
+                                <p>当前仅支持 PDF、DOC/DOCX、TXT、Markdown</p>
+                            </div>
+                        </div>
+
+                        <div className="add-source-buttons">
+                            <button className="add-source-btn" onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
+                                <span className="add-source-btn-icon">⬆</span>
+                                {isUploading ? '上传中...' : '上传文件'}
+                            </button>
+                        </div>
+                    </>
+                )}
+
+                {activeTab === 'web' && (
+                    <div className="add-source-form">
+                        <div className="add-source-search">
+                            <span>🔗</span>
+                            <input
+                                placeholder="粘贴网站链接"
+                                value={webUrl}
+                                onChange={(event) => setWebUrl(event.target.value)}
+                            />
+                        </div>
+                        <div className="add-source-search">
+                            <span>🏷️</span>
+                            <input
+                                placeholder="可选：自定义标题"
+                                value={webTitle}
+                                onChange={(event) => setWebTitle(event.target.value)}
+                            />
+                        </div>
+                        <div className="add-source-buttons">
+                            <button className="add-source-btn add-source-btn-primary" onClick={handleCreateSource} disabled={isSubmitting}>
+                                <span className="add-source-btn-icon">🌐</span>
+                                {isSubmitting ? '添加中...' : '添加网站'}
+                            </button>
+                        </div>
                     </div>
-                </div>
-                {error && <p className="add-source-subtitle">{error}</p>}
+                )}
 
-                <div className="add-source-buttons">
-                    <button className="add-source-btn" onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
-                        <span className="add-source-btn-icon">⬆</span>
-                        {isUploading ? '上传中...' : '上传文件'}
-                    </button>
-                    <button className="add-source-btn">
-                        <span className="add-source-btn-icon">🌐</span>
-                        网站
-                    </button>
-                    <button className="add-source-btn">
-                        <span className="add-source-btn-icon">☁️</span>
-                        云端硬盘
-                    </button>
-                    <button className="add-source-btn">
-                        <span className="add-source-btn-icon">📋</span>
-                        复制的文字
-                    </button>
-                </div>
+                {activeTab === 'text' && (
+                    <div className="add-source-form">
+                        <div className="add-source-search">
+                            <span>🏷️</span>
+                            <input
+                                placeholder="标题"
+                                value={textTitle}
+                                onChange={(event) => setTextTitle(event.target.value)}
+                            />
+                        </div>
+                        <textarea
+                            className="add-source-textarea"
+                            placeholder="粘贴你要保存的文字内容"
+                            value={textContent}
+                            onChange={(event) => setTextContent(event.target.value)}
+                        />
+                        <div className="add-source-buttons">
+                            <button className="add-source-btn add-source-btn-primary" onClick={handleCreateSource} disabled={isSubmitting}>
+                                <span className="add-source-btn-icon">📋</span>
+                                {isSubmitting ? '保存中...' : '保存文字来源'}
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {error && <p className="add-source-subtitle add-source-error">{error}</p>}
 
                 <input
                     ref={fileInputRef}
                     type="file"
                     multiple
+                    accept=".pdf,.doc,.docx,.txt,.md,text/plain,text/markdown,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     style={{ display: 'none' }}
                     onChange={(event) => {
                         handleFilesUpload(Array.from(event.target.files));

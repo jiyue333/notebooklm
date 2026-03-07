@@ -10,8 +10,10 @@ const DEFAULT_SETTINGS = {
     modelProvider: '自定义',
     modelName: mockUser.settings?.model || 'gpt-4o',
     apiUrl: 'http://host.docker.internal:8317/v1/chat/completions',
-    apiKey: '',
+    searchProvider: 'exa',
     username: mockUser.name,
+    apiKey: '',
+    searchApiKey: '',
 };
 
 const DEFAULT_NOTES_BY_NOTEBOOK_ID = {
@@ -43,6 +45,8 @@ const clone = (value) => {
 };
 
 const wait = (ms = 250) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const generateId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 const safeLocalStorage = () => (
     typeof window !== 'undefined' && window.localStorage ? window.localStorage : null
@@ -84,6 +88,22 @@ const formatTimestamp = (date = new Date()) => date.toLocaleString('zh-CN', {
     hour12: false,
 }).replaceAll('/', '-');
 
+const formatNotebookDate = (date = new Date()) => {
+    const parts = new Intl.DateTimeFormat('zh-CN', {
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+    }).formatToParts(date);
+    const year = parts.find((part) => part.type === 'year')?.value || date.getFullYear();
+    const month = parts.find((part) => part.type === 'month')?.value || date.getMonth() + 1;
+    const day = parts.find((part) => part.type === 'day')?.value || date.getDate();
+    return `${year}年${month}月${day}日`;
+};
+
+const maskApiKey = (apiKey) => (
+    apiKey && apiKey.length >= 4 ? `••••${apiKey.slice(-4)}` : ''
+);
+
 const extractPlainExcerpt = (markdown) => markdown
     .replace(/^#.*$/gm, '')
     .replace(/[`*_>#-]/g, '')
@@ -92,7 +112,7 @@ const extractPlainExcerpt = (markdown) => markdown
     .find(Boolean) || '暂无摘要内容';
 
 const createImportedArticle = (source, index) => ({
-    id: `art-import-${Date.now()}-${index}`,
+    id: generateId(`art-import-${index}`),
     title: source.title,
     type: 'article',
     icon: '🌐',
@@ -104,7 +124,7 @@ const createImportedArticle = (source, index) => ({
 });
 
 const createUploadedArticle = (file, index) => ({
-    id: `art-upload-${Date.now()}-${index}`,
+    id: generateId(`art-upload-${index}`),
     title: file.name,
     type: 'article',
     icon: '📎',
@@ -116,7 +136,7 @@ const createUploadedArticle = (file, index) => ({
 });
 
 const createManualSourceArticle = ({ sourceType, url, title, content }) => ({
-    id: `art-manual-${Date.now()}`,
+    id: generateId('art-manual'),
     title: title || (sourceType === 'web' ? url : '粘贴文字来源'),
     type: 'article',
     icon: sourceType === 'web' ? '🌐' : '📝',
@@ -129,12 +149,51 @@ const createManualSourceArticle = ({ sourceType, url, title, content }) => ({
     toc: [],
 });
 
+const createNotebookRecord = ({ title, emoji = '📒', color = '#8B7355' }) => ({
+    id: generateId('nb'),
+    title: title?.trim() || 'Untitled notebook',
+    emoji,
+    color,
+    date: formatNotebookDate(),
+    sourceCount: 0,
+    articles: [],
+});
+
+const getSearchModeLabel = (mode = 'auto') => {
+    if (mode === 'fast') return 'Fast Research';
+    if (mode === 'deep') return 'Deep Research';
+    return 'Auto Research';
+};
+
+const buildSettingsView = (user, settings) => ({
+    outputLanguage: settings.outputLanguage,
+    themeColor: settings.themeColor,
+    colorMode: settings.colorMode,
+    modelProvider: settings.modelProvider,
+    modelName: settings.modelName,
+    apiUrl: settings.apiUrl,
+    searchProvider: settings.searchProvider || 'exa',
+    hasApiKey: Boolean(settings.apiKey),
+    apiKeyMasked: maskApiKey(settings.apiKey),
+    hasSearchApiKey: Boolean(settings.searchApiKey),
+    searchApiKeyMasked: maskApiKey(settings.searchApiKey),
+    username: user.name,
+});
+
+const buildMockTranslation = (article, targetLanguage) => {
+    const excerpt = extractPlainExcerpt(article.content).slice(0, 240);
+    return {
+        translatedContent: `# ${article.title}\n\n> 以下为面向 ${targetLanguage} 的 mock 译文，真实后端接入后这里会替换为模型生成结果。\n\n## 译文摘要\n\n${excerpt}\n\n## 说明\n\n- 当前使用的是示例翻译结果\n- 正式版本会基于文章正文和目标语言生成完整译文`,
+        targetLanguage,
+    };
+};
+
 const createMockState = () => ({
     user: clone(mockUser),
     settings: clone(DEFAULT_SETTINGS),
     notebooks: clone(mockNotebooks),
     notesByNotebookId: clone(DEFAULT_NOTES_BY_NOTEBOOK_ID),
-    lastSearchResultsByNotebookId: {},
+    searchSessionsById: {},
 });
 
 let mockState = createMockState();
@@ -223,6 +282,28 @@ const mockProvider = {
         return items.filter((item) => item.title.toLowerCase().includes(normalized));
     },
 
+    async createNotebook(payload = {}) {
+        await wait(220);
+        const notebook = createNotebookRecord(payload);
+        mockState.notebooks.unshift(notebook);
+        mockState.notesByNotebookId[notebook.id] = [];
+        return buildNotebookDetail(notebook.id);
+    },
+
+    async updateNotebook(notebookId, payload = {}) {
+        await wait(180);
+        const notebook = getNotebookRecord(notebookId);
+        Object.assign(notebook, payload);
+        return buildNotebookDetail(notebookId);
+    },
+
+    async deleteNotebook(notebookId) {
+        await wait(180);
+        mockState.notebooks = mockState.notebooks.filter((item) => item.id !== notebookId);
+        delete mockState.notesByNotebookId[notebookId];
+        return { success: true };
+    },
+
     async getNotebookDetail(notebookId) {
         await wait(180);
         return buildNotebookDetail(notebookId);
@@ -257,10 +338,18 @@ const mockProvider = {
         return { success: true };
     },
 
-    async searchSources({ notebookId, query, searchMode, researchMode }) {
-        await wait(900);
+    async searchSources({ notebookId, query, mode = 'auto', maxResults = 10 }) {
+        await wait(mode === 'deep' ? 320 : 900);
         if (!query?.trim()) {
-            return { items: [], modeLabel: 'Web', query: '' };
+            return {
+                searchSessionId: null,
+                mode,
+                modeLabel: getSearchModeLabel(mode),
+                status: 'completed',
+                execution: 'sync',
+                items: [],
+                meta: { provider: 'mock', elapsedMs: 0 },
+            };
         }
 
         const normalized = query.trim().toLowerCase();
@@ -268,22 +357,81 @@ const mockProvider = {
             item.title.toLowerCase().includes(normalized)
             || item.description.toLowerCase().includes(normalized)
         ));
-        const items = matched.length > 0 ? matched : clone(mockSearchResults);
-        mockState.lastSearchResultsByNotebookId[notebookId] = items;
+        const items = (matched.length > 0 ? matched : clone(mockSearchResults))
+            .slice(0, maxResults)
+            .map((item, index) => ({
+                ...item,
+                id: generateId(`srr-${index}`),
+            }));
+        const searchSessionId = generateId('ss');
+        const execution = mode === 'deep' ? 'async' : 'sync';
+        mockState.searchSessionsById[searchSessionId] = {
+            id: searchSessionId,
+            notebookId,
+            mode,
+            modeLabel: getSearchModeLabel(mode),
+            status: execution === 'async' ? 'queued' : 'completed',
+            execution,
+            items,
+            readyAt: execution === 'async' ? Date.now() + 1500 : Date.now(),
+        };
 
-        const modeLabel = searchMode === 'research'
-            ? (researchMode === 'deep' ? 'Deep Research' : 'Fast Research')
-            : 'Web';
+        if (execution === 'async') {
+            await wait(1200);
+            mockState.searchSessionsById[searchSessionId].status = 'completed';
+            return {
+                searchSessionId,
+                mode,
+                modeLabel: getSearchModeLabel(mode),
+                status: 'completed',
+                execution,
+                items,
+                message: 'search accepted',
+            };
+        }
 
-        return { items, modeLabel, query };
+        return {
+            searchSessionId,
+            mode,
+            modeLabel: getSearchModeLabel(mode),
+            status: 'completed',
+            execution,
+            items,
+            meta: { provider: 'mock', elapsedMs: 900 },
+        };
     },
 
-    async importSources({ notebookId, sourceIds }) {
+    async getSearchSession({ searchSessionId }) {
+        await wait(350);
+        const session = mockState.searchSessionsById[searchSessionId];
+        if (!session) {
+            throw new Error('未找到对应搜索会话');
+        }
+
+        if (session.execution === 'async' && Date.now() >= session.readyAt) {
+            session.status = 'completed';
+        }
+
+        return {
+            searchSessionId: session.id,
+            mode: session.mode,
+            modeLabel: session.modeLabel,
+            status: session.status,
+            execution: session.execution,
+            items: session.status === 'completed' ? clone(session.items) : [],
+            meta: { provider: 'mock' },
+        };
+    },
+
+    async importSources({ notebookId, searchSessionId, searchResultIds }) {
         await wait(260);
         const notebook = getNotebookRecord(notebookId);
-        const searchResults = mockState.lastSearchResultsByNotebookId[notebookId] || [];
-        const imported = searchResults
-            .filter((item) => sourceIds.includes(item.id))
+        const session = mockState.searchSessionsById[searchSessionId];
+        if (!session || session.notebookId !== notebookId) {
+            throw new Error('搜索会话不存在或已失效');
+        }
+        const imported = (session.items || [])
+            .filter((item) => searchResultIds.includes(item.id))
             .map((item, index) => createImportedArticle(item, index));
 
         if (imported.length > 0) {
@@ -319,16 +467,36 @@ const mockProvider = {
 
     async getSettings() {
         await wait(120);
-        return clone(mockState.settings);
+        return buildSettingsView(mockState.user, mockState.settings);
     },
 
     async updateSettings(payload) {
         await wait(180);
-        mockState.settings = {
+        const nextSettings = {
             ...mockState.settings,
-            ...payload,
         };
-        return clone(mockState.settings);
+        if (payload.clearApiKey) {
+            nextSettings.apiKey = '';
+        } else if (payload.apiKey) {
+            nextSettings.apiKey = payload.apiKey;
+        } else {
+            nextSettings.apiKey = mockState.settings.apiKey;
+        }
+        if (payload.clearSearchApiKey) {
+            nextSettings.searchApiKey = '';
+        } else if (payload.searchApiKey) {
+            nextSettings.searchApiKey = payload.searchApiKey;
+        } else {
+            nextSettings.searchApiKey = mockState.settings.searchApiKey;
+        }
+        Object.entries(payload).forEach(([key, value]) => {
+            if (key === 'apiKey' || key === 'clearApiKey' || key === 'searchApiKey' || key === 'clearSearchApiKey') return;
+            nextSettings[key] = value;
+        });
+        mockState.settings = {
+            ...nextSettings,
+        };
+        return buildSettingsView(mockState.user, mockState.settings);
     },
 
     async updateProfile(payload) {
@@ -374,7 +542,16 @@ const mockProvider = {
         return {
             conversationId: conversationId || `conv-${notebookId}`,
             reply: `基于《${article?.title || notebook.title}》的 mock 回复：针对“${message}”，后端接入后这里会替换为真实带引用的问答结果。`,
+            citations: [],
         };
+    },
+
+    async translateArticle({ notebookId, articleId, targetLanguage }) {
+        await wait(800);
+        const notebook = getNotebookRecord(notebookId);
+        const article = notebook.articles.find((item) => item.id === articleId);
+        if (!article) throw new Error('未找到对应文章');
+        return buildMockTranslation(article, targetLanguage || mockState.settings.outputLanguage || '中文');
     },
 };
 
@@ -427,6 +604,31 @@ const request = async (path, { method = 'GET', body, headers = {} } = {}) => {
     }
 };
 
+const normalizeSearchPayload = (payload) => {
+    const item = payload?.item || {};
+    return {
+        searchSessionId: item.searchSessionId || payload?.searchSessionId || null,
+        mode: item.mode || payload?.mode || 'auto',
+        modeLabel: item.modeLabel || payload?.modeLabel || getSearchModeLabel(item.mode || payload?.mode || 'auto'),
+        status: item.status || payload?.status || 'completed',
+        execution: item.execution || payload?.execution || 'sync',
+        items: payload?.items || item.items || [],
+        meta: payload?.meta || item.meta || {},
+        message: payload?.message || '',
+    };
+};
+
+const pollSearchSession = async (fetchSession, { intervalMs = 1000, maxAttempts = 20 } = {}) => {
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const result = await fetchSession();
+        if (result.status === 'completed' || result.status === 'failed') {
+            return result;
+        }
+        await wait(intervalMs);
+    }
+    throw new Error('搜索任务超时，请稍后重试');
+};
+
 const backendProvider = {
     async login(credentials) {
         const payload = await request('/auth/login', { method: 'POST', body: credentials });
@@ -458,6 +660,28 @@ const backendProvider = {
         return payload.items;
     },
 
+    async createNotebook(notebook) {
+        const payload = await request('/notebooks', {
+            method: 'POST',
+            body: notebook,
+        });
+        return payload.item;
+    },
+
+    async updateNotebook(notebookId, notebook) {
+        const payload = await request(`/notebooks/${notebookId}`, {
+            method: 'PATCH',
+            body: notebook,
+        });
+        return payload.item;
+    },
+
+    async deleteNotebook(notebookId) {
+        return request(`/notebooks/${notebookId}`, {
+            method: 'DELETE',
+        });
+    },
+
     async getNotebookDetail(notebookId) {
         const payload = await request(`/notebooks/${notebookId}`);
         return payload.item;
@@ -484,17 +708,32 @@ const backendProvider = {
         return { success: true };
     },
 
-    async searchSources({ notebookId, query, searchMode, researchMode }) {
-        return request(`/notebooks/${notebookId}/sources/search`, {
-            method: 'POST',
-            body: { query, searchMode, researchMode },
-        });
+    async getSearchSession({ notebookId, searchSessionId }) {
+        const payload = await request(`/notebooks/${notebookId}/search-sessions/${searchSessionId}`);
+        return normalizeSearchPayload(payload);
     },
 
-    async importSources({ notebookId, sourceIds }) {
+    async searchSources({ notebookId, query, mode = 'auto', maxResults = 10, freshnessHours = 24 }) {
+        const payload = await request(`/notebooks/${notebookId}/sources/search`, {
+            method: 'POST',
+            body: { query, mode, maxResults, freshnessHours },
+        });
+        const normalized = normalizeSearchPayload(payload);
+        if (normalized.execution !== 'async' || !normalized.searchSessionId) {
+            return normalized;
+        }
+        return pollSearchSession(
+            () => backendProvider.getSearchSession({
+                notebookId,
+                searchSessionId: normalized.searchSessionId,
+            }),
+        );
+    },
+
+    async importSources({ notebookId, searchSessionId, searchResultIds }) {
         const payload = await request(`/notebooks/${notebookId}/sources/import`, {
             method: 'POST',
-            body: { sourceIds },
+            body: { searchSessionId, searchResultIds },
         });
         return payload.item;
     },
@@ -558,15 +797,24 @@ const backendProvider = {
     },
 
     async generateSummary({ notebookId, articleId }) {
-        return request(`/notebooks/${notebookId}/articles/${articleId}/summary`, {
+        const payload = await request(`/notebooks/${notebookId}/articles/${articleId}/summary`, {
             method: 'POST',
         });
+        return payload.item || payload;
     },
 
     async askAssistant({ notebookId, articleId, conversationId, message }) {
         const payload = await request(`/notebooks/${notebookId}/chat`, {
             method: 'POST',
             body: { articleId, conversationId, message },
+        });
+        return payload.item || payload;
+    },
+
+    async translateArticle({ notebookId, articleId, targetLanguage }) {
+        const payload = await request(`/notebooks/${notebookId}/articles/${articleId}/translate`, {
+            method: 'POST',
+            body: { targetLanguage },
         });
         return payload.item || payload;
     },
@@ -583,6 +831,9 @@ export const appApi = {
     },
     notebooks: {
         list: provider.listNotebooks,
+        create: provider.createNotebook,
+        update: provider.updateNotebook,
+        remove: provider.deleteNotebook,
         getDetail: provider.getNotebookDetail,
     },
     notes: {
@@ -591,6 +842,7 @@ export const appApi = {
     },
     sources: {
         search: provider.searchSources,
+        getSession: provider.getSearchSession,
         importSelected: provider.importSources,
         create: provider.createSource,
         uploadFiles: provider.uploadFiles,
@@ -604,6 +856,7 @@ export const appApi = {
     ai: {
         generateSummary: provider.generateSummary,
         askAssistant: provider.askAssistant,
+        translateArticle: provider.translateArticle,
     },
 };
 

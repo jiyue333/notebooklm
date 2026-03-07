@@ -1,0 +1,180 @@
+.notebook-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1100;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+}
+
+.notebook-modal {
+    width: 520px;
+    max-width: 92vw;
+    background: var(--card-bg);
+    border-radius: var(--radius-lg, 16px);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--border-color);
+    overflow: hidden;
+}
+
+.notebook-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 20px 14px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.notebook-modal-header h3 {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--title-color);
+}
+
+.notebook-modal-close {
+    border: none;
+    background: transparent;
+    color: var(--meta-color);
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.notebook-modal-close:hover {
+    background: var(--hover-bg);
+    color: var(--accent-color);
+}
+
+.notebook-modal-body {
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.notebook-modal-label {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--title-color);
+}
+
+.notebook-modal-row {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 12px;
+}
+
+.notebook-modal-field-sm {
+    min-width: 0;
+}
+
+.notebook-modal-input {
+    width: 100%;
+    border: none;
+    border-radius: var(--radius);
+    background: var(--hover-bg);
+    color: var(--text-color);
+    padding: 10px 12px;
+    font-size: 0.9rem;
+    font-family: inherit;
+    outline: none;
+}
+
+.notebook-modal-color-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.notebook-modal-color {
+    width: 44px;
+    height: 40px;
+    padding: 0;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    cursor: pointer;
+}
+
+.notebook-modal-preview {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 84px;
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    color: white;
+}
+
+.notebook-modal-preview-emoji {
+    font-size: 2rem;
+}
+
+.notebook-modal-preview-meta {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.notebook-modal-preview-title {
+    font-size: 0.92rem;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
+.notebook-modal-preview-subtitle {
+    font-size: 0.76rem;
+    opacity: 0.82;
+}
+
+.notebook-modal-error {
+    color: #c53a3a;
+    font-size: 0.82rem;
+}
+
+.notebook-modal-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px 20px;
+    gap: 12px;
+}
+
+.notebook-modal-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.notebook-modal-secondary,
+.notebook-modal-primary,
+.notebook-modal-delete {
+    border: none;
+    border-radius: var(--radius);
+    padding: 10px 16px;
+    font-size: 0.84rem;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.notebook-modal-secondary {
+    background: var(--hover-bg);
+    color: var(--text-color);
+}
+
+.notebook-modal-primary {
+    background: var(--accent-color);
+    color: white;
+}
+
+.notebook-modal-delete {
+    background: color-mix(in srgb, #c53a3a, transparent 88%);
+    color: #c53a3a;
+}
