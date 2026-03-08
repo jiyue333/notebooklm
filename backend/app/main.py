@@ -14,6 +14,7 @@ from app.infra.db.session import get_session_manager
 from app.infra.telemetry.logging import setup_logging
 from app.infra.telemetry.langsmith import get_langsmith_client
 from app.infra.telemetry.tracing import setup_tracing, shutdown_tracing
+from app.modules.ai.router import router as ai_router
 from app.modules.auth.router import router as auth_router
 from app.modules.notebooks.router import router as notebooks_router
 from app.modules.notes.router import router as notes_router
@@ -66,6 +67,7 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
     app.include_router(health_router, prefix=settings.api_prefix)
     app.include_router(auth_router, prefix=settings.api_prefix)
+    app.include_router(ai_router, prefix=settings.api_prefix)
     app.include_router(notebooks_router, prefix=settings.api_prefix)
     app.include_router(notes_router, prefix=settings.api_prefix)
     app.include_router(settings_router, prefix=settings.api_prefix)

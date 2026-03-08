@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Computed, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infra.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -83,6 +83,15 @@ class Article(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     parse_error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     parse_quality_score: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
     article_retrieval_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    article_tsv: Mapped[str | None] = mapped_column(
+        TSVECTOR,
+        Computed(
+            "setweight(to_tsvector('simple', coalesce(title, '')), 'A') || "
+            "setweight(to_tsvector('simple', coalesce(article_retrieval_text, '')), 'B')",
+            persisted=True,
+        ),
+        nullable=True,
+    )
     chunk_status: Mapped[str] = mapped_column(String(16), nullable=False)
     index_status: Mapped[str] = mapped_column(String(16), nullable=False)
     ingested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

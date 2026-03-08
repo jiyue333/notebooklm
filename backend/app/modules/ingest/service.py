@@ -7,6 +7,7 @@ from hashlib import sha256
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.ingest.parser_router import parse_file_content
+from app.modules.ingest.retrieval_text_builder import build_article_retrieval_text
 from app.modules.jobs import repo as jobs_repo
 from app.modules.notebooks.models import Article
 from app.modules.search import repo_article
@@ -74,6 +75,10 @@ async def ingest_draft(
         author=draft.author,
         published_at=draft.published_at,
         preview_markdown=draft.preview_markdown,
+        article_retrieval_text=build_article_retrieval_text(
+            title=draft.title,
+            preview_markdown=draft.preview_markdown,
+        ) if draft.preview_markdown else draft.title.strip(),
         parse_status="queued",
         chunk_status="not_started",
         index_status="not_started",
@@ -129,6 +134,11 @@ def _apply_parsed_content(
     article.preview_markdown = article.preview_markdown or markdown
     article.toc_json = extract_toc(markdown)
     article.content_hash = compute_content_hash(markdown)
+    article.article_retrieval_text = build_article_retrieval_text(
+        title=article.title,
+        markdown=markdown,
+        toc=article.toc_json,
+    )
     article.parser_name = parser_name
     article.parse_status = "ready"
     article.ingested_at = ingested_at
