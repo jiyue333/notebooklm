@@ -235,13 +235,23 @@ export default function NotebookPage() {
         setTranslationError('');
     }, [selectedArticle?.id]);
 
+    const articleRenderMode = selectedArticle?.renderMode || 'markdown';
     const toc = useMemo(() => {
         if (showTranslation && translationText) {
             return extractToc(translationText);
         }
-        return selectedArticle ? extractToc(selectedArticle.content) : [];
-    }, [selectedArticle, showTranslation, translationText]);
-    const strippedContent = useMemo(() => selectedArticle ? stripFirstH1(selectedArticle.content) : '', [selectedArticle]);
+        if (!selectedArticle) return [];
+        if (Array.isArray(selectedArticle.toc) && selectedArticle.toc.length > 0) {
+            return selectedArticle.toc;
+        }
+        if (articleRenderMode === 'pdf') {
+            return [];
+        }
+        return extractToc(selectedArticle.content);
+    }, [selectedArticle, showTranslation, translationText, articleRenderMode]);
+    const strippedContent = useMemo(() => (
+        selectedArticle && articleRenderMode === 'markdown' ? stripFirstH1(selectedArticle.content) : ''
+    ), [selectedArticle, articleRenderMode]);
     const renderedArticleContent = useMemo(() => (
         showTranslation && translationText ? stripFirstH1(translationText) : strippedContent
     ), [showTranslation, translationText, strippedContent]);
@@ -534,9 +544,31 @@ export default function NotebookPage() {
                                             </div>
                                         </div>
                                     )}
-                                    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSlug]}>
-                                        {renderedArticleContent}
-                                    </ReactMarkdown>
+                                    {showTranslation && translationText ? (
+                                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSlug]}>
+                                            {renderedArticleContent}
+                                        </ReactMarkdown>
+                                    ) : articleRenderMode === 'pdf' ? (
+                                        selectedArticle.fileUrl ? (
+                                            <iframe
+                                                title={selectedArticle.title}
+                                                src={selectedArticle.fileUrl}
+                                                style={{
+                                                    width: '100%',
+                                                    minHeight: '72vh',
+                                                    border: '1px solid rgba(148, 163, 184, 0.28)',
+                                                    borderRadius: '18px',
+                                                    background: '#fff',
+                                                }}
+                                            />
+                                        ) : (
+                                            <div className="nb-empty-hint"><p>PDF 文件暂不可访问</p></div>
+                                        )
+                                    ) : (
+                                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSlug]}>
+                                            {renderedArticleContent}
+                                        </ReactMarkdown>
+                                    )}
                                 </div>
                             </div>
                         </>

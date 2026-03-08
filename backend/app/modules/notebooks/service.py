@@ -5,11 +5,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.errors import AppError
 from app.modules.notes import repo as notes_repo
 from app.modules.notebooks import assembler, repo
+from app.modules.search import repo_article
 
 
 async def list_notebooks(session: AsyncSession, *, user_id: str, query: str | None = None) -> list[dict]:
     notebooks = await repo.list_notebooks(session, user_id=user_id, query=query)
-    return [assembler.build_notebook_summary(notebook) for notebook in notebooks]
+    counts = await repo_article.count_articles_by_notebook_ids(
+        session,
+        user_id=user_id,
+        notebook_ids=[notebook.id for notebook in notebooks],
+    )
+    return [
+        assembler.build_notebook_summary(notebook, source_count=counts.get(notebook.id, 0))
+        for notebook in notebooks
+    ]
 
 
 async def create_notebook(
@@ -29,7 +38,7 @@ async def create_notebook(
     )
     await session.commit()
     await session.refresh(notebook)
-    return assembler.build_notebook_detail(notebook, [])
+    return assembler.build_notebook_detail(notebook, [], [], source_count=0)
 
 
 async def get_notebook_detail(session: AsyncSession, *, user_id: str, notebook_id: str) -> dict:
@@ -38,7 +47,12 @@ async def get_notebook_detail(session: AsyncSession, *, user_id: str, notebook_i
         raise AppError(404, "未找到对应的笔记本", code="notebook_not_found")
 
     notes = await notes_repo.list_notes(session, user_id=user_id, notebook_id=notebook_id)
-    return assembler.build_notebook_detail(notebook, notes)
+    articles = await repo_article.list_articles_by_notebook(
+        session,
+        user_id=user_id,
+        notebook_id=notebook_id,
+    )
+    return assembler.build_notebook_detail(notebook, notes, articles, source_count=len(articles))
 
 
 async def update_notebook(

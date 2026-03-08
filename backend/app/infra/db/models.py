@@ -8,6 +8,7 @@ def import_models() -> None:
     before metadata discovery is actually needed.
     """
     from app.modules.auth import models as _auth_models  # noqa: F401
+    from app.modules.jobs import models as _job_models  # noqa: F401
     from app.modules.notebooks import models as _notebook_models  # noqa: F401
     from app.modules.notes import models as _note_models  # noqa: F401
     from app.modules.search import models as _search_models  # noqa: F401

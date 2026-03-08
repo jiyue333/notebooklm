@@ -10,3 +10,15 @@ class SearchSourcesRequest(BaseModel):
     mode: Literal["fast", "auto", "deep"] = "auto"
     maxResults: int = Field(default=10, ge=1, le=100)
     freshnessHours: int | None = Field(default=24, ge=0)
+
+
+class ImportSearchResultsRequest(BaseModel):
+    searchSessionId: str
+    searchResultIds: list[str] = Field(min_length=1)
+
+
+class ManualSourceRequest(BaseModel):
+    sourceType: Literal["web", "text"]
+    url: str | None = None
+    title: str | None = Field(default=None, max_length=255)
+    content: str | None = None

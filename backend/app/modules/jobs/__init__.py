@@ -1,1 +1,1 @@
-"""Job orchestration module placeholders."""
+"""Job orchestration module."""

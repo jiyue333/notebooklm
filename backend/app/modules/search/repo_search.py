@@ -79,6 +79,25 @@ async def list_search_results(session: AsyncSession, *, search_session_id: str) 
     return list(result.scalars().all())
 
 
+async def list_search_results_by_ids(
+    session: AsyncSession,
+    *,
+    search_session_id: str,
+    result_ids: list[str],
+) -> list[SearchResult]:
+    if not result_ids:
+        return []
+    result = await session.execute(
+        select(SearchResult)
+        .where(
+            SearchResult.search_session_id == search_session_id,
+            SearchResult.id.in_(result_ids),
+        )
+        .order_by(SearchResult.display_rank.asc())
+    )
+    return list(result.scalars().all())
+
+
 async def replace_search_results(
     session: AsyncSession,
     *,
