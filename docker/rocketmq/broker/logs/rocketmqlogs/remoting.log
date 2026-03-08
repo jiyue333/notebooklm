@@ -1,0 +1,45 @@
+2026-03-07 17:19:43 INFO main - Server is running in TLS permissive mode
+2026-03-07 17:19:43 INFO main - Tls config file doesn't exist, skip it
+2026-03-07 17:19:43 INFO main - Log the final used tls related configuration
+2026-03-07 17:19:43 INFO main - tls.test.mode.enable = true
+2026-03-07 17:19:43 INFO main - tls.server.need.client.auth = none
+2026-03-07 17:19:43 INFO main - tls.server.keyPath = null
+2026-03-07 17:19:43 INFO main - tls.server.keyPassword = null
+2026-03-07 17:19:43 INFO main - tls.server.certPath = null
+2026-03-07 17:19:43 INFO main - tls.server.authClient = false
+2026-03-07 17:19:43 INFO main - tls.server.trustCertPath = null
+2026-03-07 17:19:43 INFO main - tls.client.keyPath = null
+2026-03-07 17:19:43 INFO main - tls.client.keyPassword = null
+2026-03-07 17:19:43 INFO main - tls.client.certPath = null
+2026-03-07 17:19:43 INFO main - tls.client.authServer = false
+2026-03-07 17:19:43 INFO main - tls.client.trustCertPath = null
+2026-03-07 17:19:44 INFO main - Using OpenSSL provider
+2026-03-07 17:19:46 INFO main - SSLContext created for server
+2026-03-07 17:19:46 INFO main - Server is running in TLS permissive mode
+2026-03-07 17:19:46 INFO main - Tls config file doesn't exist, skip it
+2026-03-07 17:19:46 INFO main - Log the final used tls related configuration
+2026-03-07 17:19:46 INFO main - tls.test.mode.enable = true
+2026-03-07 17:19:46 INFO main - tls.server.need.client.auth = none
+2026-03-07 17:19:46 INFO main - tls.server.keyPath = null
+2026-03-07 17:19:46 INFO main - tls.server.keyPassword = null
+2026-03-07 17:19:46 INFO main - tls.server.certPath = null
+2026-03-07 17:19:46 INFO main - tls.server.authClient = false
+2026-03-07 17:19:46 INFO main - tls.server.trustCertPath = null
+2026-03-07 17:19:46 INFO main - tls.client.keyPath = null
+2026-03-07 17:19:46 INFO main - tls.client.keyPassword = null
+2026-03-07 17:19:46 INFO main - tls.client.certPath = null
+2026-03-07 17:19:46 INFO main - tls.client.authServer = false
+2026-03-07 17:19:46 INFO main - tls.client.trustCertPath = null
+2026-03-07 17:19:46 INFO main - Using OpenSSL provider
+2026-03-07 17:19:46 INFO main - SSLContext created for server
+2026-03-07 17:19:46 INFO main - name server address updated. NEW : [rocketmq-namesrv:9876] , OLD: null
+2026-03-07 17:19:46 INFO NettyEventExecutor - NettyEventExecutor service started
+2026-03-07 17:19:46 INFO main - RemotingServer started, listening 0.0.0.0:10911
+2026-03-07 17:19:46 INFO NettyEventExecutor - NettyEventExecutor service started
+2026-03-07 17:19:46 INFO main - RemotingServer started, listening 0.0.0.0:10909
+2026-03-07 17:19:46 INFO NettyEventExecutor - NettyEventExecutor service started
+2026-03-07 17:19:47 INFO NettyClientScan_thread_1 - createChannel: begin to connect remote host[rocketmq-namesrv:9876] asynchronously
+2026-03-07 17:19:47 INFO NettyClientWorkerThread_1 - NETTY CLIENT PIPELINE: CONNECT  UNKNOWN => 172.18.0.3:9876
+2026-03-07 17:19:47 INFO NettyClientScan_thread_1 - createChannel: connect remote host[rocketmq-namesrv:9876] success, AbstractBootstrap$PendingRegistrationPromise@1396fe05(success)
+2026-03-07 17:19:47 INFO NettyClientWorkerThread_1 - NETTY CLIENT PIPELINE: ACTIVE, 172.18.0.3:9876
+2026-03-07 17:19:57 INFO BrokerControllerScheduledThread1 - new name server is chosen. OLD: null , NEW: rocketmq-namesrv:9876. namesrvIndex = 116

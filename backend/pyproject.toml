@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "notebooklm-backend"
+version = "0.1.0"
+description = "Backend scaffold for the NotebookLM research workspace"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "alembic>=1.14.1",
+  "asyncpg>=0.30.0",
+  "cryptography>=44.0.2",
+  "fastapi>=0.115.12",
+  "greenlet>=3.1.1",
+  "httpx>=0.28.1",
+  "langchain>=0.3.21",
+  "langchain-core>=0.3.49",
+  "langsmith>=0.3.13",
+  "minio>=7.2.15",
+  "opentelemetry-api>=1.31.1",
+  "opentelemetry-exporter-otlp>=1.31.1",
+  "opentelemetry-instrumentation-fastapi>=0.52b1",
+  "opentelemetry-instrumentation-sqlalchemy>=0.52b1",
+  "opentelemetry-sdk>=1.31.1",
+  "prometheus-client>=0.21.1",
+  "psycopg[binary]>=3.2.6",
+  "pydantic-settings>=2.8.1",
+  "python-multipart>=0.0.20",
+  "redis>=5.2.1",
+  "rocketmq-client-python>=2.0.0",
+  "sqlalchemy>=2.0.39",
+  "structlog>=25.2.0",
+  "uvicorn[standard]>=0.34.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.15.0",
+  "pytest>=8.3.5",
+  "pytest-asyncio>=0.25.3",
+  "ruff>=0.11.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.alembic]
+script_location = "alembic"
+prepend_sys_path = ["."]
