@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import AppError
-from app.modules.jobs import repo as jobs_repo
+from app.modules.ingest.service import IngestDraft, ingest_draft
 from app.modules.notebooks import service as notebooks_service
-from app.modules.search import repo_article, repo_search
+from app.modules.search import repo_search
 
 
 async def import_results(
@@ -38,37 +36,23 @@ async def import_results(
     if len(search_results) != len(unique_result_ids):
         raise AppError(422, "部分搜索结果不存在或不属于当前搜索会话", code="invalid_search_result_ids")
 
-    existing_dedupe_keys = await repo_article.list_existing_dedupe_keys(
-        session,
-        user_id=user.id,
-        notebook_id=notebook_id,
-        dedupe_keys=[result.url_hash for result in search_results],
-    )
-
-    now = datetime.now(UTC)
     for search_result in search_results:
-        if search_result.url_hash in existing_dedupe_keys:
-            continue
-
-        article = await repo_article.create_search_result_article(
+        await ingest_draft(
             session,
             user_id=user.id,
             notebook_id=notebook_id,
-            search_session_id=search_session.id,
-            search_result=search_result,
-            created_at=now,
-        )
-        await jobs_repo.create_article_ingest_job(
-            session,
-            article_id=article.id,
-            search_session_id=search_session.id,
-            dedupe_key=f"article_ingest:{article.id}",
-            payload_json={
-                "articleId": article.id,
-                "inputType": article.input_type,
-                "originSearchResultId": search_result.id,
-            },
-            created_at=now,
+            draft=IngestDraft(
+                input_type="search_result",
+                title=search_result.title,
+                preview_markdown=search_result.preview_markdown or search_result.description,
+                source_url=search_result.raw_url,
+                normalized_url=search_result.canonical_url,
+                origin_search_session_id=search_session.id,
+                origin_search_result_id=search_result.id,
+                author=search_result.author,
+                published_at=search_result.published_at,
+                source_title_raw=search_result.title,
+            ),
         )
 
     await session.commit()
