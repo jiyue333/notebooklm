@@ -17,6 +17,23 @@ services:
       timeout: 5s
       retries: 5
 
+  pgadmin:
+    image: dpage/pgadmin4:9
+    container_name: notebooklm-pgadmin
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@notebooklm.local
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_DISABLE_POSTFIX: "true"
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
+
   redis:
     image: redis:7-alpine
     container_name: notebooklm-redis
@@ -77,7 +94,20 @@ services:
       - ./docker/rocketmq/broker/logs:/home/rocketmq/logs
       - ./docker/rocketmq/broker/store:/home/rocketmq/store
 
+  rocketmq-dashboard:
+    image: apacherocketmq/rocketmq-dashboard:latest
+    platform: linux/amd64
+    container_name: notebooklm-rmq-dashboard
+    restart: unless-stopped
+    depends_on:
+      - rocketmq-namesrv
+    environment:
+      JAVA_OPTS: "-Drocketmq.namesrv.addr=rocketmq-namesrv:9876"
+    ports:
+      - "8088:8080"
+
 volumes:
   postgres_data:
+  pgadmin_data:
   redis_data:
   minio_data:

@@ -18,6 +18,7 @@ from app.modules.auth.router import router as auth_router
 from app.modules.notebooks.router import router as notebooks_router
 from app.modules.notes.router import router as notes_router
 from app.modules.settings.router import router as settings_router
+from app.modules.sources.router import router as sources_router
 
 
 @asynccontextmanager
@@ -68,6 +69,7 @@ def create_app() -> FastAPI:
     app.include_router(notebooks_router, prefix=settings.api_prefix)
     app.include_router(notes_router, prefix=settings.api_prefix)
     app.include_router(settings_router, prefix=settings.api_prefix)
+    app.include_router(sources_router, prefix=settings.api_prefix)
 
     return app
 

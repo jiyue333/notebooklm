@@ -1,0 +1,16 @@
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+.env
+dist/
+build/
+*.log
+
+*.bak
+
+# Docker 运行时数据（日志、存储等）
+docker/rocketmq/broker/logs/
+docker/rocketmq/broker/store/
+docker/rocketmq/namesrv/logs/

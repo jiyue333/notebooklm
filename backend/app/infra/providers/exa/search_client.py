@@ -55,7 +55,7 @@ class ExaSearchClient:
         # Exa freshness knobs are intentionally kept in the adapter so later
         # steps can tune them without leaking provider details upward.
         if request.freshness_hours is not None:
-            payload["freshnessHours"] = request.freshness_hours
+            payload["maxAgeHours"] = request.freshness_hours
 
         response = await self._client.post(
             "/search",
