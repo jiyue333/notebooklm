@@ -6,8 +6,8 @@ from hashlib import sha256
 from sqlalchemy import delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.sources.dto import SearchCandidateDTO
-from app.modules.sources.models import SearchResult, SearchSession
+from app.modules.search.dto import SearchCandidateDTO
+from app.modules.search.models import SearchResult, SearchSession
 
 
 async def create_search_session(

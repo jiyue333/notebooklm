@@ -10,4 +10,4 @@ def import_models() -> None:
     from app.modules.auth import models as _auth_models  # noqa: F401
     from app.modules.notebooks import models as _notebook_models  # noqa: F401
     from app.modules.notes import models as _note_models  # noqa: F401
-    from app.modules.sources import models as _source_models  # noqa: F401
+    from app.modules.search import models as _search_models  # noqa: F401

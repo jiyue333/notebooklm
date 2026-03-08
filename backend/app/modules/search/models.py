@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 
 class SearchSession(UUIDPrimaryKeyMixin, Base):
-    __tablename__ = "search_sessions"
+    __tablename__ = "search_sessions" # type: ignore[assignment]
 
     user_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -51,7 +51,7 @@ class SearchSession(UUIDPrimaryKeyMixin, Base):
 
 
 class SearchResult(UUIDPrimaryKeyMixin, Base):
-    __tablename__ = "search_results"
+    __tablename__ = "search_results" # type: ignore[assignment]
 
     search_session_id: Mapped[str] = mapped_column(
         ForeignKey("search_sessions.id", ondelete="CASCADE"),

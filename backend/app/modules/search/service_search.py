@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
+from typing import cast
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,12 +12,12 @@ from app.api.errors import AppError
 from app.core.config import get_settings
 from app.infra.db.session import get_session_manager
 from app.infra.providers.exa.mapper import ExaResultMapper
-from app.infra.providers.exa.search_client import ExaSearchClient, ExaSearchRequest
+from app.infra.providers.exa.search_client import ExaSearchClient, ExaSearchMode, ExaSearchRequest
 from app.modules.auth.repo import get_user_by_id
 from app.modules.notebooks import repo as notebooks_repo
 from app.modules.settings.crypto import get_credential_crypto
-from app.modules.sources import repo_search
-from app.modules.sources.models import SearchResult, SearchSession
+from app.modules.search import repo_search
+from app.modules.search.models import SearchResult, SearchSession
 
 logger = structlog.get_logger(__name__)
 
@@ -199,7 +200,7 @@ async def execute_search(search_session_id: str) -> dict:
             payload = await client.search(
                 ExaSearchRequest(
                     query=search_session.query,
-                    mode=search_session.mode,
+                    mode=cast(ExaSearchMode, search_session.mode),
                     max_results=int(search_session.provider_request_json.get("maxResults", 10)),
                     freshness_hours=search_session.provider_request_json.get("freshnessHours"),
                 ),

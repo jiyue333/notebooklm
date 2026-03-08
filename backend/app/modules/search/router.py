@@ -5,10 +5,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_user_dep, db_session_dep
 from app.api.response import success_response
-from app.modules.sources.schemas import SearchSourcesRequest
-from app.modules.sources.service_search import get_search_session, start_search
+from app.modules.search.schemas import SearchSourcesRequest
+from app.modules.search.service_search import get_search_session, start_search
 
-router = APIRouter(tags=["sources"])
+router = APIRouter(tags=["search"])
 
 
 @router.post("/notebooks/{notebook_id}/sources/search")
