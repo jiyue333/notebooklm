@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -97,3 +98,19 @@ async def delete_conversation_messages(
     await session.execute(
         delete(ConversationMessage).where(ConversationMessage.id.in_(list(message_ids)))
     )
+
+
+async def cleanup_expired_summary_cache(
+    session: AsyncSession,
+    *,
+    ttl_days: int,
+) -> int:
+    cutoff = datetime.now(UTC) - timedelta(days=ttl_days)
+    result = await session.execute(
+        select(SummaryCache.id).where(SummaryCache.updated_at < cutoff)
+    )
+    cache_ids = list(result.scalars().all())
+    if not cache_ids:
+        return 0
+    await session.execute(delete(SummaryCache).where(SummaryCache.id.in_(cache_ids)))
+    return len(cache_ids)

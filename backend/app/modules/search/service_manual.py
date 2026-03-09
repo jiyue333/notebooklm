@@ -6,6 +6,8 @@ from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import AppError
+from app.infra.telemetry.context import bind_observability_context
+from app.infra.telemetry.metrics import observe_source_import
 from app.modules.ingest.service import IngestDraft, ingest_draft
 from app.modules.jobs import publisher as job_publisher
 from app.modules.notebooks.models import Article
@@ -27,6 +29,11 @@ async def create_source(
     title: str | None = None,
     content: str | None = None,
 ) -> dict:
+    bind_observability_context(
+        user_id=user.id,
+        notebook_id=notebook_id,
+        source_type=source_type,
+    )
     notebook = await notebooks_repo.get_notebook(session, user_id=user.id, notebook_id=notebook_id)
     if notebook is None:
         raise AppError(404, "未找到对应的笔记本", code="notebook_not_found")
@@ -44,6 +51,7 @@ async def create_source(
                 source_title_raw=normalized_title,
             ),
         )
+        observe_source_import(source_type="text", result="imported")
         await session.commit()
         return await notebooks_service.get_notebook_detail(session, user_id=user.id, notebook_id=notebook_id)
 
@@ -67,6 +75,7 @@ async def create_source(
             source_title_raw=normalized_title,
         ),
     )
+    observe_source_import(source_type="url", result="imported" if _article is not None else "skipped")
     await session.commit()
     if job is not None:
         await job_publisher.publish_jobs(session, [job])
@@ -82,17 +91,24 @@ async def upload_files(
     notebook_id: str,
     files: list[UploadFile],
 ) -> dict:
+    bind_observability_context(
+        user_id=user.id,
+        notebook_id=notebook_id,
+        source_type="file",
+    )
     notebook = await notebooks_repo.get_notebook(session, user_id=user.id, notebook_id=notebook_id)
     if notebook is None:
         raise AppError(404, "未找到对应的笔记本", code="notebook_not_found")
 
     jobs = []
+    imported_count = 0
+    skipped_count = 0
     for upload in files:
         data = await upload.read()
         if not data:
             continue
 
-        _article, job = await ingest_draft(
+        article, job = await ingest_draft(
             session,
             user_id=user.id,
             notebook_id=notebook_id,
@@ -106,9 +122,17 @@ async def upload_files(
                 source_title_raw=upload.filename or "未命名文件",
             ),
         )
+        if article is None:
+            skipped_count += 1
+            continue
+        imported_count += 1
         if job is not None:
             jobs.append(job)
 
+    if imported_count:
+        observe_source_import(source_type="file", result="imported", count=imported_count)
+    if skipped_count:
+        observe_source_import(source_type="file", result="skipped", count=skipped_count)
     await session.commit()
     if jobs:
         await job_publisher.publish_jobs(session, jobs)

@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import AppError
+from app.infra.telemetry.context import bind_observability_context
+from app.infra.telemetry.llm import extract_llm_text_and_usage
+from app.infra.telemetry.metrics import observe_llm_call
 from app.modules.ai.conversation_service import (
     append_assistant_message,
     append_user_message,
@@ -11,7 +16,11 @@ from app.modules.ai.conversation_service import (
     load_or_create_conversation,
     maybe_rollup_conversation,
 )
-from app.modules.ai.langchain_factory import build_chat_chain, get_user_generation_settings
+from app.modules.ai.langchain_factory import (
+    build_chat_prompt,
+    get_user_generation_settings,
+    require_user_chat_model,
+)
 from app.modules.notebooks import repo as notebooks_repo
 from app.modules.retrieval.article_retriever import RetrievedArticleMatch, retrieve_related_articles
 from app.modules.retrieval.router import route_chat_message
@@ -67,20 +76,61 @@ async def reply(
     )
 
     model_settings = get_user_generation_settings(user)
-    chain = build_chat_chain(user)
-    answer = (
-        await chain.ainvoke(
-            {
-                "output_language": model_settings["outputLanguage"],
-                "notebook_title": notebook.title,
-                "route": route,
-                "rolling_summary": conversation.rolling_summary or "暂无会话摘要。",
-                "context_block": context_block,
-                "history_messages": history_messages,
-                "user_message": message,
-            }
+    trace_metadata = {
+        "user_id": user.id,
+        "notebook_id": notebook.id,
+        "article_id": article_id,
+        "conversation_id": conversation.id,
+        "provider": model_settings["modelProvider"],
+        "model_name": model_settings["modelName"],
+        "route": route,
+    }
+    bind_observability_context(
+        user_id=user.id,
+        notebook_id=notebook.id,
+        article_id=article_id,
+        conversation_id=conversation.id,
+        provider=model_settings["modelProvider"],
+        model_name=model_settings["modelName"],
+    )
+    prompt = build_chat_prompt()
+    model = require_user_chat_model(user)
+    messages = await prompt.ainvoke(
+        {
+            "output_language": model_settings["outputLanguage"],
+            "notebook_title": notebook.title,
+            "route": route,
+            "rolling_summary": conversation.rolling_summary or "暂无会话摘要。",
+            "context_block": context_block,
+            "history_messages": history_messages,
+            "user_message": message,
+        },
+        config={"run_name": "chat_prompt", "metadata": trace_metadata},
+    )
+    started_at = perf_counter()
+    try:
+        result = await model.ainvoke(
+            messages,
+            config={"run_name": "chat_model", "metadata": trace_metadata},
         )
-    ).strip()
+    except Exception:
+        observe_llm_call(
+            operation="chat",
+            provider=model_settings["modelProvider"],
+            model=model_settings["modelName"],
+            status="error",
+            duration_ms=round((perf_counter() - started_at) * 1000, 2),
+        )
+        raise
+    answer, usage = extract_llm_text_and_usage(result)
+    observe_llm_call(
+        operation="chat",
+        provider=model_settings["modelProvider"],
+        model=model_settings["modelName"],
+        status="success",
+        duration_ms=round((perf_counter() - started_at) * 1000, 2),
+        usage=usage,
+    )
     if not answer:
         raise AppError(502, "对话生成失败", code="chat_generation_failed")
 

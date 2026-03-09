@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.jobs.models import Job
@@ -116,3 +116,19 @@ async def mark_job_failed(job: Job, *, error: str) -> None:
     job.status = "failed" if job.attempts < job.max_attempts else "dead"
     job.finished_at = datetime.now(UTC)
     job.last_error = error[:4000]
+
+
+async def cleanup_failed_jobs(session: AsyncSession, *, retention_days: int) -> int:
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    result = await session.execute(
+        select(Job.id).where(
+            Job.status.in_(["failed", "dead"]),
+            Job.finished_at.is_not(None),
+            Job.finished_at < cutoff,
+        )
+    )
+    job_ids = list(result.scalars().all())
+    if not job_ids:
+        return 0
+    await session.execute(delete(Job).where(Job.id.in_(job_ids)))
+    return len(job_ids)

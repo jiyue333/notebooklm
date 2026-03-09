@@ -8,6 +8,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from app.infra.telemetry.context import bind_observability_context
 from app.infra.telemetry.metrics import observe_http_request
 
 logger = structlog.get_logger(__name__)
@@ -19,7 +20,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         request.state.request_id = request_id
 
         structlog.contextvars.clear_contextvars()
-        structlog.contextvars.bind_contextvars(
+        bind_observability_context(
             request_id=request_id,
             http_method=request.method,
             http_path=request.url.path,

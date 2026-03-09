@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from time import perf_counter
 from uuid import UUID, uuid4
 
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.api.errors import AppError
+from app.infra.telemetry.llm import extract_llm_text_and_usage
+from app.infra.telemetry.metrics import observe_llm_call
 from app.modules.ai import repo as ai_repo
-from app.modules.ai.langchain_factory import build_chat_rollup_chain, get_user_generation_settings
+from app.modules.ai.langchain_factory import (
+    build_chat_rollup_prompt,
+    get_user_generation_settings,
+    require_user_chat_model,
+)
 from app.modules.ai.models import Conversation, ConversationMessage
 
 RECENT_WINDOW_SIZE = 10
@@ -137,16 +144,47 @@ async def maybe_rollup_conversation(session, *, conversation: Conversation, user
         return
 
     model_settings = get_user_generation_settings(user)
-    chain = build_chat_rollup_chain(user)
-    summary = (
-        await chain.ainvoke(
-            {
-                "output_language": model_settings["outputLanguage"],
-                "existing_summary": conversation.rolling_summary or "暂无历史摘要。",
-                "conversation": transcript,
-            }
+    trace_metadata = {
+        "user_id": user.id,
+        "conversation_id": conversation.id,
+        "notebook_id": conversation.notebook_id,
+        "provider": model_settings["modelProvider"],
+        "model_name": model_settings["modelName"],
+    }
+    prompt = build_chat_rollup_prompt()
+    model = require_user_chat_model(user)
+    messages = await prompt.ainvoke(
+        {
+            "output_language": model_settings["outputLanguage"],
+            "existing_summary": conversation.rolling_summary or "暂无历史摘要。",
+            "conversation": transcript,
+        },
+        config={"run_name": "chat_rollup_prompt", "metadata": trace_metadata},
+    )
+    started_at = perf_counter()
+    try:
+        result = await model.ainvoke(
+            messages,
+            config={"run_name": "chat_rollup_model", "metadata": trace_metadata},
         )
-    ).strip()
+    except Exception:
+        observe_llm_call(
+            operation="chat_rollup",
+            provider=model_settings["modelProvider"],
+            model=model_settings["modelName"],
+            status="error",
+            duration_ms=round((perf_counter() - started_at) * 1000, 2),
+        )
+        raise
+    summary, usage = extract_llm_text_and_usage(result)
+    observe_llm_call(
+        operation="chat_rollup",
+        provider=model_settings["modelProvider"],
+        model=model_settings["modelName"],
+        status="success",
+        duration_ms=round((perf_counter() - started_at) * 1000, 2),
+        usage=usage,
+    )
     if summary:
         conversation.rolling_summary = summary
 

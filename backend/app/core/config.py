@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     chunk_target_tokens: int = 600
     chunk_overlap_tokens: int = 80
     summary_cache_ttl_days: int = 30
+    scheduler_failed_job_retention_days: int = 14
 
     rocketmq_namesrv_addr: str = "127.0.0.1:9876"
     rocketmq_topic: str = "notebook_async"
@@ -57,6 +58,9 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     log_json: bool = False
+    api_metrics_port: int = 8080
+    worker_metrics_port: int = 9101
+    scheduler_metrics_port: int = 9102
 
     otel_enabled: bool = True
     otel_service_name: str = "notebooklm-backend"

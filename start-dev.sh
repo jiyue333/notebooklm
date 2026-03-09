@@ -5,8 +5,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_DIR="$ROOT_DIR/logs"
 BACKEND_LOG="$LOG_DIR/backend.log"
+WORKER_LOG="$LOG_DIR/worker.log"
+SCHEDULER_LOG="$LOG_DIR/scheduler.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"
 BACKEND_PID_FILE="$LOG_DIR/backend.pid"
+WORKER_PID_FILE="$LOG_DIR/worker.pid"
+SCHEDULER_PID_FILE="$LOG_DIR/scheduler.pid"
 FRONTEND_PID_FILE="$LOG_DIR/frontend.pid"
 
 mkdir -p "$LOG_DIR"
@@ -75,6 +79,44 @@ start_frontend() {
   echo "frontend started (pid=$pid) -> $FRONTEND_LOG"
 }
 
+start_worker() {
+  local existing_pid
+  existing_pid="$(read_pid "$WORKER_PID_FILE")"
+  if is_running "$existing_pid"; then
+    echo "worker is already running (pid=$existing_pid)"
+    return
+  fi
+
+  append_banner "$WORKER_LOG" "worker"
+  (
+    cd "$ROOT_DIR/backend"
+    exec conda run --no-capture-output -n notebooklm \
+      python -m app.workers.run_worker
+  ) >> "$WORKER_LOG" 2>&1 &
+  local pid=$!
+  echo "$pid" > "$WORKER_PID_FILE"
+  echo "worker started (pid=$pid) -> $WORKER_LOG"
+}
+
+start_scheduler() {
+  local existing_pid
+  existing_pid="$(read_pid "$SCHEDULER_PID_FILE")"
+  if is_running "$existing_pid"; then
+    echo "scheduler is already running (pid=$existing_pid)"
+    return
+  fi
+
+  append_banner "$SCHEDULER_LOG" "scheduler"
+  (
+    cd "$ROOT_DIR/backend"
+    exec conda run --no-capture-output -n notebooklm \
+      python -m app.workers.run_scheduler
+  ) >> "$SCHEDULER_LOG" 2>&1 &
+  local pid=$!
+  echo "$pid" > "$SCHEDULER_PID_FILE"
+  echo "scheduler started (pid=$pid) -> $SCHEDULER_LOG"
+}
+
 kill_process() {
   local name="$1"
   local pid_file="$2"
@@ -98,13 +140,28 @@ kill_process() {
 
 show_status() {
   local backend_pid frontend_pid
+  local worker_pid scheduler_pid
   backend_pid="$(read_pid "$BACKEND_PID_FILE")"
+  worker_pid="$(read_pid "$WORKER_PID_FILE")"
+  scheduler_pid="$(read_pid "$SCHEDULER_PID_FILE")"
   frontend_pid="$(read_pid "$FRONTEND_PID_FILE")"
 
   if is_running "$backend_pid"; then
     echo "backend: running (pid=$backend_pid)"
   else
     echo "backend: stopped"
+  fi
+
+  if is_running "$worker_pid"; then
+    echo "worker: running (pid=$worker_pid)"
+  else
+    echo "worker: stopped"
+  fi
+
+  if is_running "$scheduler_pid"; then
+    echo "scheduler: running (pid=$scheduler_pid)"
+  else
+    echo "scheduler: stopped"
   fi
 
   if is_running "$frontend_pid"; then
@@ -143,13 +200,19 @@ COMMAND="${1:-start}"
 case "$COMMAND" in
   start)
     start_backend
+    start_worker
+    start_scheduler
     start_frontend
     echo "logs:"
     echo "  backend:  $BACKEND_LOG"
+    echo "  worker:   $WORKER_LOG"
+    echo "  scheduler:$SCHEDULER_LOG"
     echo "  frontend: $FRONTEND_LOG"
     ;;
   kill)
     kill_process "backend" "$BACKEND_PID_FILE"
+    kill_process "worker" "$WORKER_PID_FILE"
+    kill_process "scheduler" "$SCHEDULER_PID_FILE"
     kill_process "frontend" "$FRONTEND_PID_FILE"
     ;;
   status)

@@ -3,6 +3,8 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import AppError
+from app.infra.telemetry.context import bind_observability_context
+from app.infra.telemetry.metrics import observe_source_import
 from app.modules.ingest.service import IngestDraft, ingest_draft
 from app.modules.jobs import publisher as job_publisher
 from app.modules.notebooks import service as notebooks_service
@@ -17,6 +19,11 @@ async def import_results(
     search_session_id: str,
     search_result_ids: list[str],
 ) -> dict:
+    bind_observability_context(
+        user_id=user.id,
+        notebook_id=notebook_id,
+        search_session_id=search_session_id,
+    )
     search_session = await repo_search.get_search_session(
         session,
         user_id=user.id,
@@ -38,8 +45,10 @@ async def import_results(
         raise AppError(422, "部分搜索结果不存在或不属于当前搜索会话", code="invalid_search_result_ids")
 
     jobs = []
+    imported_count = 0
+    skipped_count = 0
     for search_result in search_results:
-        _article, job = await ingest_draft(
+        article, job = await ingest_draft(
             session,
             user_id=user.id,
             notebook_id=notebook_id,
@@ -56,9 +65,17 @@ async def import_results(
                 source_title_raw=search_result.title,
             ),
         )
+        if article is None:
+            skipped_count += 1
+            continue
+        imported_count += 1
         if job is not None:
             jobs.append(job)
 
+    if imported_count:
+        observe_source_import(source_type="search_result", result="imported", count=imported_count)
+    if skipped_count:
+        observe_source_import(source_type="search_result", result="skipped", count=skipped_count)
     await session.commit()
     if jobs:
         await job_publisher.publish_jobs(session, jobs)

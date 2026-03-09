@@ -8,6 +8,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.repo import get_user_by_id
+from app.infra.telemetry.metrics import observe_ingest_chunks, observe_ingest_parse
 from app.modules.ingest.chunker import chunk_markdown
 from app.modules.ingest.embedder import Embedder
 from app.modules.ingest.indexer import replace_article_chunks
@@ -111,9 +112,16 @@ async def ingest_draft(
             file_bytes=draft.file_bytes,
         )
         _apply_parsed_content(article, parsed.markdown, parsed.parser_name, now)
+        if parsed.markdown:
+            observe_ingest_parse(
+                input_type="file",
+                status="ready",
+                parser=parsed.parser_name or "unknown",
+            )
     elif draft.input_type == "text":
         markdown = normalize_text_to_markdown(title=draft.title, content=draft.raw_text_input or "")
         _apply_parsed_content(article, markdown, "raw_text", now)
+        observe_ingest_parse(input_type="text", status="ready", parser="raw_text")
     elif draft.input_type == "url":
         article.preview_markdown = draft.preview_markdown or build_web_placeholder(
             title=draft.title,
@@ -193,6 +201,7 @@ async def _index_article_content(session: AsyncSession, article: Article, *, use
             )
 
     article.article_vector = article_vector
+    observe_ingest_chunks(input_type=article.input_type, chunk_count=len(chunks))
     await replace_article_chunks(
         session,
         article=article,

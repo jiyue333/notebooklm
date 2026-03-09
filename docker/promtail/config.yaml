@@ -1,0 +1,39 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: notebooklm-backend
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: notebooklm-backend
+          service: api
+          __path__: /workspace/logs/backend.log
+  - job_name: notebooklm-worker
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: notebooklm-worker
+          service: worker
+          __path__: /workspace/logs/worker.log
+  - job_name: notebooklm-scheduler
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: notebooklm-scheduler
+          service: scheduler
+          __path__: /workspace/logs/scheduler.log
+  - job_name: notebooklm-frontend
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: notebooklm-frontend
+          service: frontend
+          __path__: /workspace/logs/frontend.log

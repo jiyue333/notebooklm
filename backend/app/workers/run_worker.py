@@ -7,6 +7,7 @@ import structlog
 
 from app.core.config import get_settings
 from app.infra.mq.consumer import RocketMQConsumer
+from app.infra.db.session import get_session_manager
 from app.infra.mq.topics import (
     NOTEBOOK_ASYNC_TOPIC,
     TAG_ARTICLE_INGEST,
@@ -15,6 +16,8 @@ from app.infra.mq.topics import (
     TAG_SEARCH_DEEP,
 )
 from app.infra.telemetry.logging import setup_logging
+from app.infra.telemetry.metrics_server import ensure_metrics_server
+from app.infra.telemetry.tracing import setup_tracing, shutdown_tracing
 from app.workers.handlers.handle_article_ingest import handle_article_ingest
 from app.workers.handlers.handle_article_reindex import handle_article_reindex
 from app.workers.handlers.handle_cleanup import handle_cleanup
@@ -26,6 +29,8 @@ logger = structlog.get_logger(__name__)
 def main() -> None:
     settings = get_settings()
     setup_logging(settings)
+    ensure_metrics_server(port=settings.worker_metrics_port)
+    setup_tracing(engine=get_session_manager().engine, settings=settings)
 
     consumer = RocketMQConsumer(
         group_id="notebooklm-worker",
@@ -51,6 +56,7 @@ def main() -> None:
         stop_event.wait()
     finally:
         consumer.shutdown()
+        shutdown_tracing()
         logger.info("worker.stopped")
 
 

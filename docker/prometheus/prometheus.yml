@@ -1,0 +1,27 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: notebooklm-api
+    metrics_path: /api/metrics
+    static_configs:
+      - targets: ["host.docker.internal:8080"]
+        labels:
+          service: api
+
+  - job_name: notebooklm-worker
+    static_configs:
+      - targets: ["host.docker.internal:9101"]
+        labels:
+          service: worker
+
+  - job_name: notebooklm-scheduler
+    static_configs:
+      - targets: ["host.docker.internal:9102"]
+        labels:
+          service: scheduler
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["prometheus:9090"]

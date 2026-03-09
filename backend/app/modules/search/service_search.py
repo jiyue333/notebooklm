@@ -12,6 +12,8 @@ from app.core.config import get_settings
 from app.infra.db.session import get_session_manager
 from app.infra.providers.exa.mapper import ExaResultMapper
 from app.infra.providers.exa.search_client import ExaSearchClient, ExaSearchMode, ExaSearchRequest
+from app.infra.telemetry.context import bind_observability_context
+from app.infra.telemetry.metrics import observe_search_provider, observe_search_request
 from app.modules.auth.repo import get_user_by_id
 from app.modules.jobs import publisher as job_publisher
 from app.modules.jobs import repo as jobs_repo
@@ -68,6 +70,11 @@ async def start_search(
     max_results: int,
     freshness_hours: int | None,
 ) -> dict:
+    bind_observability_context(
+        user_id=user.id,
+        notebook_id=notebook_id,
+        provider="exa",
+    )
     notebook = await notebooks_repo.get_notebook(
         request_session,
         user_id=user.id,
@@ -110,6 +117,7 @@ async def start_search(
 
     if mode == "deep":
         await _enqueue_search_job(request_session, search_session.id)
+        observe_search_request(mode=mode, execution="async", status="accepted")
         return {
             "item": _build_session_view(search_session),
             "items": [],
@@ -118,7 +126,9 @@ async def start_search(
 
     deadline_seconds = get_settings().search_inline_deadline_ms / 1000
     try:
-        return await execute_search(search_session.id, timeout_seconds=deadline_seconds)
+        response = await execute_search(search_session.id, timeout_seconds=deadline_seconds)
+        observe_search_request(mode=mode, execution="sync", status="completed")
+        return response
     except TimeoutError:
         request_session.expire_all()
         reloaded = await repo_search.get_search_session(
@@ -137,6 +147,7 @@ async def start_search(
             await request_session.commit()
             search_session = reloaded
         await _enqueue_search_job(request_session, search_session.id)
+        observe_search_request(mode=mode, execution="async_fallback", status="accepted")
         return {
             "item": _build_session_view(search_session),
             "items": [],
@@ -152,6 +163,12 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
         )
         if search_session is None:
             raise AppError(404, "search session not found", code="search_session_not_found")
+        bind_observability_context(
+            user_id=search_session.user_id,
+            notebook_id=search_session.notebook_id,
+            search_session_id=search_session.id,
+            provider=search_session.provider_name,
+        )
 
         await repo_search.touch_search_session(
             session,
@@ -214,6 +231,17 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
                 error_message=None,
             )
             await session.commit()
+        except TimeoutError:
+            await repo_search.touch_search_session(
+                session,
+                search_session=search_session,
+                status="queued",
+                execution_mode="async",
+                error_code=None,
+                error_message=None,
+            )
+            await session.commit()
+            raise
         except Exception as exc:
             completed_at = datetime.now(UTC)
             await repo_search.touch_search_session(
@@ -232,6 +260,12 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
             )
             raise AppError(502, "来源搜索失败", code="provider_search_failed")
         finally:
+            observe_search_provider(
+                provider=search_session.provider_name,
+                mode=search_session.mode,
+                status=search_session.status,
+                duration_ms=round((perf_counter() - started_at) * 1000, 2),
+            )
             await client.close()
 
         results = await repo_search.list_search_results(session, search_session_id=search_session.id)

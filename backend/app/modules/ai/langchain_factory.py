@@ -60,31 +60,40 @@ def require_user_chat_model(user):
 
 
 def build_summary_chain(user):
-    prompt = ChatPromptTemplate.from_messages(
+    return build_summary_prompt() | require_user_chat_model(user) | StrOutputParser()
+
+
+def build_chat_chain(user):
+    return build_chat_prompt() | require_user_chat_model(user) | StrOutputParser()
+
+
+def build_chat_rollup_chain(user):
+    return build_chat_rollup_prompt() | require_user_chat_model(user) | StrOutputParser()
+
+
+def build_summary_prompt():
+    return ChatPromptTemplate.from_messages(
         [
             ("system", SUMMARY_SYSTEM_PROMPT),
             ("human", SUMMARY_USER_PROMPT),
         ]
     )
-    return prompt | require_user_chat_model(user) | StrOutputParser()
 
 
-def build_chat_chain(user):
-    prompt = ChatPromptTemplate.from_messages(
+def build_chat_prompt():
+    return ChatPromptTemplate.from_messages(
         [
             ("system", CHAT_SYSTEM_PROMPT),
             MessagesPlaceholder("history_messages"),
             ("human", CHAT_USER_PROMPT),
         ]
     )
-    return prompt | require_user_chat_model(user) | StrOutputParser()
 
 
-def build_chat_rollup_chain(user):
-    prompt = ChatPromptTemplate.from_messages(
+def build_chat_rollup_prompt():
+    return ChatPromptTemplate.from_messages(
         [
             ("system", CHAT_ROLLUP_SYSTEM_PROMPT),
             ("human", CHAT_ROLLUP_USER_PROMPT),
         ]
     )
-    return prompt | require_user_chat_model(user) | StrOutputParser()
