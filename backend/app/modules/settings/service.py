@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import AppError
 from app.core.config import get_settings as get_system_settings
+from app.modules.auth import repo as auth_repo
 from app.modules.auth.models import User
 from app.modules.auth.security import hash_password, verify_password
 from app.modules.auth.service import build_user_view
@@ -14,7 +15,6 @@ from app.modules.jobs import publisher as job_publisher
 from app.modules.jobs import repo as jobs_repo
 from app.modules.notebooks.models import Article
 from app.modules.settings.crypto import get_credential_crypto
-from app.modules.settings import repo
 from app.modules.settings.defaults import DEFAULT_USER_SETTINGS, SETTINGS_FIELDS
 from app.modules.settings.runtime import (
     build_credential_state,
@@ -159,7 +159,7 @@ async def update_settings(
 
 async def update_profile(session: AsyncSession, *, user: User, username: str) -> dict:
     normalized_username = username.strip()
-    existing = await repo.get_user_by_name(session, normalized_username)
+    existing = await auth_repo.get_user_by_name(session, normalized_username)
     if existing is not None and existing.id != user.id:
         raise AppError(409, "用户名已存在", code="username_conflict")
 

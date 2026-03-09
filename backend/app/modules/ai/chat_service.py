@@ -23,6 +23,7 @@ from app.modules.ai.langchain_factory import (
 )
 from app.modules.notebooks import repo as notebooks_repo
 from app.modules.retrieval.article_retriever import RetrievedArticleMatch, retrieve_related_articles
+from app.modules.retrieval.chunk_retriever import RetrievedChunkMatch, retrieve_notebook_evidence_chunks
 from app.modules.retrieval.router import route_chat_message
 from app.modules.search import repo_article
 
@@ -60,8 +61,14 @@ async def reply(
     )
     await session.commit()
 
-    route = route_chat_message(message, article_id)
-    context_block, citations = await _build_context_block(
+    route_decision = await route_chat_message(
+        user=user,
+        notebook_title=notebook.title,
+        article_id=article_id,
+        message=message,
+    )
+    route = route_decision.route
+    context_block, citations, retrieval_details = await _build_context_block(
         session,
         user=user,
         notebook=notebook,
@@ -84,6 +91,7 @@ async def reply(
         "provider": model_settings["modelProvider"],
         "model_name": model_settings["modelName"],
         "route": route,
+        "route_reason": route_decision.reason,
     }
     bind_observability_context(
         user_id=user.id,
@@ -136,8 +144,10 @@ async def reply(
 
     retrieval_snapshot = {
         "route": route,
+        "routeReason": route_decision.reason,
+        "routeConfidence": route_decision.confidence,
         "query": message,
-        "articles": citations,
+        **retrieval_details,
     }
     assistant_message = await append_assistant_message(
         session,
@@ -182,6 +192,23 @@ def _serialize_related_match(match: RetrievedArticleMatch) -> dict:
     }
 
 
+def _serialize_chunk_match(match: RetrievedChunkMatch, *, notebook_title: str) -> dict:
+    article = match.article
+    chunk = match.chunk
+    return {
+        "articleId": article.id,
+        "chunkId": chunk.id,
+        "title": article.title,
+        "notebookId": article.notebook_id,
+        "notebookTitle": notebook_title,
+        "headingTitle": chunk.heading_title,
+        "sectionPath": chunk.section_path,
+        "snippet": match.snippet,
+        "score": match.score,
+        "matchedBy": match.matched_by,
+    }
+
+
 async def _build_context_block(
     session: AsyncSession,
     *,
@@ -190,8 +217,8 @@ async def _build_context_block(
     article_id: str | None,
     route: str,
     message: str,
-) -> tuple[str, list[dict]]:
-    if route in {"CURRENT_ARTICLE", "EVIDENCE_LOOKUP"} and article_id:
+) -> tuple[str, list[dict], dict]:
+    if route == "CURRENT_ARTICLE" and article_id:
         article = await repo_article.get_article(
             session,
             user_id=user.id,
@@ -221,6 +248,87 @@ async def _build_context_block(
                 ]
             ),
             [citation],
+            {"articles": [citation], "chunks": []},
+        )
+
+    if route == "EVIDENCE_LOOKUP":
+        chunk_matches = await retrieve_notebook_evidence_chunks(
+            session,
+            user_id=user.id,
+            notebook_id=notebook.id,
+            query=message,
+            limit=5,
+        )
+        chunk_citations = [_serialize_chunk_match(match, notebook_title=notebook.title) for match in chunk_matches]
+        if chunk_citations:
+            article_citations = []
+            seen_article_ids: set[str] = set()
+            for match in chunk_matches:
+                if match.article.id in seen_article_ids:
+                    continue
+                seen_article_ids.add(match.article.id)
+                article_citations.append(
+                    {
+                        "articleId": match.article.id,
+                        "title": match.article.title,
+                        "notebookId": match.article.notebook_id,
+                        "notebookTitle": notebook.title,
+                        "snippet": match.snippet,
+                        "matchedBy": ["chunk_evidence"],
+                    }
+                )
+            context_sections = []
+            for match in chunk_matches:
+                context_sections.append(
+                    "\n".join(
+                        [
+                            f"文章标题：{match.article.title}",
+                            f"章节：{match.chunk.heading_title or match.chunk.section_path or '未标注章节'}",
+                            f"命中方式：{', '.join(match.matched_by)}",
+                            f"证据片段：{match.snippet}",
+                            f"完整 chunk：{match.chunk.chunk_text}",
+                        ]
+                    )
+                )
+            return (
+                "\n\n---\n\n".join(context_sections),
+                chunk_citations,
+                {"articles": article_citations, "chunks": chunk_citations},
+            )
+
+        notebook_matches = await retrieve_related_articles(
+            session,
+            user_id=user.id,
+            query=message,
+            notebook_id=notebook.id,
+            limit=3,
+        )
+        notebook_citations = [_serialize_related_match(match) for match in notebook_matches]
+        if not notebook_citations:
+            return (
+                "当前 notebook 里没有找到足够相关的证据文章。请换一种问法，或者先导入更多来源。",
+                [],
+                {"articles": [], "chunks": []},
+            )
+
+        fallback_sections = []
+        for match in notebook_matches[:3]:
+            article = match.article
+            article_context = (article.clean_markdown or article.article_retrieval_text or article.preview_markdown or "")
+            fallback_sections.append(
+                "\n".join(
+                    [
+                        f"文章标题：{article.title}",
+                        f"命中方式：{', '.join(match.matched_by)}",
+                        f"相关片段：{match.snippet}",
+                        f"上下文：{article_context[:RELATED_ARTICLE_CONTEXT_LIMIT]}",
+                    ]
+                )
+            )
+        return (
+            "\n\n---\n\n".join(fallback_sections),
+            notebook_citations,
+            {"articles": notebook_citations, "chunks": []},
         )
 
     related_matches = await retrieve_related_articles(
@@ -228,13 +336,14 @@ async def _build_context_block(
         user_id=user.id,
         query=message,
         exclude_article_id=article_id if route == "RELATED_ARTICLES" else None,
-        limit=5 if route == "RELATED_ARTICLES" else 3,
+        limit=5,
     )
     citations = [_serialize_related_match(match) for match in related_matches]
     if not citations:
         return (
             "当前没有找到足够相关的已导入文章。请明确说明你想讨论的主题，或者先导入更多来源。",
             [],
+            {"articles": [], "chunks": []},
         )
 
     context_sections = []
@@ -253,4 +362,4 @@ async def _build_context_block(
                 ]
             )
         )
-    return "\n\n---\n\n".join(context_sections), citations
+    return "\n\n---\n\n".join(context_sections), citations, {"articles": citations, "chunks": []}

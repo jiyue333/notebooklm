@@ -11,7 +11,6 @@ from app.modules.ingest.markdown_cleaner import clean_markdown
 from app.modules.ingest.parser_router import parse_file_content
 from app.modules.ingest.quality_scorer import score_markdown
 from app.modules.ingest.service import _apply_parsed_content, _index_article_content
-from app.modules.ingest.toc_extractor import extract_toc_items
 from app.modules.ingest.parsers.exa_contents_parser import fetch_markdown_with_exa
 from app.modules.ingest.parsers.llm_markdown_fallback import fallback_to_markdown
 from app.modules.ingest.parsers.trafilatura_parser import fetch_markdown_with_trafilatura
@@ -22,6 +21,7 @@ from app.modules.search.file_storage import (
     materialize_stored_file_for_parser,
     stored_file_exists,
 )
+from app.modules.search.markdown_utils import extract_toc
 from app.modules.search.service_search import execute_search
 from app.modules.settings.runtime import resolve_search_api_key
 
@@ -92,7 +92,7 @@ async def process_article_ingest(job_id: str) -> None:
                         parser_name = fallback_parser
 
                 _apply_parsed_content(article, markdown, parser_name, datetime.now(UTC))
-                article.toc_json = extract_toc_items(markdown)
+                article.toc_json = extract_toc(markdown)
                 if user is not None:
                     await _index_article_content(session, article, user=user)
                 await jobs_repo.mark_job_succeeded(job)

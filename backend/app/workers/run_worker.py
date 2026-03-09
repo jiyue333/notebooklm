@@ -12,7 +12,6 @@ from app.infra.mq.topics import (
     NOTEBOOK_ASYNC_TOPIC,
     TAG_ARTICLE_INGEST,
     TAG_ARTICLE_REINDEX,
-    TAG_MAINTENANCE_CLEANUP,
     TAG_SEARCH_DEEP,
 )
 from app.infra.telemetry.langsmith import configure_langsmith
@@ -21,7 +20,6 @@ from app.infra.telemetry.metrics_server import ensure_metrics_server
 from app.infra.telemetry.tracing import setup_tracing, shutdown_tracing
 from app.workers.handlers.handle_article_ingest import handle_article_ingest
 from app.workers.handlers.handle_article_reindex import handle_article_reindex
-from app.workers.handlers.handle_cleanup import handle_cleanup
 from app.workers.handlers.handle_search_deep import handle_search_deep
 
 logger = structlog.get_logger(__name__)
@@ -41,7 +39,6 @@ def main() -> None:
     consumer.register_handler(TAG_SEARCH_DEEP, handle_search_deep)
     consumer.register_handler(TAG_ARTICLE_INGEST, handle_article_ingest)
     consumer.register_handler(TAG_ARTICLE_REINDEX, handle_article_reindex)
-    consumer.register_handler(TAG_MAINTENANCE_CLEANUP, handle_cleanup)
     consumer.start()
     logger.info("worker.started", topic=settings.rocketmq_topic or NOTEBOOK_ASYNC_TOPIC)
 

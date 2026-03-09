@@ -33,6 +33,7 @@ async def retrieve_related_articles(
     *,
     user_id: str,
     query: str,
+    notebook_id: str | None = None,
     exclude_article_id: str | None = None,
     limit: int = 5,
 ) -> list[RetrievedArticleMatch]:
@@ -44,6 +45,7 @@ async def retrieve_related_articles(
         session,
         user_id=user_id,
         query=query_text,
+        notebook_id=notebook_id,
         exclude_article_id=exclude_article_id,
         limit=max(limit * 3, 10),
     )
@@ -51,6 +53,7 @@ async def retrieve_related_articles(
         session,
         user_id=user_id,
         query=query_text,
+        notebook_id=notebook_id,
         exclude_article_id=exclude_article_id,
         limit=max(limit * 3, 10),
     )
@@ -58,6 +61,7 @@ async def retrieve_related_articles(
         session,
         user_id=user_id,
         query=query_text,
+        notebook_id=notebook_id,
         exclude_article_id=exclude_article_id,
         limit=max(limit * 3, 10),
     )
@@ -101,6 +105,7 @@ async def _lexical_search(
     *,
     user_id: str,
     query: str,
+    notebook_id: str | None,
     exclude_article_id: str | None,
     limit: int,
 ) -> list[str]:
@@ -116,6 +121,8 @@ async def _lexical_search(
         .order_by(desc(rank_expr), desc(Article.updated_at))
         .limit(limit)
     )
+    if notebook_id:
+        stmt = stmt.where(Article.notebook_id == notebook_id)
     if exclude_article_id:
         stmt = stmt.where(Article.id != exclude_article_id)
     result = await session.execute(stmt)
@@ -127,6 +134,7 @@ async def _semantic_search(
     *,
     user_id: str,
     query: str,
+    notebook_id: str | None,
     exclude_article_id: str | None,
     limit: int,
 ) -> list[str]:
@@ -159,6 +167,8 @@ async def _semantic_search(
         .order_by(distance_expr.asc(), desc(Article.updated_at))
         .limit(limit)
     )
+    if notebook_id:
+        stmt = stmt.where(Article.notebook_id == notebook_id)
     if exclude_article_id:
         stmt = stmt.where(Article.id != exclude_article_id)
     result = await session.execute(stmt)
@@ -170,6 +180,7 @@ async def _title_search(
     *,
     user_id: str,
     query: str,
+    notebook_id: str | None,
     exclude_article_id: str | None,
     limit: int,
 ) -> list[str]:
@@ -190,6 +201,8 @@ async def _title_search(
         .order_by(desc(score_expr), desc(Article.updated_at))
         .limit(limit)
     )
+    if notebook_id:
+        stmt = stmt.where(Article.notebook_id == notebook_id)
     if exclude_article_id:
         stmt = stmt.where(Article.id != exclude_article_id)
     result = await session.execute(stmt)

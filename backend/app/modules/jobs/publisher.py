@@ -9,7 +9,6 @@ from app.infra.mq.rocketmq_client import RocketMQMessage
 from app.infra.mq.topics import (
     TAG_ARTICLE_INGEST,
     TAG_ARTICLE_REINDEX,
-    TAG_MAINTENANCE_CLEANUP,
     TAG_SEARCH_DEEP,
 )
 from app.modules.jobs import repo
@@ -22,7 +21,6 @@ JOB_TAG_MAP = {
     "article_ingest": TAG_ARTICLE_INGEST,
     "article_reindex": TAG_ARTICLE_REINDEX,
     "search_deep": TAG_SEARCH_DEEP,
-    "maintenance_cleanup": TAG_MAINTENANCE_CLEANUP,
 }
 
 

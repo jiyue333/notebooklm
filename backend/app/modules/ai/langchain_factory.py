@@ -4,6 +4,10 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from app.api.errors import AppError
+from app.modules.ai.prompts.chat_route_prompt import (
+    CHAT_ROUTE_SYSTEM_PROMPT,
+    CHAT_ROUTE_USER_PROMPT,
+)
 from app.modules.ai.prompts.chat_prompt import (
     CHAT_ROLLUP_SYSTEM_PROMPT,
     CHAT_ROLLUP_USER_PROMPT,
@@ -69,6 +73,15 @@ def build_chat_chain(user):
 
 def build_chat_rollup_chain(user):
     return build_chat_rollup_prompt() | require_user_chat_model(user) | StrOutputParser()
+
+
+def build_chat_router_prompt():
+    return ChatPromptTemplate.from_messages(
+        [
+            ("system", CHAT_ROUTE_SYSTEM_PROMPT),
+            ("human", CHAT_ROUTE_USER_PROMPT),
+        ]
+    )
 
 
 def build_summary_prompt():
