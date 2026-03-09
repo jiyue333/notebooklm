@@ -40,6 +40,13 @@ async def get_article(
     return result.scalar_one_or_none()
 
 
+async def get_article_by_id(session: AsyncSession, *, article_id: str | None) -> Article | None:
+    if not article_id:
+        return None
+    result = await session.execute(select(Article).where(Article.id == article_id))
+    return result.scalar_one_or_none()
+
+
 async def count_articles_by_notebook_ids(
     session: AsyncSession,
     *,

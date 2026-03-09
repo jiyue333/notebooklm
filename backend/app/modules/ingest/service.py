@@ -4,11 +4,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.ingest.chunker import chunk_markdown
+from app.modules.ingest.embedder import Embedder
+from app.modules.ingest.indexer import replace_article_chunks
 from app.modules.ingest.parser_router import parse_file_content
 from app.modules.ingest.retrieval_text_builder import build_article_retrieval_text
 from app.modules.jobs import repo as jobs_repo
+from app.modules.jobs.models import Job
 from app.modules.notebooks.models import Article
 from app.modules.search import repo_article
 from app.modules.search.file_storage import build_storage_key, ensure_parent_dir
@@ -18,6 +23,8 @@ from app.modules.search.markdown_utils import (
     extract_toc,
     normalize_text_to_markdown,
 )
+
+logger = structlog.get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -44,7 +51,7 @@ async def ingest_draft(
     user_id: str,
     notebook_id: str,
     draft: IngestDraft,
-) -> Article | None:
+) -> tuple[Article | None, Job | None]:
     now = datetime.now(UTC)
     dedupe_key = _build_dedupe_key(draft)
     existing = await repo_article.list_existing_dedupe_keys(
@@ -54,7 +61,7 @@ async def ingest_draft(
         dedupe_keys=[dedupe_key],
     )
     if existing:
-        return None
+        return None, None
 
     article = Article(
         user_id=user_id,
@@ -109,8 +116,12 @@ async def ingest_draft(
             url=draft.source_url or "",
         )
 
+    if article.clean_markdown:
+        await _index_article_content(session, article)
+
+    job = None
     if article.parse_status != "ready":
-        await jobs_repo.create_article_ingest_job(
+        job = await jobs_repo.create_article_ingest_job(
             session,
             article_id=article.id,
             search_session_id=draft.origin_search_session_id,
@@ -119,7 +130,7 @@ async def ingest_draft(
             created_at=now,
         )
 
-    return article
+    return article, job
 
 
 def _apply_parsed_content(
@@ -142,6 +153,41 @@ def _apply_parsed_content(
     article.parser_name = parser_name
     article.parse_status = "ready"
     article.ingested_at = ingested_at
+
+
+async def _index_article_content(session: AsyncSession, article: Article) -> None:
+    if not article.clean_markdown:
+        return
+
+    chunks = chunk_markdown(article.clean_markdown, toc=article.toc_json)
+    article.chunk_status = "ready" if chunks else "not_started"
+    article.index_status = "not_started"
+
+    embedder = Embedder()
+    article_vector = None
+    chunk_vectors = None
+    if embedder.is_configured:
+        try:
+            texts = [article.article_retrieval_text or article.title, *[chunk.chunk_text for chunk in chunks]]
+            embeddings = await embedder.embed_texts(texts)
+            if embeddings:
+                article_vector = embeddings[0]
+                chunk_vectors = embeddings[1:]
+                article.index_status = "ready"
+        except Exception as exc:
+            logger.exception(
+                "ingest.embedding_failed",
+                article_id=article.id,
+                error=str(exc),
+            )
+
+    article.article_vector = article_vector
+    await replace_article_chunks(
+        session,
+        article=article,
+        chunks=chunks,
+        vectors=chunk_vectors,
+    )
 
 
 def _build_dedupe_key(draft: IngestDraft) -> str:

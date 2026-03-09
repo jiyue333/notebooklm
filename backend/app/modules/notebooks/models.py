@@ -6,12 +6,16 @@ from typing import TYPE_CHECKING
 from sqlalchemy import Computed, DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from pgvector.sqlalchemy import Vector
 
+from app.core.config import get_settings
 from app.infra.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
     from app.modules.auth.models import User
     from app.modules.notes.models import Note
+
+EMBEDDING_DIMENSION = get_settings().embedding_dimension
 
 
 class Notebook(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -92,8 +96,32 @@ class Article(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ),
         nullable=True,
     )
+    article_vector: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIMENSION), nullable=True)
     chunk_status: Mapped[str] = mapped_column(String(16), nullable=False)
     index_status: Mapped[str] = mapped_column(String(16), nullable=False)
     ingested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     notebook: Mapped[Notebook] = relationship(back_populates="articles")
+    chunks: Mapped[list["ArticleChunk"]] = relationship(
+        back_populates="article",
+        cascade="all, delete-orphan",
+    )
+
+
+class ArticleChunk(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "article_chunks"  # type: ignore[assignment]
+
+    article_id: Mapped[str] = mapped_column(
+        ForeignKey("articles.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    chunk_index: Mapped[int] = mapped_column(nullable=False)
+    section_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    heading_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_count: Mapped[int] = mapped_column(nullable=False)
+    chunk_text: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_vector: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIMENSION), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    article: Mapped[Article] = relationship(back_populates="chunks")

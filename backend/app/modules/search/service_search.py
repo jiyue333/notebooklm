@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from typing import cast
@@ -14,6 +13,8 @@ from app.infra.db.session import get_session_manager
 from app.infra.providers.exa.mapper import ExaResultMapper
 from app.infra.providers.exa.search_client import ExaSearchClient, ExaSearchMode, ExaSearchRequest
 from app.modules.auth.repo import get_user_by_id
+from app.modules.jobs import publisher as job_publisher
+from app.modules.jobs import repo as jobs_repo
 from app.modules.notebooks import repo as notebooks_repo
 from app.modules.settings.crypto import get_credential_crypto
 from app.modules.search import repo_search
@@ -26,7 +27,6 @@ MODE_LABELS = {
     "auto": "Auto Research",
     "deep": "Deep Research",
 }
-ASYNC_SEARCH_TASKS: set[asyncio.Task] = set()
 
 
 def _build_search_result_view(result: SearchResult) -> dict:
@@ -56,25 +56,6 @@ def _build_response(search_session: SearchSession, results: list[SearchResult], 
         "items": [_build_search_result_view(result) for result in results],
         "meta": meta or {"provider": search_session.provider_name},
     }
-
-
-def _spawn_async_search(search_session_id: str) -> None:
-    task = asyncio.create_task(execute_search(search_session_id))
-    ASYNC_SEARCH_TASKS.add(task)
-
-    def _cleanup(done_task: asyncio.Task) -> None:
-        ASYNC_SEARCH_TASKS.discard(done_task)
-        if done_task.cancelled():
-            return
-        exception = done_task.exception()
-        if exception is not None:
-            logger.exception(
-                "sources.search.background_failed",
-                search_session_id=search_session_id,
-                error=str(exception),
-            )
-
-    task.add_done_callback(_cleanup)
 
 
 async def start_search(
@@ -127,7 +108,7 @@ async def start_search(
     await request_session.refresh(search_session)
 
     if mode == "deep":
-        _spawn_async_search(search_session.id)
+        await _enqueue_search_job(request_session, search_session.id)
         return {
             "item": _build_session_view(search_session),
             "items": [],
@@ -136,8 +117,8 @@ async def start_search(
 
     deadline_seconds = get_settings().search_inline_deadline_ms / 1000
     try:
-        return await asyncio.wait_for(execute_search(search_session.id), timeout=deadline_seconds)
-    except asyncio.TimeoutError:
+        return await execute_search(search_session.id, timeout_seconds=deadline_seconds)
+    except TimeoutError:
         request_session.expire_all()
         reloaded = await repo_search.get_search_session(
             request_session,
@@ -154,7 +135,7 @@ async def start_search(
             )
             await request_session.commit()
             search_session = reloaded
-        _spawn_async_search(search_session.id)
+        await _enqueue_search_job(request_session, search_session.id)
         return {
             "item": _build_session_view(search_session),
             "items": [],
@@ -162,7 +143,7 @@ async def start_search(
         }
 
 
-async def execute_search(search_session_id: str) -> dict:
+async def execute_search(search_session_id: str, *, timeout_seconds: float | None = None) -> dict:
     async for session in get_session_manager().session():
         search_session = await repo_search.get_search_session_by_id(
             session,
@@ -197,15 +178,18 @@ async def execute_search(search_session_id: str) -> dict:
         client = ExaSearchClient()
         started_at = perf_counter()
         try:
-            payload = await client.search(
-                ExaSearchRequest(
-                    query=search_session.query,
-                    mode=cast(ExaSearchMode, search_session.mode),
-                    max_results=int(search_session.provider_request_json.get("maxResults", 10)),
-                    freshness_hours=search_session.provider_request_json.get("freshnessHours"),
-                ),
-                api_key=api_key,
+            request = ExaSearchRequest(
+                query=search_session.query,
+                mode=cast(ExaSearchMode, search_session.mode),
+                max_results=int(search_session.provider_request_json.get("maxResults", 10)),
+                freshness_hours=search_session.provider_request_json.get("freshnessHours"),
             )
+            if timeout_seconds is not None:
+                import asyncio
+
+                payload = await asyncio.wait_for(client.search(request, api_key=api_key), timeout=timeout_seconds)
+            else:
+                payload = await client.search(request, api_key=api_key)
             candidates = ExaResultMapper.map_search_results(payload)
             completed_at = datetime.now(UTC)
             await repo_search.replace_search_results(
@@ -255,6 +239,28 @@ async def execute_search(search_session_id: str) -> dict:
         )
 
     raise AppError(500, "search execution unavailable", code="search_execution_unavailable")
+
+
+async def _enqueue_search_job(session: AsyncSession, search_session_id: str) -> None:
+    now = datetime.now(UTC)
+    job = await jobs_repo.create_search_deep_job(
+        session,
+        search_session_id=search_session_id,
+        dedupe_key=f"search_deep:{search_session_id}",
+        payload_json={"searchSessionId": search_session_id},
+        created_at=now,
+    )
+    await session.commit()
+    try:
+        await job_publisher.publish_jobs(session, [job])
+        await session.commit()
+    except Exception as exc:
+        logger.exception(
+            "sources.search.enqueue_failed",
+            search_session_id=search_session_id,
+            error=str(exc),
+        )
+        await session.rollback()
 
 
 async def get_search_session(

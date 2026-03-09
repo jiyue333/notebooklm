@@ -1,1 +1,1 @@
-"""OpenAI-compatible generation and embedding clients."""
+"""LangChain-backed provider integration package."""

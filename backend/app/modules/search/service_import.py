@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import AppError
 from app.modules.ingest.service import IngestDraft, ingest_draft
+from app.modules.jobs import publisher as job_publisher
 from app.modules.notebooks import service as notebooks_service
 from app.modules.search import repo_search
 
@@ -36,8 +37,9 @@ async def import_results(
     if len(search_results) != len(unique_result_ids):
         raise AppError(422, "部分搜索结果不存在或不属于当前搜索会话", code="invalid_search_result_ids")
 
+    jobs = []
     for search_result in search_results:
-        await ingest_draft(
+        _article, job = await ingest_draft(
             session,
             user_id=user.id,
             notebook_id=notebook_id,
@@ -54,8 +56,13 @@ async def import_results(
                 source_title_raw=search_result.title,
             ),
         )
+        if job is not None:
+            jobs.append(job)
 
     await session.commit()
+    if jobs:
+        await job_publisher.publish_jobs(session, jobs)
+        await session.commit()
     return await notebooks_service.get_notebook_detail(
         session,
         user_id=user.id,

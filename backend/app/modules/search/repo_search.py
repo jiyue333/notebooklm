@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from hashlib import sha256
 
+from datetime import UTC, datetime
+
 from sqlalchemy import delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -151,3 +153,19 @@ async def touch_search_session(
         search_session.completed_at = completed_at
     await session.flush()
     return search_session
+
+
+async def expire_stale_search_sessions(session: AsyncSession) -> int:
+    result = await session.execute(
+        select(SearchSession).where(
+            SearchSession.expires_at.is_not(None),
+            SearchSession.expires_at < datetime.now(UTC),
+            SearchSession.status.in_(["queued", "running"]),
+        )
+    )
+    sessions = list(result.scalars().all())
+    for search_session in sessions:
+        search_session.status = "expired"
+        search_session.completed_at = datetime.now(UTC)
+    await session.flush()
+    return len(sessions)

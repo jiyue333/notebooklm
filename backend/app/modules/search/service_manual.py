@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import AppError
 from app.modules.ingest.service import IngestDraft, ingest_draft
+from app.modules.jobs import publisher as job_publisher
+from app.modules.notebooks.models import Article
 from app.modules.notebooks import repo as notebooks_repo
 from app.modules.notebooks import service as notebooks_service
 from app.modules.search.file_storage import resolve_storage_path
@@ -50,7 +54,7 @@ async def create_source(
         raise AppError(422, "请输入网站链接", code="url_required")
 
     normalized_title = (title or url).strip()
-    await ingest_draft(
+    _article, job = await ingest_draft(
         session,
         user_id=user.id,
         notebook_id=notebook_id,
@@ -64,6 +68,9 @@ async def create_source(
         ),
     )
     await session.commit()
+    if job is not None:
+        await job_publisher.publish_jobs(session, [job])
+        await session.commit()
 
     return await notebooks_service.get_notebook_detail(session, user_id=user.id, notebook_id=notebook_id)
 
@@ -79,12 +86,13 @@ async def upload_files(
     if notebook is None:
         raise AppError(404, "未找到对应的笔记本", code="notebook_not_found")
 
+    jobs = []
     for upload in files:
         data = await upload.read()
         if not data:
             continue
 
-        await ingest_draft(
+        _article, job = await ingest_draft(
             session,
             user_id=user.id,
             notebook_id=notebook_id,
@@ -98,8 +106,13 @@ async def upload_files(
                 source_title_raw=upload.filename or "未命名文件",
             ),
         )
+        if job is not None:
+            jobs.append(job)
 
     await session.commit()
+    if jobs:
+        await job_publisher.publish_jobs(session, jobs)
+        await session.commit()
     return await notebooks_service.get_notebook_detail(session, user_id=user.id, notebook_id=notebook_id)
 
 
