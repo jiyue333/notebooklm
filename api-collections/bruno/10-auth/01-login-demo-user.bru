@@ -1,0 +1,26 @@
+meta {
+  name: Login Demo User
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: none
+}
+
+headers {
+  content-type: application/json
+}
+
+body {
+  {
+    "username": "{{demoUsername}}",
+    "password": "{{demoPassword}}"
+  }
+}
+
+script:post-response {
+  bru.setEnvVar("authToken", res.body.token)
+  bru.setEnvVar("demoUserId", res.body.user.id)
+}

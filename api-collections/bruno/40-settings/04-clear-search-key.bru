@@ -1,0 +1,25 @@
+meta {
+  name: Clear Search Key
+  type: http
+  seq: 4
+}
+
+put {
+  url: {{baseUrl}}/settings
+  body: none
+  auth: bearer
+}
+
+headers {
+  content-type: application/json
+}
+
+auth:bearer {
+  token: {{authToken}}
+}
+
+body {
+  {
+    "clearSearchApiKey": true
+  }
+}

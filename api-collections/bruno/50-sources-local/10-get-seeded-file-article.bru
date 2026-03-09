@@ -1,0 +1,15 @@
+meta {
+  name: Get Seeded File Article
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/notebooks/{{notebookMixedId}}/articles/{{fileArticleId}}/file
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{authToken}}
+}

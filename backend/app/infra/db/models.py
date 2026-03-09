@@ -2,10 +2,9 @@ from __future__ import annotations
 
 
 def import_models() -> None:
-    """Import SQLAlchemy model modules so Alembic can discover them.
+    """
+    Import SQLAlchemy model modules so Alembic can discover them.
 
-    The imports stay local so importing this helper does not have side effects
-    before metadata discovery is actually needed.
     """
     from app.modules.ai import models as _ai_models  # noqa: F401
     from app.modules.auth import models as _auth_models  # noqa: F401

@@ -1,0 +1,10 @@
+{
+  "version": "1",
+  "name": "NotebookLM HTTP Scenarios",
+  "type": "collection",
+  "ignore": [
+    ".git",
+    "results",
+    "node_modules"
+  ]
+}

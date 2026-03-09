@@ -1,0 +1,27 @@
+meta {
+  name: Create Text Source
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/notebooks/{{notebookMixedId}}/sources
+  body: none
+  auth: bearer
+}
+
+headers {
+  content-type: application/json
+}
+
+auth:bearer {
+  token: {{authToken}}
+}
+
+body {
+  {
+    "sourceType": "text",
+    "title": "Pasted local text",
+    "content": "This is pasted plain text content created from the Bruno collection."
+  }
+}

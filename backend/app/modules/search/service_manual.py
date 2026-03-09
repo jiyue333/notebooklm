@@ -10,10 +10,8 @@ from app.infra.telemetry.context import bind_observability_context
 from app.infra.telemetry.metrics import observe_source_import
 from app.modules.ingest.service import IngestDraft, ingest_draft
 from app.modules.jobs import publisher as job_publisher
-from app.modules.notebooks.models import Article
 from app.modules.notebooks import repo as notebooks_repo
 from app.modules.notebooks import service as notebooks_service
-from app.modules.search.file_storage import resolve_storage_path
 from app.modules.search.markdown_utils import (
     build_web_placeholder,
 )
@@ -138,13 +136,6 @@ async def upload_files(
         await job_publisher.publish_jobs(session, jobs)
         await session.commit()
     return await notebooks_service.get_notebook_detail(session, user_id=user.id, notebook_id=notebook_id)
-
-
-def resolve_article_file_path(article: Article) -> Path:
-    if not article.file_storage_key:
-        raise AppError(404, "文章没有原始文件", code="article_file_not_found")
-    return resolve_storage_path(article.file_storage_key)
-
 
 def _guess_mime_from_suffix(suffix: str) -> str:
     normalized_suffix = Path(suffix).suffix.lower()

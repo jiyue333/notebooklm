@@ -1,0 +1,26 @@
+meta {
+  name: Import Search Result Alpha
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/notebooks/{{notebookMixedId}}/sources/import
+  body: none
+  auth: bearer
+}
+
+headers {
+  content-type: application/json
+}
+
+auth:bearer {
+  token: {{authToken}}
+}
+
+body {
+  {
+    "searchSessionId": "{{completedSearchSessionId}}",
+    "searchResultIds": ["{{searchResultAlphaId}}"]
+  }
+}

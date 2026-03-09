@@ -15,6 +15,7 @@ from app.infra.mq.topics import (
     TAG_MAINTENANCE_CLEANUP,
     TAG_SEARCH_DEEP,
 )
+from app.infra.telemetry.langsmith import configure_langsmith
 from app.infra.telemetry.logging import setup_logging
 from app.infra.telemetry.metrics_server import ensure_metrics_server
 from app.infra.telemetry.tracing import setup_tracing, shutdown_tracing
@@ -29,6 +30,7 @@ logger = structlog.get_logger(__name__)
 def main() -> None:
     settings = get_settings()
     setup_logging(settings)
+    configure_langsmith(settings)
     ensure_metrics_server(port=settings.worker_metrics_port)
     setup_tracing(engine=get_session_manager().engine, settings=settings)
 

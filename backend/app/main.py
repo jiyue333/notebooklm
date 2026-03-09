@@ -11,8 +11,8 @@ from app.api.middleware import RequestContextMiddleware
 from app.core.config import get_settings
 from app.infra.cache.redis_client import get_redis_factory
 from app.infra.db.session import get_session_manager
+from app.infra.telemetry.langsmith import configure_langsmith 
 from app.infra.telemetry.logging import setup_logging
-from app.infra.telemetry.langsmith import get_langsmith_client
 from app.infra.telemetry.tracing import setup_tracing, shutdown_tracing
 from app.modules.ai.router import router as ai_router
 from app.modules.auth.router import router as auth_router
@@ -27,18 +27,12 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     setup_logging(settings)
     setup_tracing(app=app, engine=get_session_manager().engine, settings=settings)
+    configure_langsmith(settings)
     app.state.settings = settings
-    app.state.langsmith = get_langsmith_client()
 
     try:
         yield
     finally:
-        langsmith_client = getattr(app.state, "langsmith", None)
-        if langsmith_client is not None:
-            close = getattr(langsmith_client, "close", None)
-            if callable(close):
-                close()
-
         await get_session_manager().dispose()
         await get_redis_factory().close()
         shutdown_tracing()
@@ -47,6 +41,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     settings = get_settings()
     setup_logging(settings)
+    configure_langsmith(settings)
 
     app = FastAPI(
         title=settings.app_name,

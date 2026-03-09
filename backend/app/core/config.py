@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     object_storage_bucket: str = "notebooklm"
     object_storage_secure: bool = False
     object_storage_region: str | None = None
+    file_storage_backend: str = "minio"
 
     log_level: str = "INFO"
     log_json: bool = False
@@ -70,6 +71,7 @@ class Settings(BaseSettings):
     langsmith_endpoint: str = "https://api.smith.langchain.com"
     langsmith_api_key: str | None = None
     langsmith_project: str = "notebooklm-backend"
+    langsmith_workspace_id: str | None = None
     langsmith_tracing: bool = False
 
     cors_origins: list[str] = Field(

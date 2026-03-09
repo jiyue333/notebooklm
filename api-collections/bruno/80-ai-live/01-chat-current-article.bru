@@ -1,0 +1,27 @@
+meta {
+  name: Chat Current Article (Real LLM Required)
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/notebooks/{{notebookMixedId}}/chat
+  body: none
+  auth: bearer
+}
+
+headers {
+  content-type: application/json
+}
+
+auth:bearer {
+  token: {{authToken}}
+}
+
+body {
+  {
+    "conversationId": "{{seededConversationId}}",
+    "articleId": "{{readyArticleId}}",
+    "message": "请用三句话总结当前文章"
+  }
+}

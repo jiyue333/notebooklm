@@ -1,0 +1,15 @@
+meta {
+  name: Summary Article Not Found
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/notebooks/{{notebookMixedId}}/articles/49999999-0000-0000-0000-000000000099/summary
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{authToken}}
+}

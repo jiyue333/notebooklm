@@ -1,0 +1,15 @@
+meta {
+  name: Get Empty Notebook
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/notebooks/{{notebookEmptyId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{authToken}}
+}

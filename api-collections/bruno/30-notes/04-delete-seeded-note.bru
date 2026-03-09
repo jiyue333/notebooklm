@@ -1,0 +1,15 @@
+meta {
+  name: Delete Seeded Note
+  type: http
+  seq: 4
+}
+
+delete {
+  url: {{baseUrl}}/notebooks/{{notebookMixedId}}/notes/{{noteSeedId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{authToken}}
+}

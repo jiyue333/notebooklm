@@ -1,0 +1,15 @@
+meta {
+  name: Get Failed Search Session
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/notebooks/{{notebookMixedId}}/search-sessions/{{failedSearchSessionId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{authToken}}
+}

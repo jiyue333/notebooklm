@@ -18,7 +18,11 @@ from app.modules.jobs import repo as jobs_repo
 from app.modules.jobs.models import Job
 from app.modules.notebooks.models import Article
 from app.modules.search import repo_article
-from app.modules.search.file_storage import build_storage_key, ensure_parent_dir
+from app.modules.search.file_storage import (
+    build_storage_key,
+    materialize_uploaded_file_for_parser,
+    store_file_bytes,
+)
 from app.modules.search.markdown_utils import (
     build_web_placeholder,
     compute_content_hash,
@@ -103,14 +107,21 @@ async def ingest_draft(
             article_id=article.id,
             filename=draft.file_name,
         )
-        absolute_path = ensure_parent_dir(storage_key)
-        absolute_path.write_bytes(draft.file_bytes)
-        article.file_storage_key = storage_key
-        parsed = parse_file_content(
-            file_name=draft.file_name,
-            file_path=absolute_path,
-            file_bytes=draft.file_bytes,
+        store_file_bytes(
+            storage_key=storage_key,
+            data=draft.file_bytes,
+            content_type=draft.file_mime or "application/octet-stream",
         )
+        article.file_storage_key = storage_key
+        with materialize_uploaded_file_for_parser(
+            file_name=draft.file_name,
+            file_bytes=draft.file_bytes,
+        ) as temp_path:
+            parsed = parse_file_content(
+                file_name=draft.file_name,
+                file_path=temp_path,
+                file_bytes=draft.file_bytes,
+            )
         _apply_parsed_content(article, parsed.markdown, parsed.parser_name, now)
         if parsed.markdown:
             observe_ingest_parse(

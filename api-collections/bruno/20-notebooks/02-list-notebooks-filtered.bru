@@ -1,0 +1,15 @@
+meta {
+  name: List Notebooks Filtered
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/notebooks?query=HTTP
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{authToken}}
+}

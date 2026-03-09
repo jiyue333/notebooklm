@@ -1,0 +1,15 @@
+meta {
+  name: Get Mixed Notebook
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/notebooks/{{notebookMixedId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{authToken}}
+}

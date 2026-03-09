@@ -1,0 +1,27 @@
+meta {
+  name: Create Web Source Queued
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}/notebooks/{{notebookMixedId}}/sources
+  body: none
+  auth: bearer
+}
+
+headers {
+  content-type: application/json
+}
+
+auth:bearer {
+  token: {{authToken}}
+}
+
+body {
+  {
+    "sourceType": "web",
+    "title": "Queued from Bruno",
+    "url": "https://example.com/from-bruno"
+  }
+}

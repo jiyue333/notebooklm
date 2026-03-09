@@ -1,0 +1,15 @@
+meta {
+  name: Get Other User Notebook
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/notebooks/{{notebookNoKeyId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{authToken}}
+}

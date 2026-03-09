@@ -204,7 +204,7 @@ async def _schedule_embedding_reindex(session: AsyncSession, *, user: User) -> l
         ):
             continue
         article.index_status = "stale"
-        job = await jobs_repo.create_article_ingest_job(
+        job = await jobs_repo.create_article_reindex_job(
             session,
             article_id=article.id,
             search_session_id=article.origin_search_session_id,

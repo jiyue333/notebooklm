@@ -1,0 +1,28 @@
+meta {
+  name: Update Created Note
+  type: http
+  seq: 2
+}
+
+put {
+  url: {{baseUrl}}/notebooks/{{notebookMixedId}}/notes/{{createdNoteId}}
+  body: none
+  auth: bearer
+}
+
+headers {
+  content-type: application/json
+}
+
+auth:bearer {
+  token: {{authToken}}
+}
+
+body {
+  {
+    "title": "Created via Bruno (updated)",
+    "content": "Updated note content from the HTTP replay collection.",
+    "type": "summary",
+    "sources": 2
+  }
+}

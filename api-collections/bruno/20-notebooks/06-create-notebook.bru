@@ -1,0 +1,33 @@
+meta {
+  name: Create Notebook
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/notebooks
+  body: none
+  auth: bearer
+}
+
+headers {
+  content-type: application/json
+}
+
+auth:bearer {
+  token: {{authToken}}
+}
+
+body {
+  {
+    "title": "Created from Bruno",
+    "emoji": "🧰",
+    "color": "teal"
+  }
+}
+
+script:post-response {
+  if (res.body && res.body.item && res.body.item.id) {
+    bru.setEnvVar("createdNotebookId", res.body.item.id)
+  }
+}

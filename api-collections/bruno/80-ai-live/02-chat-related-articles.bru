@@ -1,0 +1,27 @@
+meta {
+  name: Chat Related Articles (Real LLM Required)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/notebooks/{{notebookMixedId}}/chat
+  body: none
+  auth: bearer
+}
+
+headers {
+  content-type: application/json
+}
+
+auth:bearer {
+  token: {{authToken}}
+}
+
+body {
+  {
+    "conversationId": "{{seededConversationId}}",
+    "articleId": "{{readyArticleId}}",
+    "message": "还有哪些相关资料值得一起看？"
+  }
+}

@@ -17,7 +17,11 @@ from app.modules.ingest.parsers.llm_markdown_fallback import fallback_to_markdow
 from app.modules.ingest.parsers.trafilatura_parser import fetch_markdown_with_trafilatura
 from app.modules.jobs import repo as jobs_repo
 from app.modules.search import repo_article
-from app.modules.search.file_storage import resolve_storage_path
+from app.modules.search.file_storage import (
+    load_file_bytes,
+    materialize_stored_file_for_parser,
+    stored_file_exists,
+)
 from app.modules.search.service_search import execute_search
 from app.modules.settings.runtime import resolve_search_api_key
 
@@ -59,13 +63,17 @@ async def process_article_ingest(job_id: str) -> None:
                     if markdown:
                         observe_ingest_fallback(fallback_type="trafilatura")
             elif not markdown and article.input_type == "file" and article.file_storage_key:
-                file_path = resolve_storage_path(article.file_storage_key)
-                if file_path.exists():
-                    parsed = parse_file_content(
+                if stored_file_exists(article.file_storage_key):
+                    file_bytes = load_file_bytes(article.file_storage_key)
+                    with materialize_stored_file_for_parser(
+                        storage_key=article.file_storage_key,
                         file_name=article.file_name,
-                        file_path=file_path,
-                        file_bytes=file_path.read_bytes(),
-                    )
+                    ) as file_path:
+                        parsed = parse_file_content(
+                            file_name=article.file_name,
+                            file_path=file_path,
+                            file_bytes=file_bytes,
+                        )
                     markdown = parsed.markdown
                     parser_name = parsed.parser_name
 
@@ -119,6 +127,55 @@ async def process_article_ingest(job_id: str) -> None:
                 parser=parser_name or "unknown",
                 error_tag="ingest_failed",
             )
+            observe_job(job_type=job.job_type, status="failed")
+            raise
+        return
+
+
+async def process_article_reindex(job_id: str) -> None:
+    async for session in get_session_manager().session():
+        job = await jobs_repo.get_job(session, job_id)
+        if job is None:
+            raise AppError(404, "job not found", code="job_not_found")
+        await jobs_repo.mark_job_running(job)
+        await session.commit()
+
+        article = await repo_article.get_article_by_id(session, article_id=job.article_id)
+        if article is None:
+            await jobs_repo.mark_job_failed(job, error="article not found")
+            await session.commit()
+            observe_job(job_type=job.job_type, status="failed")
+            return
+
+        user = await get_user_by_id(session, article.user_id)
+        if user is None:
+            await jobs_repo.mark_job_failed(job, error="user not found")
+            await session.commit()
+            observe_job(job_type=job.job_type, status="failed")
+            return
+
+        bind_observability_context(
+            user_id=article.user_id,
+            notebook_id=article.notebook_id,
+            article_id=article.id,
+            job_id=job.id,
+        )
+        try:
+            if not article.clean_markdown:
+                await jobs_repo.mark_job_failed(job, error="article clean markdown not ready")
+                await session.commit()
+                observe_job(job_type=job.job_type, status="failed")
+                return
+
+            article.index_status = "reindexing"
+            await _index_article_content(session, article, user=user)
+            await jobs_repo.mark_job_succeeded(job)
+            await session.commit()
+            observe_job(job_type=job.job_type, status="succeeded")
+        except Exception as exc:
+            article.index_status = "failed"
+            await jobs_repo.mark_job_failed(job, error=str(exc))
+            await session.commit()
             observe_job(job_type=job.job_type, status="failed")
             raise
         return

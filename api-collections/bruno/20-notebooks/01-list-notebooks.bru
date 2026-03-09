@@ -1,0 +1,15 @@
+meta {
+  name: List Notebooks
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/notebooks
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{authToken}}
+}

@@ -1,0 +1,27 @@
+meta {
+  name: Patch Created Notebook
+  type: http
+  seq: 7
+}
+
+patch {
+  url: {{baseUrl}}/notebooks/{{createdNotebookId}}
+  body: none
+  auth: bearer
+}
+
+headers {
+  content-type: application/json
+}
+
+auth:bearer {
+  token: {{authToken}}
+}
+
+body {
+  {
+    "title": "Created from Bruno (updated)",
+    "emoji": "🧪",
+    "color": "cyan"
+  }
+}

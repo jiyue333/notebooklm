@@ -1,0 +1,19 @@
+meta {
+  name: Upload Markdown File
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{baseUrl}}/notebooks/{{notebookMixedId}}/sources/upload
+  body: multipartForm
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{authToken}}
+}
+
+body:multipart-form {
+  files: @file(files/sample-upload.md)
+}

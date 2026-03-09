@@ -74,6 +74,26 @@ async def create_search_deep_job(
     )
 
 
+async def create_article_reindex_job(
+    session: AsyncSession,
+    *,
+    article_id: str,
+    search_session_id: str | None,
+    dedupe_key: str,
+    payload_json: dict,
+    created_at: datetime,
+) -> Job:
+    return await create_job(
+        session,
+        job_type="article_reindex",
+        article_id=article_id,
+        search_session_id=search_session_id,
+        dedupe_key=dedupe_key,
+        payload_json=payload_json,
+        created_at=created_at,
+    )
+
+
 async def get_job(session: AsyncSession, job_id: str) -> Job | None:
     result = await session.execute(select(Job).where(Job.id == job_id))
     return result.scalar_one_or_none()

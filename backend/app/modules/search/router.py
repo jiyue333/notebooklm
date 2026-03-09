@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import AppError
@@ -13,8 +14,9 @@ from app.modules.search.schemas import (
     ManualSourceRequest,
     SearchSourcesRequest,
 )
+from app.modules.search.file_storage import build_presigned_get_url, resolve_storage_path, stored_file_exists
 from app.modules.search.service_import import import_results
-from app.modules.search.service_manual import create_source, resolve_article_file_path, upload_files
+from app.modules.search.service_manual import create_source, upload_files
 from app.modules.search.service_search import get_search_session, start_search
 
 router = APIRouter(tags=["search"])
@@ -111,9 +113,14 @@ async def get_article_file_endpoint(
     )
     if article is None:
         raise AppError(404, "未找到对应文章", code="article_not_found")
-    file_path = resolve_article_file_path(article)
-    if not file_path.exists():
+    if not article.file_storage_key:
+        raise AppError(404, "文章没有原始文件", code="article_file_not_found")
+    if not stored_file_exists(article.file_storage_key):
         raise AppError(404, "原始文件不存在", code="article_file_not_found")
+    presigned_url = build_presigned_get_url(article.file_storage_key)
+    if presigned_url:
+        return RedirectResponse(url=presigned_url, status_code=307)
+    file_path = resolve_storage_path(article.file_storage_key)
     return FileResponse(
         path=file_path,
         media_type=article.file_mime or "application/octet-stream",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from datetime import timedelta
 
 from dataclasses import dataclass
@@ -20,6 +21,10 @@ class StoredObject:
 
 class ObjectStore(Protocol):
     def put_bytes(self, *, key: str, data: bytes, content_type: str) -> StoredObject: ...
+
+    def get_bytes(self, key: str) -> bytes: ...
+
+    def exists(self, key: str) -> bool: ...
 
     def presigned_get_url(self, key: str, *, expires_seconds: int = 3600) -> str: ...
 
@@ -56,8 +61,28 @@ class S3CompatibleObjectStore:
         )
         return StoredObject(key=key, bucket=self.bucket, content_type=content_type)
 
+    def get_bytes(self, key: str) -> bytes:
+        response = self._client.get_object(self.bucket, key)
+        try:
+            return response.read()
+        finally:
+            response.close()
+            response.release_conn()
+
+    def exists(self, key: str) -> bool:
+        try:
+            self._client.stat_object(self.bucket, key)
+            return True
+        except Exception:
+            return False
+
     def presigned_get_url(self, key: str, *, expires_seconds: int = 3600) -> str:
         return self._client.presigned_get_object(self.bucket, key, expires=timedelta(seconds=expires_seconds))
 
     def delete(self, key: str) -> None:
         self._client.remove_object(self.bucket, key)
+
+
+@lru_cache
+def get_object_store() -> S3CompatibleObjectStore:
+    return S3CompatibleObjectStore()
