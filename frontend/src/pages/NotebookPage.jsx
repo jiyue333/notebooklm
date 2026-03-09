@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTheme } from '../contexts/useTheme';
 import { appApi } from '../services/appApi';
 import ReactMarkdown from 'react-markdown';
@@ -132,7 +132,9 @@ function getArticleIcon(type) {
 export default function NotebookPage() {
     const { id } = useParams();
     const navigate = useNavigate();
+    const [searchParams, setSearchParams] = useSearchParams();
     const { toggleTheme } = useTheme();
+    const requestedArticleId = searchParams.get('articleId');
 
     const [currentUser, setCurrentUser] = useState(null);
     const [notebook, setNotebook] = useState(null);
@@ -222,6 +224,14 @@ export default function NotebookPage() {
             isMounted = false;
         };
     }, [id, syncNotebookState]);
+
+    useEffect(() => {
+        if (!notebook || !requestedArticleId) return;
+        const requestedArticle = notebook.articles.find((article) => article.id === requestedArticleId);
+        if (requestedArticle && requestedArticle.id !== selectedArticle?.id) {
+            setSelectedArticle(requestedArticle);
+        }
+    }, [notebook, requestedArticleId, selectedArticle?.id]);
 
     // Reset AI features when switching articles
     useEffect(() => {
@@ -324,11 +334,50 @@ export default function NotebookPage() {
                 message: prompt,
             });
             setChatConversationId(result.conversationId || chatConversationId);
-            setChatMessages((prev) => [...prev, { role: 'assistant', content: result.reply }]);
+            setChatMessages((prev) => [...prev, {
+                role: 'assistant',
+                content: result.reply,
+                citations: result.citations || [],
+                route: result.route || null,
+            }]);
         } catch (err) {
             setChatMessages((prev) => [...prev, { role: 'assistant', content: `请求失败：${err.message || '请稍后重试'}` }]);
         }
     };
+
+    const handleSelectArticle = useCallback((article) => {
+        setSelectedArticle(article);
+        setSearchParams((prev) => {
+            const next = new URLSearchParams(prev);
+            next.set('articleId', article.id);
+            return next;
+        }, { replace: true });
+    }, [setSearchParams]);
+
+    const buildCitationMeta = useCallback((citation) => {
+        const parts = [];
+        if (citation.notebookTitle) {
+            parts.push(citation.notebookTitle);
+        }
+        if (Array.isArray(citation.matchedBy) && citation.matchedBy.length > 0) {
+            parts.push(citation.matchedBy.join(' + '));
+        }
+        return parts.join(' · ');
+    }, []);
+
+    const handleOpenCitation = useCallback((citation) => {
+        if (!citation?.notebookId || !citation?.articleId) {
+            return;
+        }
+        if (citation.notebookId === notebook?.id) {
+            const article = notebook.articles.find((item) => item.id === citation.articleId);
+            if (article) {
+                handleSelectArticle(article);
+            }
+            return;
+        }
+        navigate(`/notebook/${citation.notebookId}?articleId=${citation.articleId}`);
+    }, [handleSelectArticle, navigate, notebook]);
 
     const clearChat = () => {
         setChatMessages([]);
@@ -447,7 +496,7 @@ export default function NotebookPage() {
                                         <li
                                             key={article.id}
                                             className={`nb-article-item ${selectedArticle?.id === article.id ? 'active' : ''}`}
-                                            onClick={() => setSelectedArticle(article)}
+                                            onClick={() => handleSelectArticle(article)}
                                         >
                                             <span className="nb-article-icon">{getArticleIcon(article.type)}</span>
                                             <span className="nb-article-title-text">{article.title}</span>
@@ -607,7 +656,27 @@ export default function NotebookPage() {
                                 )}
                                 {chatMessages.map((msg, idx) => (
                                     <div key={idx} className={`nb-chat-msg nb-chat-msg-${msg.role}`}>
-                                        <div className={`nb-chat-bubble nb-chat-bubble-${msg.role}`}>{msg.content}</div>
+                                        <div className={`nb-chat-bubble nb-chat-bubble-${msg.role}`}>
+                                            <div>{msg.content}</div>
+                                            {msg.role === 'assistant' && Array.isArray(msg.citations) && msg.citations.length > 0 && (
+                                                <div className="nb-chat-citations">
+                                                    {msg.citations.map((citation) => (
+                                                        <button
+                                                            key={`${citation.notebookId}-${citation.articleId}`}
+                                                            type="button"
+                                                            className="nb-chat-citation-card"
+                                                            onClick={() => handleOpenCitation(citation)}
+                                                        >
+                                                            <span className="nb-chat-citation-title">{citation.title}</span>
+                                                            <span className="nb-chat-citation-meta">{buildCitationMeta(citation)}</span>
+                                                            {citation.snippet && (
+                                                                <span className="nb-chat-citation-snippet">{citation.snippet}</span>
+                                                            )}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                 ))}
                             </div>

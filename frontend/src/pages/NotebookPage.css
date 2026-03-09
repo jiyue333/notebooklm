@@ -1133,6 +1133,51 @@
     border-bottom-left-radius: 4px;
 }
 
+.nb-chat-citations {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.nb-chat-citation-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+    padding: 10px 12px;
+    text-align: left;
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--card-bg), var(--accent-color) 4%);
+    color: inherit;
+    cursor: pointer;
+    transition: border-color 0.15s ease, transform 0.15s ease, background 0.15s ease;
+}
+
+.nb-chat-citation-card:hover {
+    border-color: color-mix(in srgb, var(--accent-color), white 35%);
+    background: color-mix(in srgb, var(--card-bg), var(--accent-color) 8%);
+    transform: translateY(-1px);
+}
+
+.nb-chat-citation-title {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--title-color);
+}
+
+.nb-chat-citation-meta {
+    font-size: 0.76rem;
+    color: var(--meta-color);
+}
+
+.nb-chat-citation-snippet {
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+
 .nb-chat-input-area {
     flex-shrink: 0;
     padding: 10px 12px;

@@ -541,8 +541,17 @@ const mockProvider = {
         const article = notebook.articles.find((item) => item.id === articleId) || notebook.articles[0];
         return {
             conversationId: conversationId || `conv-${notebookId}`,
-            reply: `基于《${article?.title || notebook.title}》的 mock 回复：针对“${message}”，后端接入后这里会替换为真实带引用的问答结果。`,
-            citations: [],
+            route: 'RELATED_ARTICLES',
+            reply: `基于《${article?.title || notebook.title}》的 mock 回复：已为“${message}”找到相关资料。正式后端会返回真实检索结果和引用。`,
+            citations: article ? [{
+                articleId: article.id,
+                title: article.title,
+                notebookId,
+                notebookTitle: notebook.title,
+                snippet: article.content?.slice(0, 120) || '',
+                score: 0.12,
+                matchedBy: ['lexical', 'semantic'],
+            }] : [],
         };
     },
 

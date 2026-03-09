@@ -1,16 +1,26 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 import structlog
 from sqlalchemy import case, desc, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.modules.ingest.embedder import Embedder
 from app.modules.notebooks.models import Article
-from app.modules.retrieval.fusion import rrf_fuse
+from app.modules.retrieval.fusion import rrf_fuse_with_details
 
 logger = structlog.get_logger(__name__)
+
+
+@dataclass(slots=True)
+class RetrievedArticleMatch:
+    article: Article
+    score: float
+    matched_by: list[str]
+    snippet: str
 
 
 def _tokenize(text: str) -> list[str]:
@@ -24,7 +34,7 @@ async def retrieve_related_articles(
     query: str,
     exclude_article_id: str | None = None,
     limit: int = 5,
-) -> list[Article]:
+) -> list[RetrievedArticleMatch]:
     query_text = query.strip()
     if not query_text:
         return []
@@ -50,16 +60,39 @@ async def retrieve_related_articles(
         exclude_article_id=exclude_article_id,
         limit=max(limit * 3, 10),
     )
-    rankings = [ranking for ranking in [lexical_ids, title_ids, semantic_ids] if ranking]
-    fused_ids = rrf_fuse(rankings, limit=limit)
-    if not fused_ids:
+    rankings = {
+        name: ranking
+        for name, ranking in {
+            "lexical": lexical_ids,
+            "title": title_ids,
+            "semantic": semantic_ids,
+        }.items()
+        if ranking
+    }
+    fused_hits = rrf_fuse_with_details(rankings, limit=limit)
+    if not fused_hits:
         return []
 
     result = await session.execute(
-        select(Article).where(Article.id.in_(fused_ids))
+        select(Article)
+        .options(selectinload(Article.notebook))
+        .where(Article.id.in_([hit.item_id for hit in fused_hits]))
     )
     article_map = {article.id: article for article in result.scalars().all()}
-    return [article_map[item_id] for item_id in fused_ids if item_id in article_map]
+    matches: list[RetrievedArticleMatch] = []
+    for hit in fused_hits:
+        article = article_map.get(hit.item_id)
+        if article is None:
+            continue
+        matches.append(
+            RetrievedArticleMatch(
+                article=article,
+                score=round(hit.score, 6),
+                matched_by=hit.matched_by,
+                snippet=_build_article_snippet(article, query=query_text),
+            )
+        )
+    return matches
 
 
 async def _lexical_search(
@@ -76,6 +109,7 @@ async def _lexical_search(
         select(Article.id)
         .where(
             Article.user_id == user_id,
+            Article.parse_status != "failed",
             Article.article_tsv.op("@@")(ts_query),
         )
         .order_by(desc(rank_expr), desc(Article.updated_at))
@@ -110,7 +144,11 @@ async def _semantic_search(
     distance_expr = Article.article_vector.cosine_distance(query_vector)
     stmt = (
         select(Article.id)
-        .where(Article.user_id == user_id, Article.article_vector.is_not(None))
+        .where(
+            Article.user_id == user_id,
+            Article.parse_status != "failed",
+            Article.article_vector.is_not(None),
+        )
         .order_by(distance_expr.asc(), desc(Article.updated_at))
         .limit(limit)
     )
@@ -141,7 +179,7 @@ async def _title_search(
 
     stmt = (
         select(Article.id)
-        .where(Article.user_id == user_id, or_(*filters))
+        .where(Article.user_id == user_id, Article.parse_status != "failed", or_(*filters))
         .order_by(desc(score_expr), desc(Article.updated_at))
         .limit(limit)
     )
@@ -149,3 +187,34 @@ async def _title_search(
         stmt = stmt.where(Article.id != exclude_article_id)
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+def _build_article_snippet(article: Article, *, query: str) -> str:
+    text = _strip_markdown(article.clean_markdown or article.preview_markdown or article.article_retrieval_text or "")
+    if not text:
+        return article.title
+
+    tokens = _tokenize(query)
+    paragraphs = [paragraph.strip() for paragraph in re.split(r"\n\s*\n", text) if paragraph.strip()]
+    for paragraph in paragraphs:
+        lowered = paragraph.lower()
+        if any(token in lowered for token in tokens):
+            return _truncate(paragraph)
+    return _truncate(paragraphs[0] if paragraphs else text)
+
+
+def _strip_markdown(text: str) -> str:
+    cleaned = re.sub(r"```.*?```", " ", text, flags=re.S)
+    cleaned = re.sub(r"`([^`]*)`", r"\1", cleaned)
+    cleaned = re.sub(r"!\[.*?\]\(.*?\)", " ", cleaned)
+    cleaned = re.sub(r"\[(.*?)\]\(.*?\)", r"\1", cleaned)
+    cleaned = re.sub(r"^[#>\-\*\+\d\.\s]+", "", cleaned, flags=re.M)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _truncate(text: str, *, limit: int = 220) -> str:
+    value = " ".join(text.split())
+    if len(value) <= limit:
+        return value
+    return f"{value[: limit - 3].rstrip()}..."

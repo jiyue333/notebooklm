@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Protocol
@@ -55,7 +57,7 @@ class S3CompatibleObjectStore:
         return StoredObject(key=key, bucket=self.bucket, content_type=content_type)
 
     def presigned_get_url(self, key: str, *, expires_seconds: int = 3600) -> str:
-        return self._client.presigned_get_object(self.bucket, key, expires=expires_seconds)
+        return self._client.presigned_get_object(self.bucket, key, expires=timedelta(seconds=expires_seconds))
 
     def delete(self, key: str) -> None:
         self._client.remove_object(self.bucket, key)
