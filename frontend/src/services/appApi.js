@@ -7,13 +7,17 @@ const DEFAULT_SETTINGS = {
     outputLanguage: mockUser.settings?.outputLanguage || '中文',
     themeColor: 'ocean',
     colorMode: mockUser.settings?.theme || 'light',
-    modelProvider: '自定义',
+    modelProvider: 'openai_compatible',
     modelName: mockUser.settings?.model || 'gpt-4o',
     apiUrl: 'http://host.docker.internal:8317/v1/chat/completions',
     searchProvider: 'exa',
+    embeddingProvider: 'openai_compatible',
+    embeddingModel: 'text-embedding-3-large',
+    embeddingApiUrl: 'https://api.openai.com/v1',
     username: mockUser.name,
     apiKey: '',
     searchApiKey: '',
+    embeddingApiKey: '',
 };
 
 const DEFAULT_NOTES_BY_NOTEBOOK_ID = {
@@ -173,10 +177,21 @@ const buildSettingsView = (user, settings) => ({
     modelName: settings.modelName,
     apiUrl: settings.apiUrl,
     searchProvider: settings.searchProvider || 'exa',
+    embeddingProvider: settings.embeddingProvider || 'openai_compatible',
+    embeddingModel: settings.embeddingModel || 'text-embedding-3-large',
+    embeddingApiUrl: settings.embeddingApiUrl || 'https://api.openai.com/v1',
     hasApiKey: Boolean(settings.apiKey),
+    hasCustomApiKey: Boolean(settings.apiKey),
+    usingDefaultApiKey: false,
     apiKeyMasked: maskApiKey(settings.apiKey),
     hasSearchApiKey: Boolean(settings.searchApiKey),
+    hasCustomSearchApiKey: Boolean(settings.searchApiKey),
+    usingDefaultSearchApiKey: false,
     searchApiKeyMasked: maskApiKey(settings.searchApiKey),
+    hasEmbeddingApiKey: Boolean(settings.embeddingApiKey),
+    hasCustomEmbeddingApiKey: Boolean(settings.embeddingApiKey),
+    usingDefaultEmbeddingApiKey: false,
+    embeddingApiKeyMasked: maskApiKey(settings.embeddingApiKey),
     username: user.name,
 });
 
@@ -489,8 +504,22 @@ const mockProvider = {
         } else {
             nextSettings.searchApiKey = mockState.settings.searchApiKey;
         }
+        if (payload.clearEmbeddingApiKey) {
+            nextSettings.embeddingApiKey = '';
+        } else if (payload.embeddingApiKey) {
+            nextSettings.embeddingApiKey = payload.embeddingApiKey;
+        } else {
+            nextSettings.embeddingApiKey = mockState.settings.embeddingApiKey;
+        }
         Object.entries(payload).forEach(([key, value]) => {
-            if (key === 'apiKey' || key === 'clearApiKey' || key === 'searchApiKey' || key === 'clearSearchApiKey') return;
+            if (
+                key === 'apiKey'
+                || key === 'clearApiKey'
+                || key === 'searchApiKey'
+                || key === 'clearSearchApiKey'
+                || key === 'embeddingApiKey'
+                || key === 'clearEmbeddingApiKey'
+            ) return;
             nextSettings[key] = value;
         });
         mockState.settings = {

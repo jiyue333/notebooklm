@@ -11,32 +11,42 @@ from app.modules.ai.prompts.chat_prompt import (
     CHAT_USER_PROMPT,
 )
 from app.modules.ai.prompts.summary_prompt import SUMMARY_SYSTEM_PROMPT, SUMMARY_USER_PROMPT
-from app.modules.settings.crypto import get_credential_crypto
-from app.modules.settings.defaults import DEFAULT_USER_SETTINGS
+from app.modules.settings.runtime import resolve_chat_runtime_config
 
 
 def get_user_generation_settings(user) -> dict:
-    settings_json = {**DEFAULT_USER_SETTINGS, **(user.settings_json or {})}
+    runtime_config = resolve_chat_runtime_config(user)
     return {
-        "modelProvider": settings_json["modelProvider"],
-        "modelName": settings_json["modelName"],
-        "apiUrl": _normalize_api_base(settings_json["apiUrl"]),
-        "outputLanguage": settings_json["outputLanguage"],
+        "modelProvider": runtime_config.provider,
+        "modelName": runtime_config.model_name,
+        "apiUrl": runtime_config.api_url,
+        "outputLanguage": runtime_config.output_language,
+        "keySource": runtime_config.key_source,
     }
 
 
 def build_user_chat_model(user):
-    if not user.llm_api_key_ciphertext:
+    runtime_config = resolve_chat_runtime_config(user)
+    if not runtime_config.is_configured:
         return None
+    if runtime_config.provider == "ollama":
+        from langchain_ollama import ChatOllama
+
+        return ChatOllama(
+            model=runtime_config.model_name,
+            base_url=runtime_config.api_url,
+            temperature=0.0,
+        )
 
     from langchain_openai import ChatOpenAI
+    from pydantic import SecretStr
 
-    settings_json = get_user_generation_settings(user)
-    api_key = get_credential_crypto().decrypt(user.llm_api_key_ciphertext)
+    api_key_secret = SecretStr(runtime_config.api_key) if runtime_config.api_key else None
+
     return ChatOpenAI(
-        model=settings_json["modelName"],
-        api_key=api_key,
-        base_url=settings_json["apiUrl"],
+        model=runtime_config.model_name,
+        api_key=api_key_secret,
+        base_url=runtime_config.api_url,
         temperature=0.0,
         max_retries=2,
     )
@@ -78,11 +88,3 @@ def build_chat_rollup_chain(user):
         ]
     )
     return prompt | require_user_chat_model(user) | StrOutputParser()
-
-
-def _normalize_api_base(api_url: str) -> str:
-    value = api_url.strip().rstrip("/")
-    for suffix in ("/chat/completions", "/embeddings"):
-        if value.endswith(suffix):
-            return value[: -len(suffix)]
-    return value

@@ -8,15 +8,11 @@ from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
 
-from app.core.config import get_settings
 from app.infra.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
     from app.modules.auth.models import User
     from app.modules.notes.models import Note
-
-EMBEDDING_DIMENSION = get_settings().embedding_dimension
-
 
 class Notebook(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "notebooks"  # type: ignore[assignment]
@@ -96,7 +92,11 @@ class Article(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ),
         nullable=True,
     )
-    article_vector: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIMENSION), nullable=True)
+    embedding_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    embedding_profile_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    embedding_dimension: Mapped[int | None] = mapped_column(nullable=True)
+    article_vector: Mapped[list[float] | None] = mapped_column(Vector(), nullable=True)
     chunk_status: Mapped[str] = mapped_column(String(16), nullable=False)
     index_status: Mapped[str] = mapped_column(String(16), nullable=False)
     ingested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -121,7 +121,7 @@ class ArticleChunk(UUIDPrimaryKeyMixin, Base):
     heading_title: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_count: Mapped[int] = mapped_column(nullable=False)
     chunk_text: Mapped[str] = mapped_column(Text, nullable=False)
-    chunk_vector: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIMENSION), nullable=True)
+    chunk_vector: Mapped[list[float] | None] = mapped_column(Vector(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     article: Mapped[Article] = relationship(back_populates="chunks")

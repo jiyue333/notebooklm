@@ -30,6 +30,10 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     exa_api_key_last4: Mapped[str | None] = mapped_column(String(4), nullable=True)
     exa_api_key_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    embedding_api_key_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_api_key_last4: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    embedding_api_key_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     tokens: Mapped[list["AuthToken"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",

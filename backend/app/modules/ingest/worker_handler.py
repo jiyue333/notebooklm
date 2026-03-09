@@ -17,7 +17,7 @@ from app.modules.jobs import repo as jobs_repo
 from app.modules.search import repo_article
 from app.modules.search.file_storage import resolve_storage_path
 from app.modules.search.service_search import execute_search
-from app.modules.settings.crypto import get_credential_crypto
+from app.modules.settings.runtime import resolve_search_api_key
 
 
 async def process_article_ingest(job_id: str) -> None:
@@ -39,9 +39,10 @@ async def process_article_ingest(job_id: str) -> None:
         parser_name = article.parser_name
 
         try:
-            if not markdown and article.input_type in {"search_result", "url"} and article.source_url and user and user.exa_api_key_ciphertext:
-                api_key = get_credential_crypto().decrypt(user.exa_api_key_ciphertext)
-                markdown, parser_name = await fetch_markdown_with_exa(url=article.source_url, api_key=api_key)
+            search_api_key, _key_source = resolve_search_api_key(user) if user is not None else (None, "missing")
+            if not markdown and article.input_type in {"search_result", "url"} and article.source_url:
+                if search_api_key:
+                    markdown, parser_name = await fetch_markdown_with_exa(url=article.source_url, api_key=search_api_key)
                 if not markdown:
                     markdown, parser_name = fetch_markdown_with_trafilatura(url=article.source_url)
             elif not markdown and article.input_type == "file" and article.file_storage_key:
@@ -71,7 +72,8 @@ async def process_article_ingest(job_id: str) -> None:
 
                 _apply_parsed_content(article, markdown, parser_name, datetime.now(UTC))
                 article.toc_json = extract_toc_items(markdown)
-                await _index_article_content(session, article)
+                if user is not None:
+                    await _index_article_content(session, article, user=user)
                 await jobs_repo.mark_job_succeeded(job)
             else:
                 article.parse_status = "failed"

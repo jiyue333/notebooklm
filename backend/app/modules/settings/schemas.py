@@ -15,6 +15,11 @@ class SettingsUpdateRequest(BaseModel):
     searchProvider: str | None = Field(default=None, max_length=32)
     searchApiKey: str | None = None
     clearSearchApiKey: bool | None = None
+    embeddingProvider: str | None = Field(default=None, max_length=64)
+    embeddingModel: str | None = Field(default=None, max_length=128)
+    embeddingApiUrl: str | None = Field(default=None, max_length=1024)
+    embeddingApiKey: str | None = None
+    clearEmbeddingApiKey: bool | None = None
 
 
 class ProfileUpdateRequest(BaseModel):

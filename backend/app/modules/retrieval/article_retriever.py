@@ -8,6 +8,7 @@ from sqlalchemy import case, desc, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.modules.auth.repo import get_user_by_id
 from app.modules.ingest.embedder import Embedder
 from app.modules.notebooks.models import Article
 from app.modules.retrieval.fusion import rrf_fuse_with_details
@@ -129,7 +130,10 @@ async def _semantic_search(
     exclude_article_id: str | None,
     limit: int,
 ) -> list[str]:
-    embedder = Embedder()
+    user = await get_user_by_id(session, user_id)
+    if user is None:
+        return []
+    embedder = Embedder.from_user(user)
     if not embedder.is_configured:
         return []
     try:
@@ -140,6 +144,7 @@ async def _semantic_search(
     if not embeddings:
         return []
     query_vector = embeddings[0]
+    vector_dim = len(query_vector)
 
     distance_expr = Article.article_vector.cosine_distance(query_vector)
     stmt = (
@@ -147,6 +152,8 @@ async def _semantic_search(
         .where(
             Article.user_id == user_id,
             Article.parse_status != "failed",
+            Article.embedding_profile_key == embedder.profile_key,
+            Article.embedding_dimension == vector_dim,
             Article.article_vector.is_not(None),
         )
         .order_by(distance_expr.asc(), desc(Article.updated_at))

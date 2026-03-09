@@ -36,13 +36,11 @@ class Settings(BaseSettings):
     redis_decode_responses: bool = False
 
     exa_base_url: str = "https://api.exa.ai"
+    exa_default_api_key: str | None = None
     search_inline_deadline_ms: int = 4500
 
-    embedding_provider: str = "OpenAI"
-    embedding_api_url: str = "https://api.openai.com/v1"
-    embedding_api_key: str | None = None
-    embedding_model: str = "text-embedding-3-large"
-    embedding_dimension: int = 3072
+    llm_default_api_key: str | None = None
+    embedding_default_api_key: str | None = None
     chunk_target_tokens: int = 600
     chunk_overlap_tokens: int = 80
     summary_cache_ttl_days: int = 30

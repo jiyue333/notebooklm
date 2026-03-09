@@ -16,7 +16,7 @@ from app.modules.auth.repo import get_user_by_id
 from app.modules.jobs import publisher as job_publisher
 from app.modules.jobs import repo as jobs_repo
 from app.modules.notebooks import repo as notebooks_repo
-from app.modules.settings.crypto import get_credential_crypto
+from app.modules.settings.runtime import resolve_search_api_key
 from app.modules.search import repo_search
 from app.modules.search.models import SearchResult, SearchSession
 
@@ -75,7 +75,8 @@ async def start_search(
     )
     if notebook is None:
         raise AppError(404, "未找到对应的笔记本", code="notebook_not_found")
-    if not user.exa_api_key_ciphertext:
+    exa_api_key, _key_source = resolve_search_api_key(user)
+    if not exa_api_key:
         raise AppError(422, "请先在设置里配置 Exa API Key", code="search_api_key_required")
 
     normalized_query = query.strip()
@@ -162,7 +163,10 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
         await session.commit()
 
         user = await get_user_by_id(session, search_session.user_id)
-        if user is None or not user.exa_api_key_ciphertext:
+        exa_api_key = None
+        if user is not None:
+            exa_api_key, _key_source = resolve_search_api_key(user)
+        if user is None or not exa_api_key:
             await repo_search.touch_search_session(
                 session,
                 search_session=search_session,
@@ -174,7 +178,6 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
             await session.commit()
             raise AppError(422, "请先在设置里配置 Exa API Key", code="search_api_key_required")
 
-        api_key = get_credential_crypto().decrypt(user.exa_api_key_ciphertext)
         client = ExaSearchClient()
         started_at = perf_counter()
         try:
@@ -187,9 +190,12 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
             if timeout_seconds is not None:
                 import asyncio
 
-                payload = await asyncio.wait_for(client.search(request, api_key=api_key), timeout=timeout_seconds)
+                payload = await asyncio.wait_for(
+                    client.search(request, api_key=exa_api_key),
+                    timeout=timeout_seconds,
+                )
             else:
-                payload = await client.search(request, api_key=api_key)
+                payload = await client.search(request, api_key=exa_api_key)
             candidates = ExaResultMapper.map_search_results(payload)
             completed_at = datetime.now(UTC)
             await repo_search.replace_search_results(

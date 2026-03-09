@@ -4,10 +4,13 @@ DEFAULT_USER_SETTINGS = {
     "outputLanguage": "中文",
     "themeColor": "ocean",
     "colorMode": "light",
-    "modelProvider": "自定义",
+    "modelProvider": "openai_compatible",
     "modelName": "gpt-4o",
     "apiUrl": "http://host.docker.internal:8317/v1/chat/completions",
     "searchProvider": "exa",
+    "embeddingProvider": "openai_compatible",
+    "embeddingModel": "text-embedding-3-large",
+    "embeddingApiUrl": "https://api.openai.com/v1",
 }
 
 SETTINGS_FIELDS = {
@@ -18,4 +21,7 @@ SETTINGS_FIELDS = {
     "modelName",
     "apiUrl",
     "searchProvider",
+    "embeddingProvider",
+    "embeddingModel",
+    "embeddingApiUrl",
 }

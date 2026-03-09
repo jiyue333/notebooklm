@@ -8,7 +8,8 @@ import './SettingsModal.css';
 const tabs = [
     { id: 'language', label: '语言', icon: '🌐' },
     { id: 'appearance', label: '外观', icon: '🎨' },
-    { id: 'model', label: '模型', icon: '🤖' },
+    { id: 'model', label: '聊天模型', icon: '🤖' },
+    { id: 'embedding', label: 'Embedding', icon: '🧩' },
     { id: 'search', label: '搜索', icon: '🔎' },
     { id: 'account', label: '账户', icon: '👤' },
 ];
@@ -25,23 +26,46 @@ const createInitialSettings = () => ({
     outputLanguage: '简体中文',
     themeColor: 'ocean',
     colorMode: 'light',
-    modelProvider: '自定义',
+    modelProvider: 'openai_compatible',
     modelName: 'gpt-4o',
     apiUrl: 'http://host.docker.internal:8317/v1/chat/completions',
     searchProvider: 'exa',
+    embeddingProvider: 'openai_compatible',
+    embeddingModel: 'text-embedding-3-large',
+    embeddingApiUrl: 'https://api.openai.com/v1',
     username: '',
     apiKey: '',
     searchApiKey: '',
+    embeddingApiKey: '',
     hasApiKey: false,
+    hasCustomApiKey: false,
+    usingDefaultApiKey: false,
     apiKeyMasked: '',
     hasSearchApiKey: false,
+    hasCustomSearchApiKey: false,
+    usingDefaultSearchApiKey: false,
     searchApiKeyMasked: '',
+    hasEmbeddingApiKey: false,
+    hasCustomEmbeddingApiKey: false,
+    usingDefaultEmbeddingApiKey: false,
+    embeddingApiKeyMasked: '',
     clearApiKey: false,
     clearSearchApiKey: false,
+    clearEmbeddingApiKey: false,
     oldPassword: '',
     newPassword: '',
     confirmPassword: '',
 });
+
+const modelProviderOptions = [
+    { value: 'openai_compatible', label: 'OpenAI兼容' },
+    { value: 'ollama', label: 'Ollama' },
+];
+
+const embeddingProviderOptions = [
+    { value: 'openai_compatible', label: 'OpenAI兼容' },
+    { value: 'ollama', label: 'Ollama' },
+];
 
 export default function SettingsModal({ onClose }) {
     const navigate = useNavigate();
@@ -74,8 +98,10 @@ export default function SettingsModal({ onClose }) {
                     username: currentUser.name || currentSettings.username || '',
                     apiKey: '',
                     searchApiKey: '',
+                    embeddingApiKey: '',
                     clearApiKey: false,
                     clearSearchApiKey: false,
+                    clearEmbeddingApiKey: false,
                     oldPassword: '',
                     newPassword: '',
                     confirmPassword: '',
@@ -103,11 +129,17 @@ export default function SettingsModal({ onClose }) {
             if (key === 'searchApiKey') {
                 return { ...prev, searchApiKey: value, clearSearchApiKey: false };
             }
+            if (key === 'embeddingApiKey') {
+                return { ...prev, embeddingApiKey: value, clearEmbeddingApiKey: false };
+            }
             if (key === 'clearApiKey') {
                 return { ...prev, clearApiKey: value, apiKey: value ? '' : prev.apiKey };
             }
             if (key === 'clearSearchApiKey') {
                 return { ...prev, clearSearchApiKey: value, searchApiKey: value ? '' : prev.searchApiKey };
+            }
+            if (key === 'clearEmbeddingApiKey') {
+                return { ...prev, clearEmbeddingApiKey: value, embeddingApiKey: value ? '' : prev.embeddingApiKey };
             }
             return { ...prev, [key]: value };
         });
@@ -125,6 +157,15 @@ export default function SettingsModal({ onClose }) {
                 searchProvider: settings.searchProvider,
                 ...(settings.searchApiKey.trim() ? { searchApiKey: settings.searchApiKey.trim() } : {}),
                 ...(settings.clearSearchApiKey ? { clearSearchApiKey: true } : {}),
+            };
+        }
+        if (activeTab === 'embedding') {
+            return {
+                embeddingProvider: settings.embeddingProvider,
+                embeddingModel: settings.embeddingModel,
+                embeddingApiUrl: settings.embeddingApiUrl,
+                ...(settings.embeddingApiKey.trim() ? { embeddingApiKey: settings.embeddingApiKey.trim() } : {}),
+                ...(settings.clearEmbeddingApiKey ? { clearEmbeddingApiKey: true } : {}),
             };
         }
         return {
@@ -161,8 +202,10 @@ export default function SettingsModal({ onClose }) {
                     ...nextSettings,
                     apiKey: '',
                     searchApiKey: '',
+                    embeddingApiKey: '',
                     clearApiKey: false,
                     clearSearchApiKey: false,
+                    clearEmbeddingApiKey: false,
                 }));
                 if (activeTab === 'appearance' && settings.colorMode !== 'auto') {
                     setTheme(settings.colorMode);
@@ -284,17 +327,16 @@ export default function SettingsModal({ onClose }) {
                                 <div className="settings-tab-content">
                                     <div className="settings-section">
                                         <label className="settings-section-title">模型提供商</label>
+                                        <p className="settings-hint">聊天和摘要统一使用用户配置的模型；如果你没有填自定义 Key，后端会尝试使用系统默认 Key。</p>
                                         <div className="settings-select-wrapper">
                                             <select
                                                 className="settings-select"
                                                 value={settings.modelProvider}
                                                 onChange={(event) => update('modelProvider', event.target.value)}
                                             >
-                                                <option value="自定义">自定义</option>
-                                                <option value="OpenAI">OpenAI</option>
-                                                <option value="Anthropic">Anthropic</option>
-                                                <option value="Google">Google</option>
-                                                <option value="Ollama">Ollama</option>
+                                                {modelProviderOptions.map((option) => (
+                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
                                             </select>
                                             <span className="settings-select-arrow">▾</span>
                                         </div>
@@ -314,7 +356,7 @@ export default function SettingsModal({ onClose }) {
                                         <label className="settings-section-title">API 地址</label>
                                         <input
                                             className="settings-input"
-                                            placeholder="https://api.openai.com/v1"
+                                            placeholder={settings.modelProvider === 'ollama' ? 'http://127.0.0.1:11434' : 'https://api.openai.com/v1'}
                                             value={settings.apiUrl}
                                             onChange={(event) => update('apiUrl', event.target.value)}
                                         />
@@ -322,25 +364,100 @@ export default function SettingsModal({ onClose }) {
 
                                     <div className="settings-section">
                                         <label className="settings-section-title">API Key</label>
-                                        {settings.hasApiKey && !settings.clearApiKey && (
+                                        {settings.usingDefaultApiKey && !settings.hasCustomApiKey && !settings.clearApiKey && (
+                                            <p className="settings-hint">当前使用系统默认聊天 Key。留空则继续使用默认值，输入新值可覆盖。</p>
+                                        )}
+                                        {settings.hasCustomApiKey && !settings.clearApiKey && (
                                             <p className="settings-hint">已保存 Key：{settings.apiKeyMasked || '已配置'}。留空则保持不变。</p>
                                         )}
                                         {settings.clearApiKey && (
-                                            <p className="settings-hint">当前将清除已保存的 API Key。</p>
+                                            <p className="settings-hint">当前将移除自定义聊天 Key，并回退到系统默认 Key（如果有）。</p>
                                         )}
                                         <input
                                             className="settings-input"
                                             type="password"
-                                            placeholder={settings.hasApiKey ? '留空则不修改，输入新值则替换' : 'sk-...'}
+                                            placeholder={settings.modelProvider === 'ollama' ? 'Ollama 通常无需 API Key' : (settings.hasApiKey ? '留空则不修改，输入新值则替换' : 'sk-...')}
                                             value={settings.apiKey}
                                             onChange={(event) => update('apiKey', event.target.value)}
                                         />
-                                        {settings.hasApiKey && (
+                                        {settings.hasCustomApiKey && (
                                             <button
                                                 className="settings-save-btn"
                                                 onClick={() => update('clearApiKey', !settings.clearApiKey)}
                                             >
-                                                {settings.clearApiKey ? '保留已保存 Key' : '清除已保存 Key'}
+                                                {settings.clearApiKey ? '保留自定义 Key' : '移除自定义 Key'}
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeTab === 'embedding' && (
+                                <div className="settings-tab-content">
+                                    <div className="settings-section">
+                                        <label className="settings-section-title">Embedding Provider</label>
+                                        <p className="settings-hint">检索向量使用独立配置。支持 OpenAI 兼容接口，也支持直接连 Ollama。</p>
+                                        <div className="settings-select-wrapper">
+                                            <select
+                                                className="settings-select"
+                                                value={settings.embeddingProvider}
+                                                onChange={(event) => update('embeddingProvider', event.target.value)}
+                                            >
+                                                {embeddingProviderOptions.map((option) => (
+                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
+                                            </select>
+                                            <span className="settings-select-arrow">▾</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="settings-section">
+                                        <label className="settings-section-title">Embedding 模型</label>
+                                        <input
+                                            className="settings-input"
+                                            placeholder={settings.embeddingProvider === 'ollama' ? '例如 nomic-embed-text' : '例如 text-embedding-3-large'}
+                                            value={settings.embeddingModel}
+                                            onChange={(event) => update('embeddingModel', event.target.value)}
+                                        />
+                                    </div>
+
+                                    <div className="settings-section">
+                                        <label className="settings-section-title">Embedding API 地址</label>
+                                        <input
+                                            className="settings-input"
+                                            placeholder={settings.embeddingProvider === 'ollama' ? 'http://127.0.0.1:11434' : 'https://api.openai.com/v1'}
+                                            value={settings.embeddingApiUrl}
+                                            onChange={(event) => update('embeddingApiUrl', event.target.value)}
+                                        />
+                                    </div>
+
+                                    <div className="settings-section">
+                                        <label className="settings-section-title">Embedding API Key</label>
+                                        {settings.embeddingProvider === 'ollama' && (
+                                            <p className="settings-hint">Ollama 原生模式通常不需要 API Key。</p>
+                                        )}
+                                        {settings.usingDefaultEmbeddingApiKey && !settings.hasCustomEmbeddingApiKey && !settings.clearEmbeddingApiKey && settings.embeddingProvider !== 'ollama' && (
+                                            <p className="settings-hint">当前使用系统默认 embedding Key。留空则继续使用默认值，输入新值可覆盖。</p>
+                                        )}
+                                        {settings.hasCustomEmbeddingApiKey && !settings.clearEmbeddingApiKey && (
+                                            <p className="settings-hint">已保存 Key：{settings.embeddingApiKeyMasked || '已配置'}。留空则保持不变。</p>
+                                        )}
+                                        {settings.clearEmbeddingApiKey && (
+                                            <p className="settings-hint">当前将移除自定义 embedding Key，并回退到系统默认 Key（如果有）。</p>
+                                        )}
+                                        <input
+                                            className="settings-input"
+                                            type="password"
+                                            placeholder={settings.embeddingProvider === 'ollama' ? '可留空' : (settings.hasEmbeddingApiKey ? '留空则不修改，输入新值则替换' : 'sk-...')}
+                                            value={settings.embeddingApiKey}
+                                            onChange={(event) => update('embeddingApiKey', event.target.value)}
+                                        />
+                                        {settings.hasCustomEmbeddingApiKey && (
+                                            <button
+                                                className="settings-save-btn"
+                                                onClick={() => update('clearEmbeddingApiKey', !settings.clearEmbeddingApiKey)}
+                                            >
+                                                {settings.clearEmbeddingApiKey ? '保留自定义 Key' : '移除自定义 Key'}
                                             </button>
                                         )}
                                     </div>
@@ -351,7 +468,7 @@ export default function SettingsModal({ onClose }) {
                                 <div className="settings-tab-content">
                                     <div className="settings-section">
                                         <label className="settings-section-title">搜索引擎 Provider</label>
-                                        <p className="settings-hint">当前搜索来源发现统一走后端 Search Provider。现阶段只开放 Exa，并需要配置对应 API Key。</p>
+                                        <p className="settings-hint">当前搜索来源发现统一走后端 Search Provider。现阶段只开放 Exa，可使用系统默认 Key，也可以配置用户自己的 Key。</p>
                                         <div className="settings-select-wrapper">
                                             <select
                                                 className="settings-select"
@@ -365,11 +482,14 @@ export default function SettingsModal({ onClose }) {
                                     </div>
                                     <div className="settings-section">
                                         <label className="settings-section-title">Exa API Key</label>
-                                        {settings.hasSearchApiKey && !settings.clearSearchApiKey && (
+                                        {settings.usingDefaultSearchApiKey && !settings.hasCustomSearchApiKey && !settings.clearSearchApiKey && (
+                                            <p className="settings-hint">当前使用系统默认 Exa Key。留空则继续使用默认值，输入新值可覆盖。</p>
+                                        )}
+                                        {settings.hasCustomSearchApiKey && !settings.clearSearchApiKey && (
                                             <p className="settings-hint">已保存 Key：{settings.searchApiKeyMasked || '已配置'}。留空则保持不变。</p>
                                         )}
                                         {settings.clearSearchApiKey && (
-                                            <p className="settings-hint">当前将清除已保存的搜索 API Key。</p>
+                                            <p className="settings-hint">当前将移除自定义 Exa Key，并回退到系统默认 Key（如果有）。</p>
                                         )}
                                         <input
                                             className="settings-input"
@@ -378,12 +498,12 @@ export default function SettingsModal({ onClose }) {
                                             value={settings.searchApiKey}
                                             onChange={(event) => update('searchApiKey', event.target.value)}
                                         />
-                                        {settings.hasSearchApiKey && (
+                                        {settings.hasCustomSearchApiKey && (
                                             <button
                                                 className="settings-save-btn"
                                                 onClick={() => update('clearSearchApiKey', !settings.clearSearchApiKey)}
                                             >
-                                                {settings.clearSearchApiKey ? '保留已保存搜索 Key' : '清除已保存搜索 Key'}
+                                                {settings.clearSearchApiKey ? '保留自定义搜索 Key' : '移除自定义搜索 Key'}
                                             </button>
                                         )}
                                     </div>

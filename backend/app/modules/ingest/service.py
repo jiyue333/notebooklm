@@ -7,6 +7,7 @@ from hashlib import sha256
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.auth.repo import get_user_by_id
 from app.modules.ingest.chunker import chunk_markdown
 from app.modules.ingest.embedder import Embedder
 from app.modules.ingest.indexer import replace_article_chunks
@@ -53,6 +54,9 @@ async def ingest_draft(
     draft: IngestDraft,
 ) -> tuple[Article | None, Job | None]:
     now = datetime.now(UTC)
+    user = await get_user_by_id(session, user_id)
+    if user is None:
+        raise RuntimeError("user not found")
     dedupe_key = _build_dedupe_key(draft)
     existing = await repo_article.list_existing_dedupe_keys(
         session,
@@ -117,7 +121,7 @@ async def ingest_draft(
         )
 
     if article.clean_markdown:
-        await _index_article_content(session, article)
+        await _index_article_content(session, article, user=user)
 
     job = None
     if article.parse_status != "ready":
@@ -155,15 +159,19 @@ def _apply_parsed_content(
     article.ingested_at = ingested_at
 
 
-async def _index_article_content(session: AsyncSession, article: Article) -> None:
+async def _index_article_content(session: AsyncSession, article: Article, *, user) -> None:
     if not article.clean_markdown:
         return
 
     chunks = chunk_markdown(article.clean_markdown, toc=article.toc_json)
     article.chunk_status = "ready" if chunks else "not_started"
-    article.index_status = "not_started"
+    article.index_status = "ready"
+    article.embedding_provider = None
+    article.embedding_model = None
+    article.embedding_profile_key = None
+    article.embedding_dimension = None
 
-    embedder = Embedder()
+    embedder = Embedder.from_user(user)
     article_vector = None
     chunk_vectors = None
     if embedder.is_configured:
@@ -173,7 +181,10 @@ async def _index_article_content(session: AsyncSession, article: Article) -> Non
             if embeddings:
                 article_vector = embeddings[0]
                 chunk_vectors = embeddings[1:]
-                article.index_status = "ready"
+                article.embedding_provider = embedder.provider
+                article.embedding_model = embedder.model_name
+                article.embedding_profile_key = embedder.profile_key
+                article.embedding_dimension = len(article_vector)
         except Exception as exc:
             logger.exception(
                 "ingest.embedding_failed",
