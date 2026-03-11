@@ -3,6 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from time import perf_counter
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from langchain_core.language_models import BaseChatModel
+    from langchain_core.prompt_values import PromptValue
+
+    from app.modules.ai.models import Conversation, ConversationMessage
+    from app.modules.auth.models import User
+
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,9 +46,9 @@ logger = structlog.get_logger(__name__)
 
 @dataclass(slots=True)
 class PreparedChatReply:
-    user: object
-    conversation: object
-    user_message: object
+    user: User
+    conversation: Conversation
+    user_message: ConversationMessage
     route: str
     route_reason: str
     route_confidence: float
@@ -47,8 +56,8 @@ class PreparedChatReply:
     retrieval_details: dict
     model_settings: dict
     trace_metadata: dict
-    messages: list
-    model: object
+    messages: PromptValue
+    model: BaseChatModel
 
 
 async def reply(

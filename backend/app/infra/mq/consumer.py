@@ -1,4 +1,4 @@
-"""RocketMQ 5.x gRPC consumer using SimpleConsumer (long-polling)."""
+"""Kafka consumer backed by aiokafka."""
 
 from __future__ import annotations
 
@@ -10,19 +10,18 @@ from typing import Any
 
 import structlog
 
-from app.infra.mq.rocketmq_client import _build_client_config
+from app.core.config import get_settings
+from app.infra.mq.kafka_client import decode_header, resolve_bootstrap_servers
+from app.infra.mq.message import KAFKA_HEADER_TAG
+from app.infra.telemetry.metrics import observe_mq_consume
 
 logger = structlog.get_logger(__name__)
 
 MessageHandler = Callable[[dict[str, Any]], Any]
 
 
-class RocketMQConsumer:
-    """Wraps the rocketmq-python-client v5 ``SimpleConsumer``.
-
-    The v5 Python SDK does NOT provide PushConsumer; only SimpleConsumer
-    (long-polling) is available.  We poll in a loop inside ``start()``.
-    """
+class KafkaConsumer:
+    """Kafka consumer that dispatches messages by tag header."""
 
     def __init__(self, group_id: str, topic: str, **kwargs: Any) -> None:
         self._group_id = group_id
@@ -30,107 +29,158 @@ class RocketMQConsumer:
         self._handlers: dict[str, MessageHandler] = {}
         self._consumer = None
         self._running = False
-        self._kwargs = kwargs
+        self._poll_timeout_ms = int(kwargs.pop("poll_timeout_ms", 1000))
+        self._max_records = int(kwargs.pop("max_records", 16))
+        self._consumer_kwargs = kwargs
 
     def register_handler(self, tag: str, handler: MessageHandler) -> None:
         self._handlers[tag] = handler
 
-    def _ensure_started(self):
+    async def _ensure_started(self):
         if self._consumer is not None:
             return self._consumer
 
-        from rocketmq import SimpleConsumer
+        from aiokafka import AIOKafkaConsumer
 
-        config = _build_client_config()
-        consumer = SimpleConsumer(config, self._group_id)
-        consumer.startup()
-        consumer.subscribe(self._topic)
+        settings = get_settings()
+        consumer = AIOKafkaConsumer(
+            self._topic,
+            bootstrap_servers=resolve_bootstrap_servers(settings),
+            group_id=self._group_id,
+            client_id=f"{self._group_id}-consumer",
+            enable_auto_commit=False,
+            auto_offset_reset=settings.kafka_auto_offset_reset,
+            request_timeout_ms=settings.kafka_request_timeout_ms,
+            **self._consumer_kwargs,
+        )
+        await consumer.start()
         self._consumer = consumer
         return consumer
 
-    def start(self) -> None:
-        """Start the consumer (creates and subscribes).
-
-        Callers should run ``poll_loop()`` in a thread to process messages.
-        """
-        self._ensure_started()
+    async def start(self) -> None:
+        await self._ensure_started()
         self._running = True
 
-    def poll_loop(self) -> None:
-        """Blocking loop that polls for messages and dispatches to handlers.
+    def request_shutdown(self) -> None:
+        self._running = False
 
-        Should be run in a dedicated thread.
-        """
+    async def poll_loop(self) -> None:
         consumer = self._consumer
         if consumer is None:
             return
 
-        invisible_duration = int(self._kwargs.get("invisible_duration", 300))
-        runner = asyncio.Runner()
-        try:
-            while self._running:
-                try:
-                    messages = consumer.receive(
-                        max_message_num=16,
-                        invisible_duration=invisible_duration,
-                    )
-                    if not messages:
-                        continue
-                    for msg in messages:
-                        tag = msg.tag or ""
-                        should_ack = False
+        from aiokafka.structs import OffsetAndMetadata
+
+        while self._running:
+            try:
+                records = await consumer.getmany(
+                    timeout_ms=self._poll_timeout_ms,
+                    max_records=self._max_records,
+                )
+                if not records:
+                    continue
+
+                for topic_partition, batch in records.items():
+                    for msg in batch:
+                        tag = decode_header(msg.headers, KAFKA_HEADER_TAG) or ""
+                        should_commit = False
                         try:
-                            body = json.loads(
-                                msg.body.decode("utf-8") if isinstance(msg.body, bytes) else msg.body
+                            if msg.value is None:
+                                continue
+                            if isinstance(msg.value, (bytes, bytearray)):
+                                raw_body = msg.value.decode("utf-8")
+                            elif isinstance(msg.value, str):
+                                raw_body = msg.value
+                            else:
+                                raw_body = str(msg.value)
+                            body = json.loads(raw_body)
+                        except (AttributeError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
+                            observe_mq_consume(
+                                topic=msg.topic,
+                                tag=tag or "unknown",
+                                status="decode_failed",
                             )
-                        except (json.JSONDecodeError, UnicodeDecodeError):
                             logger.warning(
                                 "mq.decode_failed",
-                                message_id=msg.message_id,
+                                topic=msg.topic,
+                                partition=msg.partition,
+                                offset=msg.offset,
                                 tag=tag,
                             )
-                            should_ack = True
+                            should_commit = True
                         else:
                             handler = self._handlers.get(tag)
-                            if handler is not None:
+                            if handler is None:
+                                observe_mq_consume(
+                                    topic=msg.topic,
+                                    tag=tag or "unknown",
+                                    status="no_handler",
+                                )
+                                logger.warning(
+                                    "mq.no_handler",
+                                    topic=msg.topic,
+                                    partition=msg.partition,
+                                    offset=msg.offset,
+                                    tag=tag,
+                                )
+                                should_commit = True
+                            else:
                                 try:
                                     result = handler(body)
                                     if inspect.isawaitable(result):
-                                        runner.run(result)
-                                    should_ack = True
+                                        await result
+                                    observe_mq_consume(
+                                        topic=msg.topic,
+                                        tag=tag or "unknown",
+                                        status="handled",
+                                    )
+                                    should_commit = True
                                 except Exception:
+                                    observe_mq_consume(
+                                        topic=msg.topic,
+                                        tag=tag or "unknown",
+                                        status="handler_error",
+                                    )
                                     logger.exception(
                                         "mq.handler_error",
-                                        message_id=msg.message_id,
+                                        topic=msg.topic,
+                                        partition=msg.partition,
+                                        offset=msg.offset,
                                         tag=tag,
                                     )
-                            else:
-                                logger.warning(
-                                    "mq.no_handler",
-                                    message_id=msg.message_id,
-                                    tag=tag,
-                                )
-                                should_ack = True
 
-                        if should_ack:
+                        if should_commit:
                             try:
-                                consumer.ack(msg)
+                                await consumer.commit(
+                                    {
+                                        topic_partition: OffsetAndMetadata(
+                                            msg.offset + 1,
+                                            "",
+                                        )
+                                    }
+                                )
                             except Exception:
+                                observe_mq_consume(
+                                    topic=msg.topic,
+                                    tag=tag or "unknown",
+                                    status="commit_failed",
+                                )
                                 logger.exception(
-                                    "mq.ack_failed",
-                                    message_id=msg.message_id,
+                                    "mq.commit_failed",
+                                    topic=msg.topic,
+                                    partition=msg.partition,
+                                    offset=msg.offset,
                                     tag=tag,
                                 )
-                except Exception:
-                    if self._running:
-                        logger.exception("mq.poll_error")
-                        import time
-                        time.sleep(1)
-        finally:
-            runner.close()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if self._running:
+                    logger.exception("mq.poll_error")
+                    await asyncio.sleep(1)
 
-    def shutdown(self) -> None:
+    async def shutdown(self) -> None:
         self._running = False
         if self._consumer is not None:
-            self._consumer.shutdown()
+            await self._consumer.stop()
             self._consumer = None

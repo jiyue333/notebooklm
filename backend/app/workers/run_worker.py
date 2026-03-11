@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import signal
-import threading
+from contextlib import suppress
 
 import structlog
 
 from app.core.config import get_settings
 from app.infra.db.session import get_session_manager
-from app.infra.mq.consumer import RocketMQConsumer
+from app.infra.mq.consumer import KafkaConsumer
 from app.infra.mq.topics import (
     NOTEBOOK_ASYNC_TOPIC,
     TAG_ARTICLE_INGEST,
@@ -25,45 +26,44 @@ from app.workers.handlers.handle_search_deep import handle_search_deep
 logger = structlog.get_logger(__name__)
 
 
-def main() -> None:
+async def main() -> None:
     settings = get_settings()
     setup_logging(settings)
     configure_langsmith(settings)
     ensure_metrics_server(port=settings.worker_metrics_port)
+    setup_tracing(engine=get_session_manager().engine, settings=settings)
 
-    consumer = RocketMQConsumer(
+    consumer = KafkaConsumer(
         group_id="notebooklm-worker",
-        topic=settings.rocketmq_topic or NOTEBOOK_ASYNC_TOPIC,
-        invisible_duration=settings.rocketmq_consumer_invisible_duration_seconds,
+        topic=settings.kafka_topic or NOTEBOOK_ASYNC_TOPIC,
+        poll_timeout_ms=settings.kafka_consumer_poll_timeout_ms,
     )
     consumer.register_handler(TAG_SEARCH_DEEP, handle_search_deep)
     consumer.register_handler(TAG_ARTICLE_INGEST, handle_article_ingest)
     consumer.register_handler(TAG_ARTICLE_REINDEX, handle_article_reindex)
     consumer_available = True
+    consumer_task: asyncio.Task[None] | None = None
     try:
-        consumer.start()
+        await consumer.start()
     except ImportError as exc:
         consumer_available = False
         logger.warning("worker.consumer_unavailable", error=str(exc))
+    except Exception as exc:
+        consumer_available = False
+        logger.exception("worker.consumer_start_failed", error=str(exc))
     logger.info(
         "worker.started",
-        topic=settings.rocketmq_topic or NOTEBOOK_ASYNC_TOPIC,
+        topic=settings.kafka_topic or NOTEBOOK_ASYNC_TOPIC,
+        bootstrap_servers=settings.kafka_bootstrap_servers,
         consumer_available=consumer_available,
     )
 
-    stop_event = threading.Event()
-
-    # Start the poll loop in a background thread
-    poll_thread: threading.Thread | None = None
+    stop_event = asyncio.Event()
     if consumer_available:
-        def run_consumer_loop() -> None:
-            setup_tracing(engine=get_session_manager().engine, settings=settings)
-            consumer.poll_loop()
-
-        poll_thread = threading.Thread(
-            target=run_consumer_loop, name="mq-poll", daemon=True
+        consumer_task = asyncio.create_task(
+            consumer.poll_loop(),
+            name="kafka-poll",
         )
-        poll_thread.start()
 
     def shutdown_handler(signum, _frame) -> None:
         logger.info("worker.stopping", signal=signum)
@@ -73,15 +73,22 @@ def main() -> None:
     signal.signal(signal.SIGTERM, shutdown_handler)
 
     try:
-        stop_event.wait()
+        await stop_event.wait()
     finally:
         if consumer_available:
-            consumer.shutdown()
-        if poll_thread is not None:
-            poll_thread.join(timeout=5)
+            consumer.request_shutdown()
+        if consumer_task is not None:
+            try:
+                await asyncio.wait_for(consumer_task, timeout=5)
+            except TimeoutError:
+                consumer_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await consumer_task
+            finally:
+                await consumer.shutdown()
         shutdown_tracing()
         logger.info("worker.stopped")
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

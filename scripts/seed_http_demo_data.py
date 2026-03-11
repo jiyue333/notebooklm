@@ -11,7 +11,7 @@ from pathlib import Path
 
 from sqlalchemy import delete, or_
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_ROOT = REPO_ROOT / "backend"
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
@@ -29,7 +29,7 @@ from app.modules.notebooks.models import Article, Notebook
 from app.modules.search.file_storage import build_storage_key, store_file_bytes
 from app.modules.search.markdown_utils import compute_content_hash, extract_toc
 from app.modules.search.models import SearchResult, SearchSession
-from app.modules.settings.defaults import DEFAULT_USER_SETTINGS
+from app.modules.settings.defaults import get_default_user_settings
 
 DEMO_USER_ID = "10000000-0000-0000-0000-000000000001"
 NO_KEY_USER_ID = "10000000-0000-0000-0000-000000000002"
@@ -132,12 +132,14 @@ async def _seed_demo_rows(session) -> None:
     ready_hash = compute_content_hash(ready_markdown)
     file_hash = compute_content_hash(file_markdown)
 
+    default_settings = get_default_user_settings()
+
     demo_user = User(
         id=DEMO_USER_ID,
         name="demo-http",
         email="demo-http@example.com",
         password_hash=hash_password("demo-secret"),
-        settings_json=dict(DEFAULT_USER_SETTINGS),
+        settings_json=dict(default_settings),
         created_at=now - timedelta(days=10),
         updated_at=now - timedelta(hours=2),
     )
@@ -147,7 +149,7 @@ async def _seed_demo_rows(session) -> None:
         email="demo-nokey@example.com",
         password_hash=hash_password("demo-nokey-secret"),
         settings_json={
-            **DEFAULT_USER_SETTINGS,
+            **default_settings,
             "modelProvider": "ollama",
             "modelName": " ",
             "apiUrl": " ",
@@ -333,9 +335,9 @@ async def _seed_demo_rows(session) -> None:
         article_id=ARTICLE_READY_ID,
         content_hash=ready_hash,
         prompt_version=SUMMARY_PROMPT_VERSION,
-        model_provider=DEFAULT_USER_SETTINGS["modelProvider"],
-        model_name=DEFAULT_USER_SETTINGS["modelName"],
-        output_language=DEFAULT_USER_SETTINGS["outputLanguage"],
+        model_provider=default_settings["modelProvider"],
+        model_name=default_settings["modelName"],
+        output_language=default_settings["outputLanguage"],
         summary_text=_build_ready_summary(),
         created_at=now - timedelta(hours=3),
         updated_at=now - timedelta(hours=3),

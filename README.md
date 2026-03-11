@@ -1,14 +1,14 @@
 按这个顺序用就行。
 
 先确保基础环境已经起好：
-- PostgreSQL / Redis / MinIO / RocketMQ：用根目录的 [docker-compose.yml](/Users/taless/Code/notebooklm/docker-compose.yml)
+- PostgreSQL / Redis / MinIO / Kafka：用根目录的 [docker-compose.yml](/Users/taless/Code/notebooklm/docker-compose.yml)
 - 后端用 `conda notebooklm`
 - 后端环境文件参考 [backend/.env.example](/Users/taless/Code/notebooklm/backend/.env.example)
 
 **1. 启基础设施**
 ```bash
 cd /Users/taless/Code/notebooklm
-docker compose up -d postgres redis minio rocketmq-namesrv rocketmq-broker
+docker compose up -d postgres redis minio kafka kafka-exporter
 ```
 
 如果你还没迁移数据库，再跑：

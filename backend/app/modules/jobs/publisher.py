@@ -4,8 +4,8 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.infra.mq.producer import RocketMQProducer
-from app.infra.mq.rocketmq_client import RocketMQMessage
+from app.infra.mq.message import MQMessage
+from app.infra.mq.producer import KafkaProducer
 from app.infra.mq.topics import (
     TAG_ARTICLE_INGEST,
     TAG_ARTICLE_REINDEX,
@@ -24,11 +24,11 @@ JOB_TAG_MAP = {
 }
 
 
-def _build_message(job: Job) -> RocketMQMessage:
+def _build_message(job: Job) -> MQMessage:
     tag = JOB_TAG_MAP[job.job_type]
     body = {"jobId": job.id, **job.payload_json}
-    return RocketMQMessage(
-        topic=get_settings().rocketmq_topic,
+    return MQMessage(
+        topic=get_settings().kafka_topic,
         tag=tag,
         body=body,
         keys=[job.id, job.dedupe_key],
@@ -39,10 +39,10 @@ async def publish_jobs(session: AsyncSession, jobs: list[Job]) -> None:
     if not jobs:
         return
 
-    producer = RocketMQProducer(group_id="notebooklm-api")
+    producer = KafkaProducer(client_id="notebooklm-api")
     try:
         for job in jobs:
-            producer.publish(_build_message(job))
+            await producer.publish(_build_message(job))
             await repo.mark_job_queued(job)
     except ImportError as exc:
         logger.warning("jobs.publish_unavailable", error=str(exc))
@@ -73,7 +73,7 @@ async def publish_jobs(session: AsyncSession, jobs: list[Job]) -> None:
                     )
                     await repo.mark_job_pending_publish(job, error=str(exc))
     finally:
-        producer.shutdown()
+        await producer.shutdown()
 
 
 async def republish_pending_jobs(session: AsyncSession, *, limit: int = 100) -> int:

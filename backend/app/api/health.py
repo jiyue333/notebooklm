@@ -5,7 +5,7 @@ from prometheus_client import CONTENT_TYPE_LATEST
 
 from app.api.response import success_response
 from app.core.config import get_settings
-from app.infra.mq.rocketmq_client import probe_rocketmq_client
+from app.infra.mq.kafka_client import probe_kafka_broker, probe_kafka_client
 from app.infra.telemetry.metrics import render_metrics
 from app.infra.telemetry.tracing import resolve_otlp_trace_endpoint
 
@@ -27,17 +27,19 @@ async def health_check() -> dict:
 @router.get("/ready")
 async def readiness_check() -> dict:
     settings = get_settings()
-    rocketmq_available, rocketmq_error = probe_rocketmq_client()
+    kafka_available, kafka_error = probe_kafka_client()
+    broker_reachable, broker_error = await probe_kafka_broker(settings)
     return success_response(
         item={
             "status": "ready",
             "dependencies": {
                 "database": "configured",
                 "redis": "configured",
-                "rocketmq": {
-                    "endpoint": settings.rocketmq_proxy_endpoint,
-                    "clientAvailable": rocketmq_available,
-                    "error": rocketmq_error,
+                "kafka": {
+                    "bootstrapServers": settings.kafka_bootstrap_servers,
+                    "clientAvailable": kafka_available,
+                    "brokerReachable": broker_reachable,
+                    "error": kafka_error or broker_error,
                 },
                 "objectStorage": settings.object_storage_bucket,
                 "searchCredentialSource": "database",

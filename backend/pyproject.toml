@@ -9,6 +9,7 @@ description = "Backend scaffold for the NotebookLM research workspace"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "aiokafka>=0.12.0",
   "alembic>=1.14.1",
   "asyncpg>=0.30.0",
   "cryptography>=44.0.2",
@@ -33,7 +34,6 @@ dependencies = [
   "pydantic-settings>=2.8.1",
   "python-multipart>=0.0.20",
   "redis>=5.2.1",
-  "rocketmq-python-client>=5.1.0",
   "sqlalchemy>=2.0.39",
   "structlog>=25.2.0",
   "uvicorn[standard]>=0.34.0",

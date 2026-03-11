@@ -107,6 +107,22 @@ SCHEDULER_ACTION_COUNTER = Counter(
     "Scheduler actions by category",
     ["action"],
 )
+MQ_PUBLISH_COUNTER = Counter(
+    "notebooklm_mq_publish_total",
+    "Message publish outcomes",
+    ["topic", "tag", "status"],
+)
+MQ_PUBLISH_DURATION = Histogram(
+    "notebooklm_mq_publish_duration_ms",
+    "Message publish latency in milliseconds",
+    ["topic", "tag", "status"],
+    buckets=LATENCY_MS_BUCKETS,
+)
+MQ_CONSUME_COUNTER = Counter(
+    "notebooklm_mq_consume_total",
+    "Message consume outcomes",
+    ["topic", "tag", "status"],
+)
 
 
 def observe_http_request(*, method: str, path: str, status_code: int, duration_ms: float) -> None:
@@ -186,6 +202,15 @@ def observe_llm_call(
 def observe_scheduler_action(*, action: str, count: int) -> None:
     if count:
         SCHEDULER_ACTION_COUNTER.labels(action=action).inc(count)
+
+
+def observe_mq_publish(*, topic: str, tag: str, status: str, duration_ms: float) -> None:
+    MQ_PUBLISH_COUNTER.labels(topic=topic, tag=tag, status=status).inc()
+    MQ_PUBLISH_DURATION.labels(topic=topic, tag=tag, status=status).observe(duration_ms)
+
+
+def observe_mq_consume(*, topic: str, tag: str, status: str) -> None:
+    MQ_CONSUME_COUNTER.labels(topic=topic, tag=tag, status=status).inc()
 
 
 def render_metrics() -> bytes:

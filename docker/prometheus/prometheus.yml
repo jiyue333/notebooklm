@@ -22,6 +22,12 @@ scrape_configs:
         labels:
           service: scheduler
 
+  - job_name: kafka
+    static_configs:
+      - targets: ["kafka-exporter:9308"]
+        labels:
+          service: kafka
+
   - job_name: prometheus
     static_configs:
       - targets: ["prometheus:9090"]

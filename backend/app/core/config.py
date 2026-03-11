@@ -54,9 +54,11 @@ class Settings(BaseSettings):
     summary_cache_ttl_days: int = 30
     scheduler_failed_job_retention_days: int = 14
 
-    rocketmq_proxy_endpoint: str = "127.0.0.1:8081"
-    rocketmq_topic: str = "notebook_async"
-    rocketmq_consumer_invisible_duration_seconds: int = 300
+    kafka_bootstrap_servers: str = "127.0.0.1:29092"
+    kafka_topic: str = "notebook_async"
+    kafka_consumer_poll_timeout_ms: int = 1000
+    kafka_request_timeout_ms: int = 10000
+    kafka_auto_offset_reset: str = "earliest"
 
     object_storage_endpoint: str = "127.0.0.1:9000"
     object_storage_access_key: str = "minioadmin"

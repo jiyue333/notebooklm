@@ -1,61 +1,79 @@
-"""RocketMQ 5.x gRPC producer."""
+"""Kafka producer backed by aiokafka."""
 
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any
 
 import structlog
 
-from app.infra.mq.rocketmq_client import RocketMQMessage, _build_client_config
+from app.core.config import get_settings
+from app.infra.mq.kafka_client import resolve_bootstrap_servers
+from app.infra.mq.message import MQMessage
+from app.infra.telemetry.metrics import observe_mq_publish
 
 logger = structlog.get_logger(__name__)
 
 
-class RocketMQProducer:
-    """Wraps the rocketmq-python-client v5 ``Producer``."""
+class KafkaProducer:
+    """Thin Kafka producer wrapper for NotebookLM jobs."""
 
-    def __init__(self, group_id: str, topics: tuple[str, ...] | None = None, **kwargs: Any) -> None:
-        self._group_id = group_id
-        self._topics = topics
+    def __init__(self, client_id: str, **kwargs: Any) -> None:
+        self._client_id = client_id
         self._producer = None
-        self._kwargs = kwargs
+        self._producer_kwargs = kwargs
 
-    def _ensure_started(self):
+    async def _ensure_started(self):
         if self._producer is not None:
             return self._producer
 
-        from rocketmq import Producer
-        from app.core.config import get_settings
+        from aiokafka import AIOKafkaProducer
 
-        config = _build_client_config()
-        # Producer requires declaring which topics it intends to publish to.
-        topics = self._topics if self._topics is not None else (get_settings().rocketmq_topic,)
-        producer = Producer(config, topics=topics)
-        producer.startup()
+        settings = get_settings()
+        producer = AIOKafkaProducer(
+            bootstrap_servers=resolve_bootstrap_servers(settings),
+            client_id=self._client_id,
+            request_timeout_ms=settings.kafka_request_timeout_ms,
+            **self._producer_kwargs,
+        )
+        await producer.start()
         self._producer = producer
         return producer
 
-    def publish(self, message: RocketMQMessage) -> None:
-        producer = self._ensure_started()
+    async def publish(self, message: MQMessage) -> None:
+        producer = await self._ensure_started()
+        started_at = perf_counter()
+        try:
+            result = await producer.send_and_wait(
+                message.topic,
+                value=message.serialize(),
+                key=message.kafka_key,
+                headers=message.kafka_headers(),
+            )
+        except Exception:
+            observe_mq_publish(
+                topic=message.topic,
+                tag=message.tag,
+                status="failed",
+                duration_ms=(perf_counter() - started_at) * 1000,
+            )
+            raise
 
-        from rocketmq import Message as RMQMessage
-
-        msg = RMQMessage()
-        msg.topic = message.topic
-        msg.body = message.serialize()
-        msg.tag = message.tag
-        if message.keys:
-            msg.keys = message.keys[0] if len(message.keys) == 1 else ",".join(message.keys)
-
-        result = producer.send(msg)
+        observe_mq_publish(
+            topic=message.topic,
+            tag=message.tag,
+            status="sent",
+            duration_ms=(perf_counter() - started_at) * 1000,
+        )
         logger.debug(
             "mq.message_sent",
             topic=message.topic,
             tag=message.tag,
-            message_id=str(result),
+            partition=result.partition,
+            offset=result.offset,
         )
 
-    def shutdown(self) -> None:
+    async def shutdown(self) -> None:
         if self._producer is not None:
-            self._producer.shutdown()
+            await self._producer.stop()
             self._producer = None
