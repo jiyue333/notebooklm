@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import useEscapeToClose from '../hooks/useEscapeToClose';
 import './NotebookModal.css';
 
 export default function NotebookModal({ mode = 'create', notebook, onClose, onSave, onDelete }) {
@@ -7,6 +8,8 @@ export default function NotebookModal({ mode = 'create', notebook, onClose, onSa
     const [color, setColor] = useState(notebook?.color || '#8B7355');
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState('');
+
+    useEscapeToClose(onClose, !isSaving);
 
     const handleSave = async () => {
         try {

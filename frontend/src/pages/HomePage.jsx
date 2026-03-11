@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../contexts/useTheme';
-import { appApi } from '../services/appApi';
+import { appApi, clearStoredSession, isAuthError } from '../services/appApi';
 import SettingsModal from '../components/SettingsModal';
 import NotebookModal from '../components/NotebookModal';
 import './HomePage.css';
@@ -17,6 +17,11 @@ export default function HomePage() {
     const [isCreatingNotebook, setIsCreatingNotebook] = useState(false);
     const [notebookModalState, setNotebookModalState] = useState(null);
     const [error, setError] = useState('');
+
+    const redirectToLogin = () => {
+        clearStoredSession();
+        navigate('/login', { replace: true });
+    };
 
     useEffect(() => {
         let isMounted = true;
@@ -34,6 +39,10 @@ export default function HomePage() {
                 setNotebooks(notebookItems);
             } catch (err) {
                 if (!isMounted) return;
+                if (isAuthError(err)) {
+                    redirectToLogin();
+                    return;
+                }
                 setError(err.message || '加载首页数据失败');
             } finally {
                 if (isMounted) setIsLoading(false);
@@ -58,6 +67,10 @@ export default function HomePage() {
             setNotebooks((prev) => [notebook, ...prev]);
             navigate(`/notebook/${notebook.id}`);
         } catch (err) {
+            if (isAuthError(err)) {
+                redirectToLogin();
+                return;
+            }
             setError(err.message || '创建笔记本失败');
         } finally {
             setIsCreatingNotebook(false);
@@ -74,6 +87,10 @@ export default function HomePage() {
             });
             setNotebooks((prev) => prev.map((item) => (item.id === notebook.id ? { ...item, ...notebook } : item)));
         } catch (err) {
+            if (isAuthError(err)) {
+                redirectToLogin();
+                return;
+            }
             setError(err.message || '更新笔记本失败');
             throw err;
         }
@@ -85,6 +102,10 @@ export default function HomePage() {
             await appApi.notebooks.remove(notebookId);
             setNotebooks((prev) => prev.filter((item) => item.id !== notebookId));
         } catch (err) {
+            if (isAuthError(err)) {
+                redirectToLogin();
+                return;
+            }
             setError(err.message || '删除笔记本失败');
             throw err;
         }

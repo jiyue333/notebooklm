@@ -1,17 +1,23 @@
 from __future__ import annotations
 
-DEFAULT_USER_SETTINGS = {
-    "outputLanguage": "中文",
-    "themeColor": "ocean",
-    "colorMode": "light",
-    "modelProvider": "openai_compatible",
-    "modelName": "gpt-4o",
-    "apiUrl": "http://host.docker.internal:8317/v1/chat/completions",
-    "searchProvider": "exa",
-    "embeddingProvider": "openai_compatible",
-    "embeddingModel": "text-embedding-3-large",
-    "embeddingApiUrl": "https://api.openai.com/v1",
-}
+from app.core.config import get_settings
+
+
+def get_default_user_settings() -> dict:
+    settings = get_settings()
+    return {
+        "outputLanguage": "中文",
+        "themeColor": "ocean",
+        "colorMode": "light",
+        "modelProvider": settings.default_chat_provider,
+        "modelName": settings.default_chat_model_name,
+        "apiUrl": settings.default_chat_api_url,
+        "searchProvider": settings.default_search_provider,
+        "embeddingProvider": settings.default_embedding_provider,
+        "embeddingModel": settings.default_embedding_model_name,
+        "embeddingApiUrl": settings.default_embedding_api_url,
+    }
+
 
 SETTINGS_FIELDS = {
     "outputLanguage",

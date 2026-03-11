@@ -2,16 +2,34 @@
   "annotations": { "list": [] },
   "editable": true,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
+  "graphTooltip": 1,
   "id": null,
   "links": [],
   "panels": [
     {
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "options": {
+        "content": "### How To Read\n- **LLM Calls (Last 1h)**: 最近 1 小时不同操作的调用次数。\n- **LLM Latency P95**: 过去 5 分钟内，95% 的 LLM 调用在该耗时内完成。\n- **LLM Token Usage (Last 1h)**: 最近 1 小时的 prompt/completion/total token 消耗。\n- **Scheduler Actions (Last 1h)**: 定时维护动作，例如清理 summary cache。",
+        "mode": "markdown"
+      },
+      "title": "How To Read",
+      "transparent": true,
+      "type": "text"
+    },
+    {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": {}, "overrides": [] },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "description": "最近 1 小时 LLM 调用次数。关注 error 系列是否上升，以及 summary/chat/translate 哪类操作最重。",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
       "id": 1,
-      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
         {
           "expr": "sum by (operation, provider, model, status) (increase(notebooklm_llm_calls_total[1h]))",
@@ -19,15 +37,22 @@
           "refId": "A"
         }
       ],
-      "title": "LLM Calls",
+      "title": "LLM Calls (Last 1h)",
       "type": "timeseries"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "description": "LLM 调用的 P95 延迟，单位毫秒。重点看 success 曲线；error 曲线变高通常伴随 provider 波动。",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
       "id": 2,
-      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum by (le, operation, provider, model, status) (rate(notebooklm_llm_call_duration_ms_bucket[5m])))",
@@ -40,8 +65,15 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": {}, "overrides": [] },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "description": "最近 1 小时 token 消耗。用于判断哪个模型和操作最烧 token。",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
       "id": 3,
       "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single" } },
       "targets": [
@@ -51,15 +83,22 @@
           "refId": "A"
         }
       ],
-      "title": "LLM Token Usage",
+      "title": "LLM Token Usage (Last 1h)",
       "type": "barchart"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": {}, "overrides": [] },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "description": "最近 1 小时 scheduler 的维护动作计数。当前主要用于 summary cache 等周期清理。",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
       "id": 4,
-      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
         {
           "expr": "sum by (action) (increase(notebooklm_scheduler_actions_total[1h]))",
@@ -67,7 +106,7 @@
           "refId": "A"
         }
       ],
-      "title": "Scheduler Actions",
+      "title": "Scheduler Actions (Last 1h)",
       "type": "timeseries"
     }
   ],
@@ -77,9 +116,9 @@
   "tags": ["notebooklm", "llm"],
   "templating": { "list": [] },
   "time": { "from": "now-6h", "to": "now" },
-  "timezone": "",
+  "timezone": "browser",
   "title": "NotebookLM LLM",
   "uid": "notebooklm-llm",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

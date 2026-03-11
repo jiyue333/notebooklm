@@ -7,6 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import Settings, get_settings
+from app.infra.db.models import import_models
 
 
 class DatabaseSessionManager:
@@ -44,6 +45,7 @@ class DatabaseSessionManager:
 
 @lru_cache
 def get_session_manager() -> DatabaseSessionManager:
+    import_models()
     return DatabaseSessionManager(get_settings())
 
 

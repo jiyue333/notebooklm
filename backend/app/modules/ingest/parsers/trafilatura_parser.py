@@ -2,7 +2,10 @@ from __future__ import annotations
 
 
 def fetch_markdown_with_trafilatura(*, url: str) -> tuple[str | None, str]:
-    import trafilatura
+    try:
+        import trafilatura
+    except ModuleNotFoundError:
+        return None, "trafilatura"
 
     downloaded = trafilatura.fetch_url(url)
     if not downloaded:

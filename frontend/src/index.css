@@ -22,6 +22,23 @@
   --danger-color: #c0392b;
 }
 
+/* ---------- Accent color themes ---------- */
+[data-accent="default"] {
+  --accent-color: #8b2c3b;
+}
+[data-accent="forest"] {
+  --accent-color: #355F2E;
+}
+[data-accent="ocean"] {
+  --accent-color: #133E87;
+}
+[data-accent="lavender"] {
+  --accent-color: #52357B;
+}
+[data-accent="mono"] {
+  --accent-color: #444444;
+}
+
 /* Dark theme */
 [data-theme="dark"] {
   --bg-color: #1a1d22;
@@ -36,6 +53,23 @@
   --hover-bg: rgba(255, 255, 255, 0.06);
   --card-shadow: 0 2px 6px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   --card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+/* Dark-mode accent overrides */
+[data-theme="dark"][data-accent="default"] {
+  --accent-color: #e07080;
+}
+[data-theme="dark"][data-accent="forest"] {
+  --accent-color: #6bbd5e;
+}
+[data-theme="dark"][data-accent="ocean"] {
+  --accent-color: #5b8def;
+}
+[data-theme="dark"][data-accent="lavender"] {
+  --accent-color: #a48de0;
+}
+[data-theme="dark"][data-accent="mono"] {
+  --accent-color: #a0a0a0;
 }
 
 /* ---------- Reset & Base ---------- */

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import AppError
@@ -13,21 +13,28 @@ from app.modules.auth.security import hash_password, verify_password
 from app.modules.auth.service import build_user_view
 from app.modules.jobs import publisher as job_publisher
 from app.modules.jobs import repo as jobs_repo
-from app.modules.notebooks.models import Article
+from app.modules.notebooks.models import Article, ArticleChunk
 from app.modules.settings.crypto import get_credential_crypto
-from app.modules.settings.defaults import DEFAULT_USER_SETTINGS, SETTINGS_FIELDS
+from app.modules.settings.defaults import SETTINGS_FIELDS, get_default_user_settings
 from app.modules.settings.runtime import (
     build_credential_state,
     get_merged_user_settings,
     normalize_chat_provider,
     normalize_embedding_provider,
-    resolve_embedding_runtime_config,
+    resolve_embedding_profile_key_from_merged,
+    resolve_embedding_runtime_config_from_merged,
 )
+
+MODEL_SETTINGS_FIELDS = ("modelProvider", "modelName", "apiUrl")
+SEARCH_SETTINGS_FIELDS = ("searchProvider",)
+EMBEDDING_SETTINGS_FIELDS = ("embeddingProvider", "embeddingModel", "embeddingApiUrl")
 
 
 def build_settings_view(user: User) -> dict:
     merged = get_merged_user_settings(user)
+    user_settings = user.settings_json or {}
     system_settings = get_system_settings()
+    default_settings = get_default_user_settings()
     chat_provider = normalize_chat_provider(merged["modelProvider"])
     embedding_provider = normalize_embedding_provider(merged.get("embeddingProvider"))
     chat_key_state = build_credential_state(
@@ -62,9 +69,22 @@ def build_settings_view(user: User) -> dict:
         "modelName": merged["modelName"],
         "apiUrl": merged["apiUrl"],
         "searchProvider": merged.get("searchProvider", "exa"),
+        "usingDefaultModelConfig": not any(field in user_settings for field in {"modelProvider", "modelName", "apiUrl"}),
+        "defaultModelProvider": default_settings["modelProvider"],
+        "defaultModelName": default_settings["modelName"],
+        "defaultApiUrl": default_settings["apiUrl"],
         "embeddingProvider": embedding_provider,
         "embeddingModel": merged["embeddingModel"],
         "embeddingApiUrl": merged["embeddingApiUrl"],
+        "usingDefaultSearchConfig": "searchProvider" not in user_settings,
+        "defaultSearchProvider": default_settings["searchProvider"],
+        "usingDefaultEmbeddingConfig": not any(
+            field in user_settings for field in {"embeddingProvider", "embeddingModel", "embeddingApiUrl"}
+        ),
+        "defaultEmbeddingProvider": default_settings["embeddingProvider"],
+        "defaultEmbeddingModel": default_settings["embeddingModel"],
+        "defaultEmbeddingApiUrl": default_settings["embeddingApiUrl"],
+        "embeddingOutputDimensions": system_settings.embedding_output_dimensions,
         "hasApiKey": chat_key_state["hasEffectiveKey"],
         "hasCustomApiKey": chat_key_state["hasCustomKey"],
         "usingDefaultApiKey": chat_key_state["usingDefaultKey"],
@@ -91,28 +111,64 @@ async def update_settings(
     user: User,
     payload: dict,
 ) -> dict:
-    embedding_settings_changed = any(
-        key in payload
-        for key in {
-            "embeddingProvider",
-            "embeddingModel",
-            "embeddingApiUrl",
-            "embeddingApiKey",
-            "clearEmbeddingApiKey",
-        }
-    )
-    settings_json = {**DEFAULT_USER_SETTINGS, **(user.settings_json or {})}
+    default_settings = get_default_user_settings()
+    stored_settings = {**(user.settings_json or {})}
+    settings_json = {**stored_settings}
+    use_default_model_config = bool(payload.get("useDefaultModelConfig"))
+    use_default_search_config = bool(payload.get("useDefaultSearchConfig"))
+    use_default_embedding_config = bool(payload.get("useDefaultEmbeddingConfig"))
+
     for field in SETTINGS_FIELDS:
+        if use_default_model_config and field in MODEL_SETTINGS_FIELDS:
+            continue
+        if use_default_search_config and field in SEARCH_SETTINGS_FIELDS:
+            continue
+        if use_default_embedding_config and field in EMBEDDING_SETTINGS_FIELDS:
+            continue
         if field in payload and payload[field] is not None:
             settings_json[field] = payload[field]
 
-    if settings_json.get("searchProvider") != "exa":
+    if use_default_model_config:
+        _drop_settings_fields(settings_json, MODEL_SETTINGS_FIELDS)
+    if use_default_search_config:
+        _drop_settings_fields(settings_json, SEARCH_SETTINGS_FIELDS)
+    if use_default_embedding_config:
+        _drop_settings_fields(settings_json, EMBEDDING_SETTINGS_FIELDS)
+
+    effective_settings_json = {**default_settings, **settings_json}
+
+    if effective_settings_json.get("searchProvider") != "exa":
         raise AppError(422, "当前仅支持 Exa 作为搜索 Provider", code="invalid_search_provider")
+
+    current_embedding_profile_key = resolve_embedding_profile_key_from_merged(
+        merged=get_merged_user_settings(user),
+    )
+    next_embedding_profile_key = resolve_embedding_profile_key_from_merged(
+        merged=effective_settings_json,
+    )
+    next_embedding_runtime = resolve_embedding_runtime_config_from_merged(
+        merged=effective_settings_json,
+        user=user,
+    )
+    embedding_profile_changed = current_embedding_profile_key != next_embedding_profile_key
+
+    if embedding_profile_changed:
+        affected_article_count = await _count_reindexable_articles(session, user=user)
+        if affected_article_count > 0 and not payload.get("confirmEmbeddingReindex"):
+            raise AppError(
+                409,
+                "修改 Embedding 配置会清空旧向量并自动重建索引，请确认后继续。",
+                code="embedding_reindex_confirmation_required",
+                meta={
+                    "affectedArticleCount": affected_article_count,
+                    "nextEmbeddingProfileKey": next_embedding_profile_key,
+                },
+            )
 
     crypto = get_credential_crypto()
     now = datetime.now(UTC)
 
-    if payload.get("clearApiKey"):
+    if use_default_model_config or payload.get("clearApiKey"):
         user.llm_api_key_ciphertext = None
         user.llm_api_key_last4 = None
         user.llm_api_key_updated_at = now
@@ -122,7 +178,7 @@ async def update_settings(
         user.llm_api_key_last4 = api_key[-4:]
         user.llm_api_key_updated_at = now
 
-    if payload.get("clearSearchApiKey"):
+    if use_default_search_config or payload.get("clearSearchApiKey"):
         user.exa_api_key_ciphertext = None
         user.exa_api_key_last4 = None
         user.exa_api_key_updated_at = now
@@ -132,7 +188,7 @@ async def update_settings(
         user.exa_api_key_last4 = search_api_key[-4:]
         user.exa_api_key_updated_at = now
 
-    if payload.get("clearEmbeddingApiKey"):
+    if use_default_embedding_config or payload.get("clearEmbeddingApiKey"):
         user.embedding_api_key_ciphertext = None
         user.embedding_api_key_last4 = None
         user.embedding_api_key_updated_at = now
@@ -144,8 +200,13 @@ async def update_settings(
 
     user.settings_json = settings_json
     reindex_jobs = []
-    if embedding_settings_changed:
-        reindex_jobs = await _schedule_embedding_reindex(session, user=user)
+    if embedding_profile_changed:
+        await _clear_existing_embeddings(session, user=user, next_runtime=next_embedding_runtime)
+        reindex_jobs = await _schedule_embedding_reindex(
+            session,
+            user=user,
+            runtime_config=next_embedding_runtime,
+        )
     await session.commit()
     if reindex_jobs:
         try:
@@ -155,6 +216,11 @@ async def update_settings(
             await session.commit()
     await session.refresh(user)
     return build_settings_view(user)
+
+
+def _drop_settings_fields(settings_json: dict, fields: tuple[str, ...]) -> None:
+    for field in fields:
+        settings_json.pop(field, None)
 
 
 async def update_profile(session: AsyncSession, *, user: User, username: str) -> dict:
@@ -186,8 +252,49 @@ async def update_password(
     await session.commit()
 
 
-async def _schedule_embedding_reindex(session: AsyncSession, *, user: User) -> list:
-    runtime_config = resolve_embedding_runtime_config(user)
+async def _count_reindexable_articles(session: AsyncSession, *, user: User) -> int:
+    result = await session.execute(
+        select(Article.id).where(
+            Article.user_id == user.id,
+            Article.clean_markdown.is_not(None),
+        )
+    )
+    return len(list(result.scalars().all()))
+
+
+async def _clear_existing_embeddings(
+    session: AsyncSession,
+    *,
+    user: User,
+    next_runtime,
+) -> None:
+    article_result = await session.execute(
+        select(Article.id).where(
+            Article.user_id == user.id,
+            Article.clean_markdown.is_not(None),
+        )
+    )
+    article_ids = list(article_result.scalars().all())
+    if not article_ids:
+        return
+
+    await session.execute(
+        update(Article)
+        .where(Article.id.in_(article_ids))
+        .values(
+            article_vector=None,
+            embedding_provider=next_runtime.provider,
+            embedding_model=next_runtime.model_name,
+            embedding_profile_key=next_runtime.profile_key,
+            embedding_dimension=None,
+            index_status="stale",
+            chunk_status="stale",
+        )
+    )
+    await session.execute(delete(ArticleChunk).where(ArticleChunk.article_id.in_(article_ids)))
+
+
+async def _schedule_embedding_reindex(session: AsyncSession, *, user: User, runtime_config) -> list:
     result = await session.execute(
         select(Article).where(
             Article.user_id == user.id,

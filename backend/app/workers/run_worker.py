@@ -39,10 +39,27 @@ def main() -> None:
     consumer.register_handler(TAG_SEARCH_DEEP, handle_search_deep)
     consumer.register_handler(TAG_ARTICLE_INGEST, handle_article_ingest)
     consumer.register_handler(TAG_ARTICLE_REINDEX, handle_article_reindex)
-    consumer.start()
-    logger.info("worker.started", topic=settings.rocketmq_topic or NOTEBOOK_ASYNC_TOPIC)
+    consumer_available = True
+    try:
+        consumer.start()
+    except ImportError as exc:
+        consumer_available = False
+        logger.warning("worker.consumer_unavailable", error=str(exc))
+    logger.info(
+        "worker.started",
+        topic=settings.rocketmq_topic or NOTEBOOK_ASYNC_TOPIC,
+        consumer_available=consumer_available,
+    )
 
     stop_event = threading.Event()
+
+    # Start the poll loop in a background thread
+    poll_thread: threading.Thread | None = None
+    if consumer_available:
+        poll_thread = threading.Thread(
+            target=consumer.poll_loop, name="mq-poll", daemon=True
+        )
+        poll_thread.start()
 
     def shutdown_handler(signum, _frame) -> None:
         logger.info("worker.stopping", signal=signum)
@@ -54,7 +71,10 @@ def main() -> None:
     try:
         stop_event.wait()
     finally:
-        consumer.shutdown()
+        if consumer_available:
+            consumer.shutdown()
+        if poll_thread is not None:
+            poll_thread.join(timeout=5)
         shutdown_tracing()
         logger.info("worker.stopped")
 

@@ -7,13 +7,13 @@ const DEFAULT_SETTINGS = {
     outputLanguage: mockUser.settings?.outputLanguage || '中文',
     themeColor: 'ocean',
     colorMode: mockUser.settings?.theme || 'light',
-    modelProvider: 'openai_compatible',
-    modelName: mockUser.settings?.model || 'gpt-4o',
-    apiUrl: 'http://host.docker.internal:8317/v1/chat/completions',
+    modelProvider: 'ollama',
+    modelName: mockUser.settings?.model || 'qwen3.5:0.8b',
+    apiUrl: 'http://127.0.0.1:11434',
     searchProvider: 'exa',
-    embeddingProvider: 'openai_compatible',
-    embeddingModel: 'text-embedding-3-large',
-    embeddingApiUrl: 'https://api.openai.com/v1',
+    embeddingProvider: 'ollama',
+    embeddingModel: 'qwen3-embedding:0.6b',
+    embeddingApiUrl: 'http://127.0.0.1:11434',
     username: mockUser.name,
     apiKey: '',
     searchApiKey: '',
@@ -82,6 +82,12 @@ const clearStoredSession = () => {
     if (!storage) return;
     storage.removeItem(SESSION_STORAGE_KEY);
 };
+
+const isAuthError = (error) => (
+    error?.status === 401
+    || error?.code === 'auth_required'
+    || error?.code === 'invalid_token'
+);
 
 const formatTimestamp = (date = new Date()) => date.toLocaleString('zh-CN', {
     year: 'numeric',
@@ -177,9 +183,26 @@ const buildSettingsView = (user, settings) => ({
     modelName: settings.modelName,
     apiUrl: settings.apiUrl,
     searchProvider: settings.searchProvider || 'exa',
-    embeddingProvider: settings.embeddingProvider || 'openai_compatible',
-    embeddingModel: settings.embeddingModel || 'text-embedding-3-large',
-    embeddingApiUrl: settings.embeddingApiUrl || 'https://api.openai.com/v1',
+    usingDefaultModelConfig:
+        settings.modelProvider === DEFAULT_SETTINGS.modelProvider
+        && settings.modelName === DEFAULT_SETTINGS.modelName
+        && settings.apiUrl === DEFAULT_SETTINGS.apiUrl,
+    defaultModelProvider: DEFAULT_SETTINGS.modelProvider,
+    defaultModelName: DEFAULT_SETTINGS.modelName,
+    defaultApiUrl: DEFAULT_SETTINGS.apiUrl,
+    embeddingProvider: settings.embeddingProvider || DEFAULT_SETTINGS.embeddingProvider,
+    embeddingModel: settings.embeddingModel || DEFAULT_SETTINGS.embeddingModel,
+    embeddingApiUrl: settings.embeddingApiUrl || DEFAULT_SETTINGS.embeddingApiUrl,
+    usingDefaultSearchConfig: (settings.searchProvider || 'exa') === DEFAULT_SETTINGS.searchProvider,
+    defaultSearchProvider: DEFAULT_SETTINGS.searchProvider,
+    usingDefaultEmbeddingConfig:
+        (settings.embeddingProvider || DEFAULT_SETTINGS.embeddingProvider) === DEFAULT_SETTINGS.embeddingProvider
+        && (settings.embeddingModel || DEFAULT_SETTINGS.embeddingModel) === DEFAULT_SETTINGS.embeddingModel
+        && (settings.embeddingApiUrl || DEFAULT_SETTINGS.embeddingApiUrl) === DEFAULT_SETTINGS.embeddingApiUrl,
+    defaultEmbeddingProvider: DEFAULT_SETTINGS.embeddingProvider,
+    defaultEmbeddingModel: DEFAULT_SETTINGS.embeddingModel,
+    defaultEmbeddingApiUrl: DEFAULT_SETTINGS.embeddingApiUrl,
+    embeddingOutputDimensions: 1024,
     hasApiKey: Boolean(settings.apiKey),
     hasCustomApiKey: Boolean(settings.apiKey),
     usingDefaultApiKey: false,
@@ -261,6 +284,38 @@ const mockProvider = {
             ...mockState.user,
             name: username.trim(),
             email: `${username.trim()}@example.com`,
+        };
+        mockState.settings.username = username.trim();
+
+        const session = {
+            token: 'mock-token',
+            user: clone(mockState.user),
+        };
+        setStoredSession(session);
+        return session;
+    },
+
+    async lookupEmail({ email }) {
+        await wait(240);
+        if (!email?.trim()) {
+            throw new Error('请输入邮箱地址');
+        }
+        return {
+            email: email.trim().toLowerCase(),
+            exists: email.trim().toLowerCase() === mockState.user.email?.toLowerCase(),
+        };
+    },
+
+    async register({ username, email, password }) {
+        await wait(420);
+        if (!username?.trim() || !email?.trim() || !password?.trim()) {
+            throw new Error('请填写完整的注册信息');
+        }
+
+        mockState.user = {
+            ...mockState.user,
+            name: username.trim(),
+            email: email.trim().toLowerCase(),
         };
         mockState.settings.username = username.trim();
 
@@ -490,21 +545,51 @@ const mockProvider = {
         const nextSettings = {
             ...mockState.settings,
         };
-        if (payload.clearApiKey) {
+        if (payload.useDefaultModelConfig) {
+            nextSettings.modelProvider = DEFAULT_SETTINGS.modelProvider;
+            nextSettings.modelName = DEFAULT_SETTINGS.modelName;
+            nextSettings.apiUrl = DEFAULT_SETTINGS.apiUrl;
+            nextSettings.apiKey = '';
+        }
+        if (payload.useDefaultSearchConfig) {
+            nextSettings.searchProvider = DEFAULT_SETTINGS.searchProvider;
+            nextSettings.searchApiKey = '';
+        }
+        if (payload.useDefaultEmbeddingConfig) {
+            nextSettings.embeddingProvider = DEFAULT_SETTINGS.embeddingProvider;
+            nextSettings.embeddingModel = DEFAULT_SETTINGS.embeddingModel;
+            nextSettings.embeddingApiUrl = DEFAULT_SETTINGS.embeddingApiUrl;
+            nextSettings.embeddingApiKey = '';
+        }
+        const embeddingConfigChanged = ['embeddingProvider', 'embeddingModel', 'embeddingApiUrl']
+            .some((key) => nextSettings[key] !== mockState.settings[key]);
+        if (embeddingConfigChanged && !payload.confirmEmbeddingReindex) {
+            const error = new Error('修改 Embedding 配置会清空旧向量并自动重建索引，请确认后继续。');
+            error.status = 409;
+            error.code = 'embedding_reindex_confirmation_required';
+            error.meta = {
+                affectedArticleCount: mockState.notebooks.reduce(
+                    (sum, notebook) => sum + (notebook.articles?.length || 0),
+                    0,
+                ),
+            };
+            throw error;
+        }
+        if (payload.clearApiKey || payload.useDefaultModelConfig) {
             nextSettings.apiKey = '';
         } else if (payload.apiKey) {
             nextSettings.apiKey = payload.apiKey;
         } else {
             nextSettings.apiKey = mockState.settings.apiKey;
         }
-        if (payload.clearSearchApiKey) {
+        if (payload.clearSearchApiKey || payload.useDefaultSearchConfig) {
             nextSettings.searchApiKey = '';
         } else if (payload.searchApiKey) {
             nextSettings.searchApiKey = payload.searchApiKey;
         } else {
             nextSettings.searchApiKey = mockState.settings.searchApiKey;
         }
-        if (payload.clearEmbeddingApiKey) {
+        if (payload.clearEmbeddingApiKey || payload.useDefaultEmbeddingConfig) {
             nextSettings.embeddingApiKey = '';
         } else if (payload.embeddingApiKey) {
             nextSettings.embeddingApiKey = payload.embeddingApiKey;
@@ -519,6 +604,10 @@ const mockProvider = {
                 || key === 'clearSearchApiKey'
                 || key === 'embeddingApiKey'
                 || key === 'clearEmbeddingApiKey'
+                || key === 'useDefaultModelConfig'
+                || key === 'useDefaultSearchConfig'
+                || key === 'useDefaultEmbeddingConfig'
+                || key === 'confirmEmbeddingReindex'
             ) return;
             nextSettings[key] = value;
         });
@@ -564,6 +653,16 @@ const mockProvider = {
         return buildMockSummary(article);
     },
 
+    async streamSummary({ notebookId, articleId, onToken }) {
+        const result = await mockProvider.generateSummary({ notebookId, articleId });
+        const chunks = result.summary.match(/.{1,24}/g) || [];
+        for (const chunk of chunks) {
+            await wait(60);
+            onToken?.(chunk);
+        }
+        return result;
+    },
+
     async askAssistant({ notebookId, articleId, conversationId, message }) {
         await wait(850);
         const notebook = getNotebookRecord(notebookId);
@@ -582,6 +681,21 @@ const mockProvider = {
                 matchedBy: ['lexical', 'semantic'],
             }] : [],
         };
+    },
+
+    async streamAssistant({ notebookId, articleId, conversationId, message, onToken }) {
+        const result = await mockProvider.askAssistant({
+            notebookId,
+            articleId,
+            conversationId,
+            message,
+        });
+        const chunks = result.reply.match(/.{1,24}/g) || [];
+        for (const chunk of chunks) {
+            await wait(60);
+            onToken?.(chunk);
+        }
+        return result;
     },
 
     async translateArticle({ notebookId, articleId, targetLanguage }) {
@@ -609,9 +723,96 @@ const parseResponse = async (response) => {
     return text ? { message: text } : null;
 };
 
-const request = async (path, { method = 'GET', body, headers = {} } = {}) => {
+const buildRequestError = (response, payload) => {
+    const error = new Error(
+        payload?.message
+        || payload?.error?.message
+        || `请求失败 (${response.status})`,
+    );
+    error.status = response.status;
+    error.code = payload?.meta?.code || payload?.error?.code || null;
+    error.meta = payload?.meta || payload?.error?.meta || {};
+    return error;
+};
+
+const parseSseEvent = (rawEvent) => {
+    const lines = rawEvent.split(/\r?\n/);
+    let event = 'message';
+    const dataLines = [];
+
+    lines.forEach((line) => {
+        if (line.startsWith('event:')) {
+            event = line.slice(6).trim();
+            return;
+        }
+        if (line.startsWith('data:')) {
+            dataLines.push(line.slice(5).trimStart());
+        }
+    });
+
+    const rawData = dataLines.join('\n');
+    if (!rawData) {
+        return { event, payload: null };
+    }
+
+    try {
+        return { event, payload: JSON.parse(rawData) };
+    } catch {
+        return { event, payload: { message: rawData } };
+    }
+};
+
+const consumeSseStream = async (response, { onToken } = {}) => {
+    if (!response.body) {
+        throw new Error('流式响应不可用');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalPayload = null;
+
+    while (true) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+        let separatorIndex = buffer.indexOf('\n\n');
+        while (separatorIndex !== -1) {
+            const rawEvent = buffer.slice(0, separatorIndex).trim();
+            buffer = buffer.slice(separatorIndex + 2);
+
+            if (rawEvent) {
+                const { event, payload } = parseSseEvent(rawEvent);
+                if (event === 'token' && payload?.content) {
+                    onToken?.(payload.content, payload);
+                } else if (event === 'done') {
+                    finalPayload = payload;
+                } else if (event === 'error') {
+                    const error = new Error(payload?.message || '流式请求失败');
+                    error.status = payload?.status || 500;
+                    error.code = payload?.code || null;
+                    error.meta = payload?.meta || {};
+                    throw error;
+                }
+            }
+
+            separatorIndex = buffer.indexOf('\n\n');
+        }
+
+        if (done) {
+            break;
+        }
+    }
+
+    if (!finalPayload) {
+        throw new Error('流式响应异常结束');
+    }
+    return finalPayload;
+};
+
+const request = async (path, { method = 'GET', body, headers = {}, timeoutMs = runtimeConfig.requestTimeoutMs } = {}) => {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), runtimeConfig.requestTimeoutMs);
+    const timeout = setTimeout(() => controller.abort('request_timeout'), timeoutMs);
     const session = getStoredSession();
     const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
 
@@ -629,14 +830,22 @@ const request = async (path, { method = 'GET', body, headers = {} } = {}) => {
 
         const payload = await parseResponse(response);
         if (!response.ok) {
-            throw new Error(
-                payload?.message
-                || payload?.error?.message
-                || `请求失败 (${response.status})`,
-            );
+            throw buildRequestError(response, payload);
         }
 
         return payload;
+    } catch (error) {
+        const isAbortError = error?.name === 'AbortError'
+            || error?.code === 20
+            || controller.signal.aborted;
+        if (isAbortError) {
+            const timeoutError = new Error(`请求超时（>${timeoutMs}ms），请稍后重试`);
+            timeoutError.status = 408;
+            timeoutError.code = 'request_timeout';
+            timeoutError.meta = { path, method, timeoutMs };
+            throw timeoutError;
+        }
+        throw error;
     } finally {
         clearTimeout(timeout);
     }
@@ -670,6 +879,21 @@ const pollSearchSession = async (fetchSession, { intervalMs = 1000, maxAttempts 
 const backendProvider = {
     async login(credentials) {
         const payload = await request('/auth/login', { method: 'POST', body: credentials });
+        const session = {
+            token: payload.token,
+            user: payload.user,
+        };
+        setStoredSession(session);
+        return session;
+    },
+
+    async lookupEmail(payload) {
+        const response = await request('/auth/lookup-email', { method: 'POST', body: payload });
+        return response.item;
+    },
+
+    async register(credentials) {
+        const payload = await request('/auth/register', { method: 'POST', body: credentials });
         const session = {
             token: payload.token,
             user: payload.user,
@@ -772,6 +996,7 @@ const backendProvider = {
         const payload = await request(`/notebooks/${notebookId}/sources/import`, {
             method: 'POST',
             body: { searchSessionId, searchResultIds },
+            timeoutMs: 90_000,
         });
         return payload.item;
     },
@@ -792,6 +1017,7 @@ const backendProvider = {
         const payload = await request(`/notebooks/${notebookId}/sources/upload`, {
             method: 'POST',
             body: formData,
+            timeoutMs: 120_000,
         });
         return payload.item;
     },
@@ -837,22 +1063,57 @@ const backendProvider = {
     async generateSummary({ notebookId, articleId }) {
         const payload = await request(`/notebooks/${notebookId}/articles/${articleId}/summary`, {
             method: 'POST',
+            timeoutMs: 60_000,
         });
         return payload.item || payload;
+    },
+
+    async streamSummary({ notebookId, articleId, onToken }) {
+        const session = getStoredSession();
+        const response = await fetch(buildUrl(`/notebooks/${notebookId}/articles/${articleId}/summary/stream`), {
+            method: 'POST',
+            headers: {
+                ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
+            },
+        });
+        if (!response.ok) {
+            const payload = await parseResponse(response);
+            throw buildRequestError(response, payload);
+        }
+        return consumeSseStream(response, { onToken });
     },
 
     async askAssistant({ notebookId, articleId, conversationId, message }) {
         const payload = await request(`/notebooks/${notebookId}/chat`, {
             method: 'POST',
             body: { articleId, conversationId, message },
+            timeoutMs: 60_000,
         });
         return payload.item || payload;
+    },
+
+    async streamAssistant({ notebookId, articleId, conversationId, message, onToken }) {
+        const session = getStoredSession();
+        const response = await fetch(buildUrl(`/notebooks/${notebookId}/chat/stream`), {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
+            },
+            body: JSON.stringify({ articleId, conversationId, message }),
+        });
+        if (!response.ok) {
+            const payload = await parseResponse(response);
+            throw buildRequestError(response, payload);
+        }
+        return consumeSseStream(response, { onToken });
     },
 
     async translateArticle({ notebookId, articleId, targetLanguage }) {
         const payload = await request(`/notebooks/${notebookId}/articles/${articleId}/translate`, {
             method: 'POST',
             body: { targetLanguage },
+            timeoutMs: 60_000,
         });
         return payload.item || payload;
     },
@@ -864,6 +1125,8 @@ export const appApi = {
     runtime: runtimeConfig,
     auth: {
         login: provider.login,
+        lookupEmail: provider.lookupEmail,
+        register: provider.register,
         logout: provider.logout,
         getCurrentUser: provider.getCurrentUser,
     },
@@ -893,9 +1156,11 @@ export const appApi = {
     },
     ai: {
         generateSummary: provider.generateSummary,
+        streamSummary: provider.streamSummary,
         askAssistant: provider.askAssistant,
+        streamAssistant: provider.streamAssistant,
         translateArticle: provider.translateArticle,
     },
 };
 
-export { getStoredSession };
+export { clearStoredSession, getStoredSession, isAuthError };

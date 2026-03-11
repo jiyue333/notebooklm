@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import useEscapeToClose from '../hooks/useEscapeToClose';
 import './NoteModal.css';
 
 const Ic = {
@@ -13,12 +14,17 @@ const Ic = {
 export default function NoteModal({ note, onClose, onSave, onDelete }) {
     const [title, setTitle] = useState(note?.title || '');
     const [content, setContent] = useState(note?.content || '');
-    const [mode, setMode] = useState('edit'); // 'edit' | 'preview'
+    const [mode, setMode] = useState(note?.id ? 'preview' : 'edit'); // 'edit' | 'preview'
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState('');
+    const savingRef = useRef(false);
+
+    useEscapeToClose(onClose, !isSaving);
 
     const handleSave = async () => {
+        if (savingRef.current) return;
         try {
+            savingRef.current = true;
             setIsSaving(true);
             setError('');
             await onSave({ ...note, title: title.trim() || '无标题笔记', content });
@@ -26,28 +32,33 @@ export default function NoteModal({ note, onClose, onSave, onDelete }) {
         } catch (err) {
             setError(err.message || '保存笔记失败');
         } finally {
+            savingRef.current = false;
             setIsSaving(false);
         }
     };
 
     const handleDelete = async () => {
+        if (savingRef.current) return;
         if (onDelete && note?.id) {
             try {
+                savingRef.current = true;
                 setIsSaving(true);
                 setError('');
                 await onDelete(note.id);
             } catch (err) {
                 setError(err.message || '删除笔记失败');
+                savingRef.current = false;
                 setIsSaving(false);
                 return;
             }
         }
+        savingRef.current = false;
         setIsSaving(false);
         onClose();
     };
 
     return (
-        <div className="note-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+        <div className="note-modal-overlay" onClick={(e) => { if (!isSaving && e.target === e.currentTarget) onClose(); }}>
             <div className="note-modal">
                 <div className="note-modal-header">
                     <input
@@ -55,12 +66,14 @@ export default function NoteModal({ note, onClose, onSave, onDelete }) {
                         value={title}
                         onChange={(e) => setTitle(e.target.value)}
                         placeholder="笔记标题..."
+                        readOnly={mode === 'preview'}
                     />
                     <div className="note-modal-actions">
                         <button
                             className={`note-modal-tab ${mode === 'edit' ? 'active' : ''}`}
                             onClick={() => setMode('edit')}
                             title="编辑"
+                            disabled={isSaving}
                         >
                             {Ic.edit}
                             <span>编辑</span>
@@ -69,16 +82,17 @@ export default function NoteModal({ note, onClose, onSave, onDelete }) {
                             className={`note-modal-tab ${mode === 'preview' ? 'active' : ''}`}
                             onClick={() => setMode('preview')}
                             title="预览"
+                            disabled={isSaving}
                         >
                             {Ic.preview}
                             <span>预览</span>
                         </button>
                         {note?.id && (
-                            <button className="note-modal-del-btn" onClick={handleDelete} title="删除笔记">
+                            <button className="note-modal-del-btn" onClick={handleDelete} title="删除笔记" disabled={isSaving}>
                                 {Ic.del}
                             </button>
                         )}
-                        <button className="note-modal-close-btn" onClick={onClose} title="关闭">
+                        <button className="note-modal-close-btn" onClick={onClose} title="关闭" disabled={isSaving}>
                             {Ic.close}
                         </button>
                     </div>
@@ -90,7 +104,7 @@ export default function NoteModal({ note, onClose, onSave, onDelete }) {
                             value={content}
                             onChange={(e) => setContent(e.target.value)}
                             placeholder="在这里输入笔记内容... 支持 Markdown 格式"
-                            autoFocus
+                            autoFocus={mode === 'edit'}
                         />
                     ) : (
                         <div className="note-modal-preview">

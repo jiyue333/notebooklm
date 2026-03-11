@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import httpx
+
 from app.modules.settings.runtime import EmbeddingRuntimeConfig, resolve_embedding_runtime_config
 
 
@@ -32,13 +34,27 @@ class Embedder:
             return None
 
         if self._runtime_config.provider == "ollama":
-            from langchain_ollama import OllamaEmbeddings
-
-            embeddings = OllamaEmbeddings(
-                model=self._runtime_config.model_name,
+            timeout = httpx.Timeout(180.0, connect=10.0)
+            async with httpx.AsyncClient(
                 base_url=self._runtime_config.api_url,
+                timeout=timeout,
+                trust_env=False,
+            ) as client:
+                response = await client.post(
+                    "/api/embed",
+                    json={
+                        "model": self._runtime_config.model_name,
+                        "input": texts,
+                        "dimensions": self._runtime_config.output_dimensions,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+            embeddings = payload.get("embeddings") or []
+            return _validate_embedding_dimensions(
+                embeddings,
+                expected_dimensions=self._runtime_config.output_dimensions,
             )
-            return await embeddings.aembed_documents(texts)
 
         from langchain_openai import OpenAIEmbeddings
         from pydantic import SecretStr
@@ -50,4 +66,20 @@ class Embedder:
             api_key=api_key_secret,
             base_url=self._runtime_config.api_url,
         )
-        return await embeddings.aembed_documents(texts)
+        response = await embeddings.aembed_documents(texts)
+        return _validate_embedding_dimensions(
+            response,
+            expected_dimensions=self._runtime_config.output_dimensions,
+        )
+
+
+def _validate_embedding_dimensions(
+    embeddings: list[list[float]],
+    *,
+    expected_dimensions: int,
+) -> list[list[float]]:
+    if embeddings and len(embeddings[0]) != expected_dimensions:
+        raise RuntimeError(
+            f"embedding dimension mismatch: expected {expected_dimensions}, got {len(embeddings[0])}"
+        )
+    return embeddings

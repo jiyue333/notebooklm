@@ -41,12 +41,20 @@ class Settings(BaseSettings):
 
     llm_default_api_key: str | None = None
     embedding_default_api_key: str | None = None
+    default_chat_provider: str = "ollama"
+    default_chat_model_name: str = "qwen3.5:0.8b"
+    default_chat_api_url: str = "http://127.0.0.1:11434"
+    default_search_provider: str = "exa"
+    default_embedding_provider: str = "ollama"
+    default_embedding_model_name: str = "qwen3-embedding:0.6b"
+    default_embedding_api_url: str = "http://127.0.0.1:11434"
+    embedding_output_dimensions: int = 1024
     chunk_target_tokens: int = 600
     chunk_overlap_tokens: int = 80
     summary_cache_ttl_days: int = 30
     scheduler_failed_job_retention_days: int = 14
 
-    rocketmq_namesrv_addr: str = "127.0.0.1:9876"
+    rocketmq_proxy_endpoint: str = "127.0.0.1:8081"
     rocketmq_topic: str = "notebook_async"
 
     object_storage_endpoint: str = "127.0.0.1:9000"
@@ -58,7 +66,7 @@ class Settings(BaseSettings):
     file_storage_backend: str = "minio"
 
     log_level: str = "INFO"
-    log_json: bool = False
+    log_json: bool = True
     api_metrics_port: int = 8080
     worker_metrics_port: int = 9101
     scheduler_metrics_port: int = 9102
@@ -75,7 +83,12 @@ class Settings(BaseSettings):
     langsmith_tracing: bool = False
 
     cors_origins: list[str] = Field(
-        default_factory=lambda: ["http://127.0.0.1:5173", "http://localhost:5173"]
+        default_factory=lambda: [
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+            "http://127.0.0.1:5174",
+            "http://localhost:5174",
+        ]
     )
 
     @field_validator("cors_origins", mode="before")

@@ -42,6 +42,13 @@ def build_note_view(note: Note) -> dict:
 def build_article_view(article: Article) -> dict:
     published_or_created = article.published_at or article.created_at
     render_mode = guess_render_mode(file_mime=article.file_mime, file_name=article.file_name)
+    content_ready = article.parse_status == "ready" and bool((article.clean_markdown or "").strip())
+    if article.parse_status == "failed":
+        processing_hint = article.parse_error_message or "正文解析失败，请稍后重试或重新导入来源。"
+    elif content_ready:
+        processing_hint = ""
+    else:
+        processing_hint = "来源已导入，正在抓取和解析正文，请稍后刷新。"
     return {
         "id": article.id,
         "title": article.title,
@@ -56,8 +63,13 @@ def build_article_view(article: Article) -> dict:
             else None
         ),
         "fileMime": article.file_mime,
-        "content": article.clean_markdown or article.preview_markdown or "",
-        "toc": article.toc_json or [],
+        "content": article.clean_markdown if content_ready else "",
+        "toc": article.toc_json if content_ready else [],
+        "contentReady": content_ready,
+        "parseStatus": article.parse_status,
+        "chunkStatus": article.chunk_status,
+        "indexStatus": article.index_status,
+        "processingHint": processing_hint,
     }
 
 

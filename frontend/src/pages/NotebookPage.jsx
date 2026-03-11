@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTheme } from '../contexts/useTheme';
-import { appApi } from '../services/appApi';
+import { appApi, clearStoredSession, isAuthError } from '../services/appApi';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -87,6 +87,14 @@ function stripFirstH1(markdown) {
     return result.join('\n').replace(/^\n+/, '');
 }
 
+const createChatMessageId = () => `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const CHAT_ROUTE_LABELS = {
+    CURRENT_ARTICLE: '当前文章',
+    RELATED_ARTICLES: '相关文章',
+    EVIDENCE_LOOKUP: '证据检索',
+    GENERAL: '通用问题',
+};
+
 /* ============================================
    SVG Icons – Tidyflux filled style (currentColor)
    ============================================ */
@@ -156,6 +164,7 @@ export default function NotebookPage() {
     const [chatMessages, setChatMessages] = useState([]);
     const [chatConversationId, setChatConversationId] = useState(null);
     const [chatInput, setChatInput] = useState('');
+    const [isChatStreaming, setIsChatStreaming] = useState(false);
     const [showTranslation, setShowTranslation] = useState(false);
     const [translationText, setTranslationText] = useState('');
     const [translationLoading, setTranslationLoading] = useState(false);
@@ -175,6 +184,11 @@ export default function NotebookPage() {
     const [rightWidth, onRightResize] = useResizer('horizontal', 360, 260, 560, true);
     const [leftTopH, onLeftSplit] = useResizer('vertical', 440, 120, 650);
     const [rightTopH, onRightSplit] = useResizer('vertical', 440, 120, 650);
+
+    const redirectToLogin = useCallback(() => {
+        clearStoredSession();
+        navigate('/login', { replace: true });
+    }, [navigate]);
 
     // Close dropdown on outside click
     useEffect(() => {
@@ -213,6 +227,10 @@ export default function NotebookPage() {
                 syncNotebookState(detail);
             } catch (err) {
                 if (!isMounted) return;
+                if (isAuthError(err)) {
+                    redirectToLogin();
+                    return;
+                }
                 setPageError(err.message || '加载笔记本失败');
             } finally {
                 if (isMounted) setIsPageLoading(false);
@@ -223,7 +241,7 @@ export default function NotebookPage() {
         return () => {
             isMounted = false;
         };
-    }, [id, syncNotebookState]);
+    }, [id, redirectToLogin, syncNotebookState]);
 
     useEffect(() => {
         if (!notebook || !requestedArticleId) return;
@@ -245,12 +263,59 @@ export default function NotebookPage() {
         setTranslationError('');
     }, [selectedArticle?.id]);
 
+    useEffect(() => {
+        if (!id || !selectedArticle || selectedArticle.contentReady || selectedArticle.parseStatus === 'failed') {
+            return undefined;
+        }
+
+        let cancelled = false;
+        let timeoutId = null;
+
+        const pollArticleReady = async () => {
+            try {
+                const detail = await appApi.notebooks.getDetail(id);
+                if (cancelled) return;
+                syncNotebookState(detail);
+            } catch (err) {
+                if (cancelled) return;
+                if (isAuthError(err)) {
+                    redirectToLogin();
+                    return;
+                }
+            }
+
+            if (!cancelled) {
+                timeoutId = window.setTimeout(pollArticleReady, 2000);
+            }
+        };
+
+        timeoutId = window.setTimeout(pollArticleReady, 1200);
+        return () => {
+            cancelled = true;
+            if (timeoutId) {
+                window.clearTimeout(timeoutId);
+            }
+        };
+    }, [
+        id,
+        redirectToLogin,
+        selectedArticle?.contentReady,
+        selectedArticle?.id,
+        selectedArticle?.parseStatus,
+        syncNotebookState,
+    ]);
+
     const articleRenderMode = selectedArticle?.renderMode || 'markdown';
+    const articleContentReady = selectedArticle?.contentReady ?? Boolean(selectedArticle?.content?.trim());
+    const articleDisplayBlocked = Boolean(selectedArticle)
+        && articleRenderMode === 'markdown'
+        && !articleContentReady;
     const toc = useMemo(() => {
         if (showTranslation && translationText) {
             return extractToc(translationText);
         }
         if (!selectedArticle) return [];
+        if (articleDisplayBlocked) return [];
         if (Array.isArray(selectedArticle.toc) && selectedArticle.toc.length > 0) {
             return selectedArticle.toc;
         }
@@ -258,10 +323,12 @@ export default function NotebookPage() {
             return [];
         }
         return extractToc(selectedArticle.content);
-    }, [selectedArticle, showTranslation, translationText, articleRenderMode]);
+    }, [selectedArticle, showTranslation, translationText, articleRenderMode, articleDisplayBlocked]);
     const strippedContent = useMemo(() => (
-        selectedArticle && articleRenderMode === 'markdown' ? stripFirstH1(selectedArticle.content) : ''
-    ), [selectedArticle, articleRenderMode]);
+        selectedArticle && articleRenderMode === 'markdown' && !articleDisplayBlocked
+            ? stripFirstH1(selectedArticle.content)
+            : ''
+    ), [selectedArticle, articleRenderMode, articleDisplayBlocked]);
     const renderedArticleContent = useMemo(() => (
         showTranslation && translationText ? stripFirstH1(translationText) : strippedContent
     ), [showTranslation, translationText, strippedContent]);
@@ -274,12 +341,19 @@ export default function NotebookPage() {
         setSummaryLoading(true);
         setSummaryText('');
         try {
-            const result = await appApi.ai.generateSummary({
+            const result = await appApi.ai.streamSummary({
                 notebookId: notebook.id,
                 articleId: selectedArticle.id,
+                onToken: (token) => {
+                    setSummaryText((prev) => `${prev}${token}`);
+                },
             });
             setSummaryText(result.summary);
         } catch (err) {
+            if (isAuthError(err)) {
+                redirectToLogin();
+                return;
+            }
             setSummaryText(err.message || '生成摘要失败');
         } finally {
             setSummaryLoading(false);
@@ -309,6 +383,10 @@ export default function NotebookPage() {
             });
             setTranslationText(result.translatedContent || '');
         } catch (err) {
+            if (isAuthError(err)) {
+                redirectToLogin();
+                return;
+            }
             setTranslationError(err.message || '翻译失败');
         } finally {
             setTranslationLoading(false);
@@ -321,27 +399,60 @@ export default function NotebookPage() {
     };
 
     const handleSendChat = async () => {
-        if (!chatInput.trim() || !notebook) return;
+        if (!chatInput.trim() || !notebook || isChatStreaming) return;
         const prompt = chatInput.trim();
-        const nextMessages = [...chatMessages, { role: 'user', content: prompt }];
-        setChatMessages(nextMessages);
+        const pendingAssistantId = createChatMessageId();
+        setChatMessages((prev) => [
+            ...prev,
+            { id: createChatMessageId(), role: 'user', content: prompt },
+            { id: pendingAssistantId, role: 'assistant', content: '', citations: [], route: null, isStreaming: true },
+        ]);
         setChatInput('');
+        setIsChatStreaming(true);
         try {
-            const result = await appApi.ai.askAssistant({
+            const result = await appApi.ai.streamAssistant({
                 notebookId: notebook.id,
                 articleId: selectedArticle?.id,
                 conversationId: chatConversationId,
                 message: prompt,
+                onToken: (token) => {
+                    setChatMessages((prev) => prev.map((msg) => (
+                        msg.id === pendingAssistantId
+                            ? { ...msg, content: `${msg.content || ''}${token}` }
+                            : msg
+                    )));
+                },
             });
             setChatConversationId(result.conversationId || chatConversationId);
-            setChatMessages((prev) => [...prev, {
-                role: 'assistant',
-                content: result.reply,
-                citations: result.citations || [],
-                route: result.route || null,
-            }]);
+            setChatMessages((prev) => prev.map((msg) => (
+                msg.id === pendingAssistantId
+                    ? {
+                        ...msg,
+                        content: result.reply || msg.content,
+                        citations: result.citations || [],
+                        route: result.route || null,
+                        isStreaming: false,
+                    }
+                    : msg
+            )));
         } catch (err) {
-            setChatMessages((prev) => [...prev, { role: 'assistant', content: `请求失败：${err.message || '请稍后重试'}` }]);
+            if (isAuthError(err)) {
+                redirectToLogin();
+                return;
+            }
+            setChatMessages((prev) => prev.map((msg) => (
+                msg.id === pendingAssistantId
+                    ? {
+                        ...msg,
+                        content: `请求失败：${err.message || '请稍后重试'}`,
+                        citations: [],
+                        route: null,
+                        isStreaming: false,
+                    }
+                    : msg
+            )));
+        } finally {
+            setIsChatStreaming(false);
         }
     };
 
@@ -526,9 +637,30 @@ export default function NotebookPage() {
                                     </div>
                                 </div>
                                 <div className="nb-toolbar-right">
-                                    <button className={`nb-icon-btn ${showTranslation ? 'active' : ''}`} title="翻译" onClick={handleTranslate}>{I.translate}</button>
-                                    <button className={`nb-icon-btn ${showSummary ? 'active' : ''}`} title="AI 摘要" onClick={handleSummary}>{I.summary}</button>
-                                    <button className={`nb-icon-btn ${showAiChat ? 'active' : ''}`} title="AI 助手" onClick={handleToggleChat}>{I.chat}</button>
+                                    <button
+                                        className={`nb-icon-btn ${showTranslation ? 'active' : ''}`}
+                                        title={articleDisplayBlocked ? '正文准备完成后才可翻译' : '翻译'}
+                                        onClick={handleTranslate}
+                                        disabled={articleDisplayBlocked}
+                                    >
+                                        {I.translate}
+                                    </button>
+                                    <button
+                                        className={`nb-icon-btn ${showSummary ? 'active' : ''}`}
+                                        title={articleDisplayBlocked ? '正文准备完成后才可生成摘要' : 'AI 摘要'}
+                                        onClick={handleSummary}
+                                        disabled={articleDisplayBlocked}
+                                    >
+                                        {I.summary}
+                                    </button>
+                                    <button
+                                        className={`nb-icon-btn ${showAiChat ? 'active' : ''}`}
+                                        title={articleDisplayBlocked ? '正文准备完成后才可针对文章问答' : 'AI 助手'}
+                                        onClick={handleToggleChat}
+                                        disabled={articleDisplayBlocked}
+                                    >
+                                        {I.chat}
+                                    </button>
                                     <div className="nb-toolbar-menu-wrapper" ref={menuRef}>
                                         <button className="nb-icon-btn" title="更多设置" onClick={() => setShowArticleMenu(!showArticleMenu)}>{I.more}</button>
                                         {showArticleMenu && (
@@ -568,8 +700,23 @@ export default function NotebookPage() {
                                             </div>
                                             <div className="nb-summary-body">
                                                 {summaryLoading ? (
-                                                    <div className="nb-summary-loading"><span className="nb-spinner" /><span>正在生成摘要...</span></div>
-                                                ) : (<p>{summaryText}</p>)}
+                                                    <>
+                                                        {summaryText ? (
+                                                            <div className="nb-summary-markdown">
+                                                                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSlug]}>
+                                                                    {summaryText}
+                                                                </ReactMarkdown>
+                                                            </div>
+                                                        ) : null}
+                                                        <div className="nb-summary-loading"><span className="nb-spinner" /><span>正在生成摘要...</span></div>
+                                                    </>
+                                                ) : (
+                                                    <div className="nb-summary-markdown">
+                                                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSlug]}>
+                                                            {summaryText}
+                                                        </ReactMarkdown>
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                     )}
@@ -593,7 +740,13 @@ export default function NotebookPage() {
                                             </div>
                                         </div>
                                     )}
-                                    {showTranslation && translationText ? (
+                                    {articleDisplayBlocked ? (
+                                        <div className="nb-article-pending">
+                                            <div className="nb-article-pending-icon">{I.paper}</div>
+                                            <h3>正文准备中</h3>
+                                            <p>{selectedArticle.processingHint || '来源已导入，正在处理正文，请稍后刷新。'}</p>
+                                        </div>
+                                    ) : showTranslation && translationText ? (
                                         <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSlug]}>
                                             {renderedArticleContent}
                                         </ReactMarkdown>
@@ -655,9 +808,22 @@ export default function NotebookPage() {
                                     </div>
                                 )}
                                 {chatMessages.map((msg, idx) => (
-                                    <div key={idx} className={`nb-chat-msg nb-chat-msg-${msg.role}`}>
+                                    <div key={msg.id || idx} className={`nb-chat-msg nb-chat-msg-${msg.role}`}>
                                         <div className={`nb-chat-bubble nb-chat-bubble-${msg.role}`}>
-                                            <div>{msg.content}</div>
+                                            {msg.role === 'assistant' && msg.route && (
+                                                <div className="nb-chat-route-chip">
+                                                    {CHAT_ROUTE_LABELS[msg.route] || msg.route}
+                                                </div>
+                                            )}
+                                            {msg.content ? (
+                                                <div className="nb-chat-markdown">
+                                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                        {msg.content}
+                                                    </ReactMarkdown>
+                                                </div>
+                                            ) : (
+                                                <div>{msg.isStreaming ? '正在生成...' : ''}</div>
+                                            )}
                                             {msg.role === 'assistant' && Array.isArray(msg.citations) && msg.citations.length > 0 && (
                                                 <div className="nb-chat-citations">
                                                     {msg.citations.map((citation) => (
@@ -683,7 +849,7 @@ export default function NotebookPage() {
                             <div className="nb-chat-input-area">
                                 <div className="nb-chat-input-wrapper">
                                     <input className="nb-chat-input" placeholder="输入你的问题..." value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendChat()} />
-                                    <button className="nb-chat-send-btn" onClick={handleSendChat} disabled={!chatInput.trim()}>{I.send}</button>
+                                    <button className="nb-chat-send-btn" onClick={handleSendChat} disabled={!chatInput.trim() || isChatStreaming}>{I.send}</button>
                                 </div>
                             </div>
                         </div>

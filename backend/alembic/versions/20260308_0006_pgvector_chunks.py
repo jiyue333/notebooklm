@@ -18,7 +18,7 @@ depends_on = None
 
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
-    op.execute("ALTER TABLE articles ADD COLUMN article_vector vector(3072)")
+    op.execute("ALTER TABLE articles ADD COLUMN article_vector vector")
     op.execute(
         """
         CREATE TABLE article_chunks (
@@ -29,18 +29,18 @@ def upgrade() -> None:
             heading_title text NULL,
             token_count integer NOT NULL,
             chunk_text text NOT NULL,
-            chunk_vector vector(3072) NULL,
+            chunk_vector vector NULL,
             created_at timestamptz NOT NULL
         )
         """
     )
     op.execute("CREATE INDEX ix_article_chunks_article_id ON article_chunks(article_id)")
-    op.execute(
-        "CREATE INDEX ix_articles_article_vector ON articles USING hnsw (article_vector vector_cosine_ops)"
-    )
-    op.execute(
-        "CREATE INDEX ix_article_chunks_chunk_vector ON article_chunks USING hnsw (chunk_vector vector_cosine_ops)"
-    )
+    # op.execute(
+    #     "CREATE INDEX ix_articles_article_vector ON articles USING hnsw (article_vector vector_cosine_ops)"
+    # )
+    # op.execute(
+    #     "CREATE INDEX ix_article_chunks_chunk_vector ON article_chunks USING hnsw (chunk_vector vector_cosine_ops)"
+    # )
 
 
 def downgrade() -> None:

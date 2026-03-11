@@ -29,6 +29,14 @@ MODE_LABELS = {
     "auto": "Auto Research",
     "deep": "Deep Research",
 }
+MAX_SEARCH_ERROR_MESSAGE_LENGTH = 4000
+
+
+def _sanitize_error_message(error: Exception) -> str:
+    message = str(error).replace("\x00", "").strip()
+    if len(message) <= MAX_SEARCH_ERROR_MESSAGE_LENGTH:
+        return message
+    return f"{message[:MAX_SEARCH_ERROR_MESSAGE_LENGTH - 1]}..."
 
 
 def _build_search_result_view(result: SearchResult) -> dict:
@@ -169,6 +177,9 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
             search_session_id=search_session.id,
             provider=search_session.provider_name,
         )
+        provider_name = search_session.provider_name
+        mode_name = search_session.mode
+        status_for_metrics = search_session.status
 
         await repo_search.touch_search_session(
             session,
@@ -178,6 +189,7 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
             error_message=None,
         )
         await session.commit()
+        status_for_metrics = "running"
 
         user = await get_user_by_id(session, search_session.user_id)
         exa_api_key = None
@@ -193,6 +205,7 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
                 completed_at=datetime.now(UTC),
             )
             await session.commit()
+            status_for_metrics = "failed"
             raise AppError(422, "请先在设置里配置 Exa API Key", code="search_api_key_required")
 
         client = ExaSearchClient()
@@ -231,7 +244,13 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
                 error_message=None,
             )
             await session.commit()
+            status_for_metrics = "completed"
         except TimeoutError:
+            await session.rollback()
+            search_session = await repo_search.get_search_session_by_id(
+                session,
+                search_session_id=search_session_id,
+            ) or search_session
             await repo_search.touch_search_session(
                 session,
                 search_session=search_session,
@@ -241,29 +260,37 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
                 error_message=None,
             )
             await session.commit()
+            status_for_metrics = "queued"
             raise
         except Exception as exc:
             completed_at = datetime.now(UTC)
+            error_message = _sanitize_error_message(exc)
+            await session.rollback()
+            search_session = await repo_search.get_search_session_by_id(
+                session,
+                search_session_id=search_session_id,
+            ) or search_session
             await repo_search.touch_search_session(
                 session,
                 search_session=search_session,
                 status="failed",
                 error_code="provider_search_failed",
-                error_message=str(exc),
+                error_message=error_message,
                 completed_at=completed_at,
             )
             await session.commit()
+            status_for_metrics = "failed"
             logger.exception(
                 "sources.search.execute_failed",
-                search_session_id=search_session.id,
-                error=str(exc),
+                search_session_id=search_session_id,
+                error=error_message,
             )
             raise AppError(502, "来源搜索失败", code="provider_search_failed")
         finally:
             observe_search_provider(
-                provider=search_session.provider_name,
-                mode=search_session.mode,
-                status=search_session.status,
+                provider=provider_name,
+                mode=mode_name,
+                status=status_for_metrics,
                 duration_ms=round((perf_counter() - started_at) * 1000, 2),
             )
             await client.close()

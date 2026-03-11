@@ -44,6 +44,20 @@ async def publish_jobs(session: AsyncSession, jobs: list[Job]) -> None:
         for job in jobs:
             producer.publish(_build_message(job))
             await repo.mark_job_queued(job)
+    except ImportError as exc:
+        logger.warning("jobs.publish_unavailable", error=str(exc))
+        for job in jobs:
+            if job.status != "queued":
+                try:
+                    await run_job_inline(job.id, job_type=job.job_type)
+                    await session.refresh(job)
+                except Exception as inline_exc:
+                    logger.exception(
+                        "jobs.inline_fallback_failed",
+                        job_id=job.id,
+                        error=str(inline_exc),
+                    )
+                    await repo.mark_job_pending_publish(job, error=str(exc))
     except Exception as exc:
         logger.exception("jobs.publish_failed", error=str(exc))
         for job in jobs:

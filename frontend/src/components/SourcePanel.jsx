@@ -29,6 +29,7 @@ export default function SourcePanel({
 }) {
     const [view, setView] = useState('default');
     const [isSearching, setIsSearching] = useState(false);
+    const [isImporting, setIsImporting] = useState(false);
     const [sources, setSources] = useState([]);
     const [searchSessionId, setSearchSessionId] = useState(null);
     const [searchModeLabel, setSearchModeLabel] = useState('Auto Research');
@@ -37,8 +38,11 @@ export default function SourcePanel({
     const [mode, setMode] = useState('auto');
     const [showModeDropdown, setShowModeDropdown] = useState(false);
     const modeDropRef = useRef(null);
+    const searchLockRef = useRef(false);
+    const importLockRef = useRef(false);
 
     const selectedCount = sources.filter((source) => source.selected).length;
+    const isBusy = isSearching || isImporting;
 
     useEffect(() => {
         const handler = (event) => {
@@ -57,7 +61,8 @@ export default function SourcePanel({
     }, [notebookId]);
 
     const handleSearch = async () => {
-        if (!searchQuery.trim()) return;
+        if (!searchQuery.trim() || searchLockRef.current || importLockRef.current) return;
+        searchLockRef.current = true;
         setError('');
         setIsSearching(true);
 
@@ -69,11 +74,15 @@ export default function SourcePanel({
             });
             setSearchSessionId(result.searchSessionId || null);
             setSearchModeLabel(result.modeLabel || 'Auto Research');
-            setSources(result.items || []);
+            setSources((result.items || []).map((source) => ({
+                ...source,
+                selected: true,
+            })));
             setView('results');
         } catch (err) {
             setError(err.message || '搜索来源失败');
         } finally {
+            searchLockRef.current = false;
             setIsSearching(false);
         }
     };
@@ -94,8 +103,11 @@ export default function SourcePanel({
     };
 
     const handleImport = async () => {
+        if (importLockRef.current || searchLockRef.current || selectedCount === 0) return;
         try {
+            importLockRef.current = true;
             setError('');
+            setIsImporting(true);
             if (!searchSessionId) {
                 throw new Error('缺少搜索会话，请重新搜索后再导入');
             }
@@ -111,6 +123,9 @@ export default function SourcePanel({
             if (onCollapse) onCollapse();
         } catch (err) {
             setError(err.message || '导入来源失败');
+        } finally {
+            importLockRef.current = false;
+            setIsImporting(false);
         }
     };
 
@@ -179,7 +194,7 @@ export default function SourcePanel({
                         )}
                     </div>
                 </div>
-                <button className="sp-submit-btn" onClick={handleSearch} disabled={isSearching}>
+                <button className="sp-submit-btn" onClick={handleSearch} disabled={isBusy}>
                     {isSearching ? <span className="sp-spinner" /> : Ic.send}
                 </button>
             </div>
@@ -194,7 +209,7 @@ export default function SourcePanel({
                     <span className="nb-panel-title">来源</span>
                 </div>
                 <div className="nb-panel-body sp-panel-body-results">
-                    <button className="sp-add-source-btn" onClick={onAddSource}>
+                    <button className="sp-add-source-btn" onClick={onAddSource} disabled={isImporting}>
                         <span className="sp-add-icon">{Ic.add}</span>
                         <span>添加来源</span>
                     </button>
@@ -222,7 +237,7 @@ export default function SourcePanel({
                     <span className="nb-panel-title">来源</span>
                 </div>
                 <div className="nb-panel-body sp-panel-body-results">
-                    <button className="sp-add-source-btn" onClick={onAddSource}>
+                    <button className="sp-add-source-btn" onClick={onAddSource} disabled={isImporting}>
                         <span className="sp-add-icon">{Ic.add}</span>
                         <span>添加来源</span>
                     </button>
@@ -233,7 +248,7 @@ export default function SourcePanel({
                         <div className="sp-results-header">
                             <span className="sp-results-icon">{Ic.refresh}</span>
                             <span className="sp-results-title">{searchModeLabel} 已完成！</span>
-                            <button className="sp-view-btn" onClick={handleViewDiscover}>查看</button>
+                            <button className="sp-view-btn" onClick={handleViewDiscover} disabled={isImporting}>查看</button>
                         </div>
                         <div className="sp-results-list">
                             {previewSources.length > 0 ? previewSources.map((source) => (
@@ -255,8 +270,10 @@ export default function SourcePanel({
                             )}
                         </div>
                         <div className="sp-results-footer">
-                            <button className="sp-delete-btn" onClick={() => setView('default')}>删除</button>
-                            <button className="sp-import-btn" onClick={handleImport} disabled={selectedCount === 0}>+ 导入</button>
+                            <button className="sp-delete-btn" onClick={() => setView('default')} disabled={isImporting}>删除</button>
+                            <button className="sp-import-btn" onClick={handleImport} disabled={selectedCount === 0 || isBusy}>
+                                {isImporting ? '导入中...' : '+ 导入'}
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -282,7 +299,7 @@ export default function SourcePanel({
                 <div className="sp-discover-list">
                     <div className="sp-discover-header">
                         <span>选择所有来源</span>
-                        <button className={`sp-checkbox ${sources.every((source) => source.selected) ? 'checked' : ''}`} onClick={toggleAll}>
+                        <button className={`sp-checkbox ${sources.every((source) => source.selected) ? 'checked' : ''}`} onClick={toggleAll} disabled={isImporting}>
                             {sources.every((source) => source.selected) && Ic.check}
                         </button>
                     </div>
@@ -294,8 +311,8 @@ export default function SourcePanel({
                                     <span className="sp-discover-item-title">{source.title}</span>
                                     <span className="sp-discover-item-desc">{source.description}</span>
                                 </div>
-                                <button className="sp-discover-link" title="打开链接" onClick={() => window.open(source.url, '_blank', 'noopener,noreferrer')}>{Ic.openLink}</button>
-                                <button className={`sp-checkbox ${source.selected ? 'checked' : ''}`} onClick={() => toggleSource(source.id)}>
+                                <button className="sp-discover-link" title="打开链接" onClick={() => window.open(source.url, '_blank', 'noopener,noreferrer')} disabled={isImporting}>{Ic.openLink}</button>
+                                <button className={`sp-checkbox ${source.selected ? 'checked' : ''}`} onClick={() => toggleSource(source.id)} disabled={isImporting}>
                                     {source.selected && Ic.check}
                                 </button>
                             </div>
@@ -304,7 +321,9 @@ export default function SourcePanel({
                 </div>
                 <div className="sp-discover-footer">
                     <span className="sp-discover-count">已选择 {selectedCount} 个来源</span>
-                    <button className="sp-import-btn" onClick={handleImport} disabled={selectedCount === 0}>导入</button>
+                    <button className="sp-import-btn" onClick={handleImport} disabled={selectedCount === 0 || isBusy}>
+                        {isImporting ? '导入中...' : '导入'}
+                    </button>
                 </div>
                 {error && <p className="sp-feedback-error">{error}</p>}
             </div>

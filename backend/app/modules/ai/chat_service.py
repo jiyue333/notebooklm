@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from time import perf_counter
 
 import structlog
@@ -21,16 +22,33 @@ from app.modules.ai.langchain_factory import (
     get_user_generation_settings,
     require_user_chat_model,
 )
+from app.modules.ai.streaming import encode_sse_event, extract_stream_text
 from app.modules.notebooks import repo as notebooks_repo
 from app.modules.retrieval.article_retriever import RetrievedArticleMatch, retrieve_related_articles
 from app.modules.retrieval.chunk_retriever import RetrievedChunkMatch, retrieve_notebook_evidence_chunks
 from app.modules.retrieval.router import route_chat_message
 from app.modules.search import repo_article
 
-CURRENT_ARTICLE_CONTEXT_LIMIT = 14000
-RELATED_ARTICLE_CONTEXT_LIMIT = 2200
+CURRENT_ARTICLE_CONTEXT_LIMIT = 2000
+RELATED_ARTICLE_CONTEXT_LIMIT = 1000
 
 logger = structlog.get_logger(__name__)
+
+
+@dataclass(slots=True)
+class PreparedChatReply:
+    user: object
+    conversation: object
+    user_message: object
+    route: str
+    route_reason: str
+    route_confidence: float
+    citations: list[dict]
+    retrieval_details: dict
+    model_settings: dict
+    trace_metadata: dict
+    messages: list
+    model: object
 
 
 async def reply(
@@ -42,6 +60,150 @@ async def reply(
     article_id: str | None,
     message: str,
 ) -> dict:
+    prepared = await _prepare_chat_reply(
+        session,
+        user=user,
+        notebook_id=notebook_id,
+        conversation_id=conversation_id,
+        article_id=article_id,
+        message=message,
+    )
+    started_at = perf_counter()
+    try:
+        result = await prepared.model.ainvoke(
+            prepared.messages,
+            config={"run_name": "chat_model", "metadata": prepared.trace_metadata},
+        )
+    except Exception:
+        observe_llm_call(
+            operation="chat",
+            provider=prepared.model_settings["modelProvider"],
+            model=prepared.model_settings["modelName"],
+            status="error",
+            duration_ms=round((perf_counter() - started_at) * 1000, 2),
+        )
+        raise
+    answer, usage = extract_llm_text_and_usage(result)
+    observe_llm_call(
+        operation="chat",
+        provider=prepared.model_settings["modelProvider"],
+        model=prepared.model_settings["modelName"],
+        status="success",
+        duration_ms=round((perf_counter() - started_at) * 1000, 2),
+        usage=usage,
+    )
+    if not answer:
+        raise AppError(502, "对话生成失败", code="chat_generation_failed")
+
+    return await _finalize_chat_reply(session, prepared=prepared, answer=answer)
+
+
+async def stream_reply(
+    session: AsyncSession,
+    *,
+    user,
+    notebook_id: str,
+    conversation_id: str | None,
+    article_id: str | None,
+    message: str,
+):
+    prepared = await _prepare_chat_reply(
+        session,
+        user=user,
+        notebook_id=notebook_id,
+        conversation_id=conversation_id,
+        article_id=article_id,
+        message=message,
+    )
+
+    async def event_stream():
+        started_at = perf_counter()
+        answer_parts: list[str] = []
+        try:
+            yield encode_sse_event(
+                "start",
+                {
+                    "conversationId": prepared.conversation.id,
+                    "route": prepared.route,
+                },
+            )
+            async for chunk in prepared.model.astream(
+                prepared.messages,
+                config={"run_name": "chat_model", "metadata": prepared.trace_metadata},
+            ):
+                text = extract_stream_text(chunk)
+                if not text:
+                    continue
+                answer_parts.append(text)
+                yield encode_sse_event("token", {"content": text})
+
+            answer = "".join(answer_parts).strip()
+            observe_llm_call(
+                operation="chat",
+                provider=prepared.model_settings["modelProvider"],
+                model=prepared.model_settings["modelName"],
+                status="success",
+                duration_ms=round((perf_counter() - started_at) * 1000, 2),
+            )
+            if not answer:
+                raise AppError(502, "对话生成失败", code="chat_generation_failed")
+
+            result = await _finalize_chat_reply(session, prepared=prepared, answer=answer)
+            yield encode_sse_event("done", result)
+        except AppError as exc:
+            await session.rollback()
+            observe_llm_call(
+                operation="chat",
+                provider=prepared.model_settings["modelProvider"],
+                model=prepared.model_settings["modelName"],
+                status="error",
+                duration_ms=round((perf_counter() - started_at) * 1000, 2),
+            )
+            yield encode_sse_event(
+                "error",
+                {
+                    "message": exc.message,
+                    "code": exc.code,
+                    "status": exc.status_code,
+                    "meta": exc.meta,
+                },
+            )
+        except Exception as exc:
+            await session.rollback()
+            observe_llm_call(
+                operation="chat",
+                provider=prepared.model_settings["modelProvider"],
+                model=prepared.model_settings["modelName"],
+                status="error",
+                duration_ms=round((perf_counter() - started_at) * 1000, 2),
+            )
+            logger.exception(
+                "chat.stream_failed",
+                conversation_id=prepared.conversation.id,
+                error=str(exc),
+            )
+            yield encode_sse_event(
+                "error",
+                {
+                    "message": "对话生成失败，请稍后重试",
+                    "code": "chat_generation_failed",
+                    "status": 502,
+                    "meta": {},
+                },
+            )
+
+    return event_stream()
+
+
+async def _prepare_chat_reply(
+    session: AsyncSession,
+    *,
+    user,
+    notebook_id: str,
+    conversation_id: str | None,
+    article_id: str | None,
+    message: str,
+) -> PreparedChatReply:
     notebook = await notebooks_repo.get_notebook(session, user_id=user.id, notebook_id=notebook_id)
     if notebook is None:
         raise AppError(404, "未找到对应的笔记本", code="notebook_not_found")
@@ -115,63 +277,58 @@ async def reply(
         },
         config={"run_name": "chat_prompt", "metadata": trace_metadata},
     )
-    started_at = perf_counter()
-    try:
-        result = await model.ainvoke(
-            messages,
-            config={"run_name": "chat_model", "metadata": trace_metadata},
-        )
-    except Exception:
-        observe_llm_call(
-            operation="chat",
-            provider=model_settings["modelProvider"],
-            model=model_settings["modelName"],
-            status="error",
-            duration_ms=round((perf_counter() - started_at) * 1000, 2),
-        )
-        raise
-    answer, usage = extract_llm_text_and_usage(result)
-    observe_llm_call(
-        operation="chat",
-        provider=model_settings["modelProvider"],
-        model=model_settings["modelName"],
-        status="success",
-        duration_ms=round((perf_counter() - started_at) * 1000, 2),
-        usage=usage,
+    return PreparedChatReply(
+        user=user,
+        conversation=conversation,
+        user_message=user_message,
+        route=route,
+        route_reason=route_decision.reason,
+        route_confidence=route_decision.confidence,
+        citations=citations,
+        retrieval_details=retrieval_details,
+        model_settings=model_settings,
+        trace_metadata=trace_metadata,
+        messages=messages,
+        model=model,
     )
-    if not answer:
-        raise AppError(502, "对话生成失败", code="chat_generation_failed")
 
+
+async def _finalize_chat_reply(
+    session: AsyncSession,
+    *,
+    prepared: PreparedChatReply,
+    answer: str,
+) -> dict:
     retrieval_snapshot = {
-        "route": route,
-        "routeReason": route_decision.reason,
-        "routeConfidence": route_decision.confidence,
-        "query": message,
-        **retrieval_details,
+        "route": prepared.route,
+        "routeReason": prepared.route_reason,
+        "routeConfidence": prepared.route_confidence,
+        "query": prepared.user_message.content,
+        **prepared.retrieval_details,
     }
     assistant_message = await append_assistant_message(
         session,
-        conversation=conversation,
-        article_id=article_id,
-        route=route,
+        conversation=prepared.conversation,
+        article_id=prepared.user_message.article_id,
+        route=prepared.route,
         content=answer,
         retrieval_snapshot=retrieval_snapshot,
     )
     try:
-        await maybe_rollup_conversation(session, conversation=conversation, user=user)
+        await maybe_rollup_conversation(session, conversation=prepared.conversation, user=prepared.user)
     except Exception as exc:
         logger.exception(
             "chat.rollup_failed",
-            conversation_id=conversation.id,
+            conversation_id=prepared.conversation.id,
             error=str(exc),
         )
     await session.commit()
     return {
-        "conversationId": conversation.id,
+        "conversationId": prepared.conversation.id,
         "messageId": assistant_message.id,
-        "route": route,
+        "route": prepared.route,
         "reply": answer,
-        "citations": citations,
+        "citations": prepared.citations,
         "retrievalSnapshot": retrieval_snapshot,
     }
 
@@ -250,6 +407,24 @@ async def _build_context_block(
             [citation],
             {"articles": [citation], "chunks": []},
         )
+
+    if route == "GENERAL":
+        current_article_title = None
+        if article_id:
+            article = await repo_article.get_article(
+                session,
+                user_id=user.id,
+                notebook_id=notebook.id,
+                article_id=article_id,
+            )
+            current_article_title = article.title if article is not None else None
+        context_lines = [
+            f"当前笔记本：{notebook.title}",
+            f"当前打开文章：{current_article_title or '无'}",
+            "路由说明：这是通用问题，不需要基于当前文章正文或 notebook 证据检索来回答。",
+            "回答要求：直接回答用户问题即可；如果用户实际上需要基于文章或证据作答，应明确提示对方改问更具体的问题。",
+        ]
+        return "\n".join(context_lines), [], {"articles": [], "chunks": []}
 
     if route == "EVIDENCE_LOOKUP":
         chunk_matches = await retrieve_notebook_evidence_chunks(

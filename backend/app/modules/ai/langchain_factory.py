@@ -40,6 +40,7 @@ def build_user_chat_model(user):
             model=runtime_config.model_name,
             base_url=runtime_config.api_url,
             temperature=0.0,
+            reasoning=False,
         )
 
     from langchain_openai import ChatOpenAI

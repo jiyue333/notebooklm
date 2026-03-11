@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { appApi } from '../services/appApi';
+import useEscapeToClose from '../hooks/useEscapeToClose';
 import './AddSourceModal.css';
 
 export default function AddSourceModal({ notebookId, onClose, onImported }) {
@@ -13,11 +14,16 @@ export default function AddSourceModal({ notebookId, onClose, onImported }) {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState('');
     const fileInputRef = useRef(null);
+    const actionLockRef = useRef(false);
+    const isBusy = isUploading || isSubmitting;
+
+    useEscapeToClose(onClose, !isBusy);
 
     const handleFilesUpload = async (files) => {
-        if (!files?.length) return;
+        if (!files?.length || actionLockRef.current) return;
 
         try {
+            actionLockRef.current = true;
             setIsUploading(true);
             setError('');
             const detail = await appApi.sources.uploadFiles({ notebookId, files });
@@ -26,12 +32,15 @@ export default function AddSourceModal({ notebookId, onClose, onImported }) {
         } catch (err) {
             setError(err.message || '上传来源失败');
         } finally {
+            actionLockRef.current = false;
             setIsUploading(false);
         }
     };
 
     const handleCreateSource = async () => {
+        if (actionLockRef.current) return;
         try {
+            actionLockRef.current = true;
             setError('');
             setIsSubmitting(true);
 
@@ -64,6 +73,7 @@ export default function AddSourceModal({ notebookId, onClose, onImported }) {
         } catch (err) {
             setError(err.message || '添加来源失败');
         } finally {
+            actionLockRef.current = false;
             setIsSubmitting(false);
         }
     };
@@ -84,9 +94,9 @@ export default function AddSourceModal({ notebookId, onClose, onImported }) {
     };
 
     return (
-        <div className="add-source-overlay" onClick={onClose}>
+        <div className="add-source-overlay" onClick={() => { if (!isBusy) onClose(); }}>
             <div className="add-source-modal animate-scale-in" onClick={(event) => event.stopPropagation()}>
-                <button className="add-source-close" onClick={onClose}>✕</button>
+                <button className="add-source-close" onClick={onClose} disabled={isBusy}>✕</button>
 
                 <h2 className="add-source-title">添加来源</h2>
                 <p className="add-source-subtitle">上传文档、添加网站，或保存你粘贴的文字内容</p>
@@ -95,18 +105,21 @@ export default function AddSourceModal({ notebookId, onClose, onImported }) {
                     <button
                         className={`add-source-tag ${activeTab === 'file' ? 'active' : ''}`}
                         onClick={() => setActiveTab('file')}
+                        disabled={isBusy}
                     >
                         📁 上传文件
                     </button>
                     <button
                         className={`add-source-tag ${activeTab === 'web' ? 'active' : ''}`}
                         onClick={() => setActiveTab('web')}
+                        disabled={isBusy}
                     >
                         🌐 网站
                     </button>
                     <button
                         className={`add-source-tag ${activeTab === 'text' ? 'active' : ''}`}
                         onClick={() => setActiveTab('text')}
+                        disabled={isBusy}
                     >
                         📋 复制的文字
                     </button>
@@ -116,7 +129,7 @@ export default function AddSourceModal({ notebookId, onClose, onImported }) {
                     <>
                         <div
                             className={`add-source-dropzone ${isDragging ? 'dragging' : ''}`}
-                            onClick={() => fileInputRef.current?.click()}
+                            onClick={() => { if (!isBusy) fileInputRef.current?.click(); }}
                             onDragOver={handleDragOver}
                             onDragLeave={handleDragLeave}
                             onDrop={handleDrop}
@@ -129,7 +142,7 @@ export default function AddSourceModal({ notebookId, onClose, onImported }) {
                         </div>
 
                         <div className="add-source-buttons">
-                            <button className="add-source-btn" onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
+                            <button className="add-source-btn" onClick={() => fileInputRef.current?.click()} disabled={isBusy}>
                                 <span className="add-source-btn-icon">⬆</span>
                                 {isUploading ? '上传中...' : '上传文件'}
                             </button>
@@ -156,7 +169,7 @@ export default function AddSourceModal({ notebookId, onClose, onImported }) {
                             />
                         </div>
                         <div className="add-source-buttons">
-                            <button className="add-source-btn add-source-btn-primary" onClick={handleCreateSource} disabled={isSubmitting}>
+                            <button className="add-source-btn add-source-btn-primary" onClick={handleCreateSource} disabled={isBusy}>
                                 <span className="add-source-btn-icon">🌐</span>
                                 {isSubmitting ? '添加中...' : '添加网站'}
                             </button>
@@ -181,7 +194,7 @@ export default function AddSourceModal({ notebookId, onClose, onImported }) {
                             onChange={(event) => setTextContent(event.target.value)}
                         />
                         <div className="add-source-buttons">
-                            <button className="add-source-btn add-source-btn-primary" onClick={handleCreateSource} disabled={isSubmitting}>
+                            <button className="add-source-btn add-source-btn-primary" onClick={handleCreateSource} disabled={isBusy}>
                                 <span className="add-source-btn-icon">📋</span>
                                 {isSubmitting ? '保存中...' : '保存文字来源'}
                             </button>
@@ -199,6 +212,7 @@ export default function AddSourceModal({ notebookId, onClose, onImported }) {
                     style={{ display: 'none' }}
                     onChange={(event) => {
                         handleFilesUpload(Array.from(event.target.files));
+                        event.target.value = '';
                     }}
                 />
             </div>

@@ -2,16 +2,34 @@
   "annotations": { "list": [] },
   "editable": true,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
+  "graphTooltip": 1,
   "id": null,
   "links": [],
   "panels": [
     {
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "options": {
+        "content": "### How To Read\n- **Parse Outcomes (Last 1h)**: 最近 1 小时解析成功/失败计数，按来源类型、parser 和 error tag 拆分。\n- **Fallback Usage (Last 1h)**: 使用了哪些正文抓取 fallback，例如 `exa_contents`、`trafilatura`。\n- **Chunk Count P95**: 每篇文章切分出来的 chunk 数量 P95，不是耗时。\n- **Worker Job Outcomes (Last 1h)**: ingest/reindex/maintenance job 的成功失败数量。\n- **Content Ready Latency P95**: 从文章创建到正文可展示的 P95 耗时；这里的 ready 不等 index 全部完成。",
+        "mode": "markdown"
+      },
+      "title": "How To Read",
+      "transparent": true,
+      "type": "text"
+    },
+    {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": {}, "overrides": [] },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "description": "最近 1 小时解析结果。失败时结合 `error_tag` 看是 parse_empty、ingest_failed 还是其他问题。",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
       "id": 1,
-      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
         {
           "expr": "sum by (input_type, status, parser, error_tag) (increase(notebooklm_ingest_parse_total[1h]))",
@@ -19,13 +37,20 @@
           "refId": "A"
         }
       ],
-      "title": "Parse Outcomes",
+      "title": "Parse Outcomes (Last 1h)",
       "type": "timeseries"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": {}, "overrides": [] },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "description": "最近 1 小时在正文抓取阶段使用的 fallback 次数。",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
       "id": 2,
       "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single" } },
       "targets": [
@@ -35,15 +60,22 @@
           "refId": "A"
         }
       ],
-      "title": "Fallback Usage",
+      "title": "Fallback Usage (Last 1h)",
       "type": "barchart"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": {}, "overrides": [] },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "description": "每篇文章切分出的 chunk 数量 P95。数值越高，通常说明正文更长或结构更复杂。",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
       "id": 3,
-      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum by (le, input_type) (rate(notebooklm_ingest_chunk_count_bucket[5m])))",
@@ -56,10 +88,17 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": {}, "overrides": [] },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "description": "最近 1 小时 worker job 成功/失败次数。重点关注 `article_ingest` 和 `article_reindex` 的 failed 曲线。",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
       "id": 4,
-      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
         {
           "expr": "sum by (job_type, status) (increase(notebooklm_jobs_total{job_type=~\"article_ingest|article_reindex|maintenance_cleanup\"}[1h]))",
@@ -67,7 +106,30 @@
           "refId": "A"
         }
       ],
-      "title": "Ingest Worker Jobs",
+      "title": "Worker Job Outcomes (Last 1h)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "从文章创建到正文可展示的 P95 耗时，单位毫秒。这里的 ready 指 `contentReady=true`，不等索引结束。",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "id": 5,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, input_type) (rate(notebooklm_ingest_ready_duration_ms_bucket[5m])))",
+          "legendFormat": "{{input_type}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Content Ready Latency P95",
       "type": "timeseries"
     }
   ],
@@ -77,9 +139,9 @@
   "tags": ["notebooklm", "ingest"],
   "templating": { "list": [] },
   "time": { "from": "now-6h", "to": "now" },
-  "timezone": "",
+  "timezone": "browser",
   "title": "NotebookLM Ingest",
   "uid": "notebooklm-ingest",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

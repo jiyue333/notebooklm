@@ -92,6 +92,12 @@
     color: var(--accent-color);
 }
 
+.nb-icon-btn:disabled {
+    opacity: 0.42;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
 .nb-icon-btn.active {
     color: var(--accent-color);
     background: color-mix(in srgb, var(--accent-color), transparent 88%);
@@ -591,6 +597,92 @@
     margin: 0;
 }
 
+.nb-summary-markdown {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.nb-summary-markdown > :first-child {
+    margin-top: 0;
+}
+
+.nb-summary-markdown > :last-child {
+    margin-bottom: 0;
+}
+
+.nb-summary-markdown p {
+    margin: 0 0 0.9em;
+}
+
+.nb-summary-markdown ul,
+.nb-summary-markdown ol {
+    margin: 0 0 0.9em;
+    padding-left: 20px;
+}
+
+.nb-summary-markdown li + li {
+    margin-top: 4px;
+}
+
+.nb-summary-markdown h1,
+.nb-summary-markdown h2,
+.nb-summary-markdown h3,
+.nb-summary-markdown h4 {
+    margin: 1em 0 0.45em;
+    color: var(--title-color);
+    line-height: 1.35;
+}
+
+.nb-summary-markdown h1 {
+    font-size: 1.1em;
+}
+
+.nb-summary-markdown h2 {
+    font-size: 1.02em;
+}
+
+.nb-summary-markdown h3,
+.nb-summary-markdown h4 {
+    font-size: 0.96em;
+}
+
+.nb-summary-markdown blockquote {
+    margin: 0 0 0.9em;
+    padding: 10px 12px;
+    border-left: 3px solid var(--accent-color);
+    background: color-mix(in srgb, var(--accent-color), transparent 94%);
+    border-radius: 0 12px 12px 0;
+    color: var(--meta-color);
+}
+
+.nb-summary-markdown code {
+    font-family: 'SF Mono', Menlo, Monaco, Consolas, monospace;
+    font-size: 0.86em;
+    background: var(--hover-bg);
+    padding: 0.12em 0.38em;
+    border-radius: 4px;
+}
+
+.nb-summary-markdown pre {
+    margin: 0 0 0.9em;
+    padding: 12px;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    background: var(--hover-bg);
+    overflow-x: auto;
+}
+
+.nb-summary-markdown pre code {
+    background: transparent;
+    padding: 0;
+}
+
+.nb-summary-markdown a {
+    color: var(--accent-color);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
 .nb-summary-loading {
     display: flex;
     align-items: center;
@@ -644,6 +736,42 @@
     animation: fadeIn 0.3s ease-out both;
     overflow-wrap: anywhere;
     word-break: break-word;
+}
+
+.nb-article-pending {
+    min-height: 320px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 32px 24px;
+    text-align: center;
+    color: var(--meta-color);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--card-bg), transparent 12%), transparent);
+    border: 1px dashed var(--border-color);
+    border-radius: calc(var(--radius) + 4px);
+}
+
+.nb-article-pending-icon {
+    color: var(--accent-color);
+}
+
+.nb-article-pending-icon svg {
+    width: 34px;
+    height: 34px;
+}
+
+.nb-article-pending h3 {
+    margin: 0;
+    font-size: 1rem;
+    color: var(--title-color);
+}
+
+.nb-article-pending p {
+    margin: 0;
+    max-width: 420px;
+    line-height: 1.7;
 }
 
 .nb-article-content h1 {
@@ -1119,6 +1247,8 @@
     border-radius: var(--radius);
     font-size: 0.85rem;
     line-height: 1.6;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .nb-chat-bubble-user {
@@ -1131,6 +1261,97 @@
     background: var(--hover-bg);
     color: var(--text-color);
     border-bottom-left-radius: 4px;
+}
+
+.nb-chat-route-chip {
+    display: inline-flex;
+    align-items: center;
+    margin-bottom: 8px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent-color), transparent 86%);
+    color: var(--accent-color);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+}
+
+.nb-chat-markdown > :first-child {
+    margin-top: 0;
+}
+
+.nb-chat-markdown > :last-child {
+    margin-bottom: 0;
+}
+
+.nb-chat-markdown p {
+    margin: 0 0 0.85em;
+}
+
+.nb-chat-markdown ul,
+.nb-chat-markdown ol {
+    margin: 0 0 0.85em;
+    padding-left: 20px;
+}
+
+.nb-chat-markdown li + li {
+    margin-top: 4px;
+}
+
+.nb-chat-markdown h1,
+.nb-chat-markdown h2,
+.nb-chat-markdown h3,
+.nb-chat-markdown h4 {
+    margin: 0.9em 0 0.4em;
+    line-height: 1.35;
+    color: inherit;
+}
+
+.nb-chat-markdown h1 {
+    font-size: 1.05em;
+}
+
+.nb-chat-markdown h2 {
+    font-size: 1em;
+}
+
+.nb-chat-markdown h3,
+.nb-chat-markdown h4 {
+    font-size: 0.95em;
+}
+
+.nb-chat-markdown blockquote {
+    margin: 0 0 0.85em;
+    padding: 8px 12px;
+    border-left: 3px solid currentColor;
+    opacity: 0.88;
+}
+
+.nb-chat-markdown pre {
+    margin: 0 0 0.85em;
+    padding: 10px 12px;
+    overflow-x: auto;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--bg-color), transparent 10%);
+}
+
+.nb-chat-markdown code {
+    font-family: 'SF Mono', Menlo, Monaco, Consolas, monospace;
+    font-size: 0.86em;
+    background: color-mix(in srgb, var(--bg-color), transparent 10%);
+    padding: 0.12em 0.36em;
+    border-radius: 4px;
+}
+
+.nb-chat-markdown pre code {
+    background: transparent;
+    padding: 0;
+}
+
+.nb-chat-markdown a {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 2px;
 }
 
 .nb-chat-citations {

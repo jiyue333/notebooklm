@@ -35,23 +35,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
-        "UPDATE article_chunks SET chunk_vector = NULL "
-        "WHERE chunk_vector IS NOT NULL AND vector_dims(chunk_vector) <> 3072"
-    )
-    op.execute(
-        "UPDATE articles SET article_vector = NULL "
-        "WHERE article_vector IS NOT NULL AND vector_dims(article_vector) <> 3072"
-    )
-    op.execute("ALTER TABLE article_chunks ALTER COLUMN chunk_vector TYPE vector(3072)")
-    op.execute("ALTER TABLE articles ALTER COLUMN article_vector TYPE vector(3072)")
-    op.execute(
-        "CREATE INDEX ix_articles_article_vector ON articles USING hnsw (article_vector vector_cosine_ops)"
-    )
-    op.execute(
-        "CREATE INDEX ix_article_chunks_chunk_vector ON article_chunks USING hnsw (chunk_vector vector_cosine_ops)"
-    )
-
     op.drop_index("ix_articles_embedding_profile_key", table_name="articles")
     op.drop_column("articles", "embedding_dimension")
     op.drop_column("articles", "embedding_profile_key")

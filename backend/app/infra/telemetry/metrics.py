@@ -2,6 +2,36 @@ from __future__ import annotations
 
 from prometheus_client import Counter, Histogram, generate_latest
 
+LATENCY_MS_BUCKETS = (
+    10,
+    25,
+    50,
+    100,
+    250,
+    500,
+    1000,
+    2500,
+    5000,
+    10000,
+    30000,
+    60000,
+    120000,
+    300000,
+)
+CHUNK_COUNT_BUCKETS = (
+    1,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    128,
+    256,
+    512,
+    1024,
+)
+
 HTTP_REQUEST_COUNTER = Counter(
     "notebooklm_http_requests_total",
     "Total HTTP requests",
@@ -11,6 +41,7 @@ HTTP_REQUEST_DURATION = Histogram(
     "notebooklm_http_request_duration_ms",
     "HTTP request duration in milliseconds",
     ["method", "path"],
+    buckets=LATENCY_MS_BUCKETS,
 )
 JOB_EXECUTION_COUNTER = Counter(
     "notebooklm_jobs_total",
@@ -26,6 +57,7 @@ SEARCH_PROVIDER_DURATION = Histogram(
     "notebooklm_search_provider_duration_ms",
     "Search provider duration in milliseconds",
     ["provider", "mode", "status"],
+    buckets=LATENCY_MS_BUCKETS,
 )
 SOURCE_IMPORT_COUNTER = Counter(
     "notebooklm_source_import_total",
@@ -46,6 +78,13 @@ INGEST_CHUNK_COUNT = Histogram(
     "notebooklm_ingest_chunk_count",
     "Chunk count per ingested article",
     ["input_type"],
+    buckets=CHUNK_COUNT_BUCKETS,
+)
+INGEST_READY_DURATION = Histogram(
+    "notebooklm_ingest_ready_duration_ms",
+    "Time from article creation to content-ready in milliseconds",
+    ["input_type"],
+    buckets=LATENCY_MS_BUCKETS,
 )
 LLM_CALL_COUNTER = Counter(
     "notebooklm_llm_calls_total",
@@ -56,6 +95,7 @@ LLM_CALL_DURATION = Histogram(
     "notebooklm_llm_call_duration_ms",
     "LLM call latency in milliseconds",
     ["operation", "provider", "model", "status"],
+    buckets=LATENCY_MS_BUCKETS,
 )
 LLM_TOKEN_COUNTER = Counter(
     "notebooklm_llm_tokens_total",
@@ -109,6 +149,10 @@ def observe_ingest_fallback(*, fallback_type: str) -> None:
 
 def observe_ingest_chunks(*, input_type: str, chunk_count: int) -> None:
     INGEST_CHUNK_COUNT.labels(input_type=input_type).observe(chunk_count)
+
+
+def observe_ingest_ready(*, input_type: str, duration_ms: float) -> None:
+    INGEST_READY_DURATION.labels(input_type=input_type).observe(duration_ms)
 
 
 def observe_llm_call(

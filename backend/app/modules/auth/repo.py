@@ -13,6 +13,11 @@ async def get_user_by_name(session: AsyncSession, username: str) -> User | None:
     return result.scalar_one_or_none()
 
 
+async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
+    result = await session.execute(select(User).where(User.email == email))
+    return result.scalar_one_or_none()
+
+
 async def get_user_by_id(session: AsyncSession, user_id: str) -> User | None:
     result = await session.execute(select(User).where(User.id == user_id))
     return result.scalar_one_or_none()
@@ -49,6 +54,24 @@ async def create_auth_token(
     session.add(token)
     await session.flush()
     return token
+
+
+async def create_user(
+    session: AsyncSession,
+    *,
+    username: str,
+    email: str,
+    password_hash: str,
+) -> User:
+    user = User(
+        name=username,
+        email=email,
+        password_hash=password_hash,
+        settings_json={},
+    )
+    session.add(user)
+    await session.flush()
+    return user
 
 
 async def revoke_token(session: AsyncSession, token_hash: str) -> None:
