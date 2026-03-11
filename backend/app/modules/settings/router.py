@@ -5,17 +5,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_user_dep, db_session_dep
 from app.api.response import success_response
+from app.modules.auth.account_service import update_password, update_profile
 from app.modules.settings.schemas import (
     PasswordUpdateRequest,
     ProfileUpdateRequest,
     SettingsUpdateRequest,
 )
-from app.modules.settings.service import (
-    get_settings,
-    update_password,
-    update_profile,
-    update_settings,
-)
+from app.modules.settings.service import get_settings, update_settings
 
 router = APIRouter(tags=["settings"])
 

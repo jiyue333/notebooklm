@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import AppError
+from app.infra.storage.mime import guess_mime_from_suffix
 from app.infra.telemetry.context import bind_observability_context
 from app.infra.telemetry.metrics import observe_source_import
-from app.modules.ingest.service import IngestDraft, ingest_draft
+from app.modules.ingest.draft import IngestDraft
+from app.modules.ingest.service import ingest_draft
 from app.modules.jobs import publisher as job_publisher
 from app.modules.notebooks import repo as notebooks_repo
-from app.modules.notebooks import service as notebooks_service
+from app.modules.search.drafts import UploadedSourceFile
 from app.modules.search.markdown_utils import (
     build_web_placeholder,
 )
@@ -51,7 +50,7 @@ async def create_source(
         )
         observe_source_import(source_type="text", result="imported")
         await session.commit()
-        return await notebooks_service.get_notebook_detail(session, user_id=user.id, notebook_id=notebook_id)
+        return {"importedCount": 1, "skippedCount": 0}
 
     if source_type != "web":
         raise AppError(422, "不支持的来源类型", code="invalid_source_type")
@@ -79,7 +78,7 @@ async def create_source(
         await job_publisher.publish_jobs(session, [job])
         await session.commit()
 
-    return await notebooks_service.get_notebook_detail(session, user_id=user.id, notebook_id=notebook_id)
+    return {"importedCount": 1 if _article is not None else 0, "skippedCount": 0 if _article is not None else 1}
 
 
 async def upload_files(
@@ -87,7 +86,7 @@ async def upload_files(
     *,
     user,
     notebook_id: str,
-    files: list[UploadFile],
+    files: list[UploadedSourceFile],
 ) -> dict:
     bind_observability_context(
         user_id=user.id,
@@ -102,8 +101,7 @@ async def upload_files(
     imported_count = 0
     skipped_count = 0
     for upload in files:
-        data = await upload.read()
-        if not data:
+        if not upload.data:
             continue
 
         article, job = await ingest_draft(
@@ -112,12 +110,12 @@ async def upload_files(
             notebook_id=notebook_id,
             draft=IngestDraft(
                 input_type="file",
-                title=(upload.filename or "未命名文件").strip(),
-                preview_markdown=f"# {(upload.filename or '未命名文件').strip()}\n\n文件已上传，正在解析内容。\n",
-                file_name=upload.filename,
-                file_mime=upload.content_type or _guess_mime_from_suffix(upload.filename or ""),
-                file_bytes=data,
-                source_title_raw=upload.filename or "未命名文件",
+                title=(upload.file_name or "未命名文件").strip(),
+                preview_markdown=f"# {(upload.file_name or '未命名文件').strip()}\n\n文件已上传，正在解析内容。\n",
+                file_name=upload.file_name,
+                file_mime=upload.content_type or guess_mime_from_suffix(upload.file_name),
+                file_bytes=upload.data,
+                source_title_raw=upload.file_name or "未命名文件",
             ),
         )
         if article is None:
@@ -135,16 +133,4 @@ async def upload_files(
     if jobs:
         await job_publisher.publish_jobs(session, jobs)
         await session.commit()
-    return await notebooks_service.get_notebook_detail(session, user_id=user.id, notebook_id=notebook_id)
-
-def _guess_mime_from_suffix(suffix: str) -> str:
-    normalized_suffix = Path(suffix).suffix.lower()
-    if normalized_suffix == ".pdf":
-        return "application/pdf"
-    if normalized_suffix in {".txt", ".md"}:
-        return "text/plain"
-    if normalized_suffix == ".docx":
-        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    if normalized_suffix == ".doc":
-        return "application/msword"
-    return "application/octet-stream"
+    return {"importedCount": imported_count, "skippedCount": skipped_count}

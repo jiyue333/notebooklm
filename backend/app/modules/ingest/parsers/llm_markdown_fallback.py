@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from time import perf_counter
 
+from app.infra.ai.chat_models import build_user_chat_model, get_user_generation_settings
 from app.infra.telemetry.llm import extract_llm_text_and_usage
 from app.infra.telemetry.metrics import observe_ingest_fallback, observe_llm_call
-from app.modules.ai.langchain_factory import build_user_chat_model
-from app.modules.ai.langchain_factory import get_user_generation_settings
 
 
 async def fallback_to_markdown(*, user, title: str, raw_text: str) -> tuple[str | None, str]:

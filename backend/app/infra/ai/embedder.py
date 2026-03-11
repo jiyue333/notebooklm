@@ -60,7 +60,6 @@ class Embedder:
         from pydantic import SecretStr
 
         api_key_secret = SecretStr(self._runtime_config.api_key) if self._runtime_config.api_key else None
-
         embeddings = OpenAIEmbeddings(
             model=self._runtime_config.model_name,
             api_key=api_key_secret,

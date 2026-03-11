@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 
 from app.core.config import Settings, get_settings
-from app.modules.settings.crypto import get_credential_crypto
+from app.infra.security.credential_crypto import get_credential_crypto
 from app.modules.settings.defaults import get_default_user_settings
 
 OPENAI_COMPATIBLE_PROVIDERS = {
@@ -79,13 +79,6 @@ def normalize_embedding_provider(value: str | None) -> str:
 
 def resolve_search_api_key(user, settings: Settings | None = None) -> tuple[str | None, str]:
     runtime_settings = settings or get_settings()
-    import structlog
-    _logger = structlog.get_logger("DEBUG.resolve_search_api_key")
-    _logger.warning(
-        "resolve_search_api_key called",
-        has_user_cipher=bool(user.exa_api_key_ciphertext),
-        default_key_repr=repr(runtime_settings.exa_default_api_key),
-    )
     if user.exa_api_key_ciphertext:
         return get_credential_crypto().decrypt(user.exa_api_key_ciphertext), "user"
     if runtime_settings.exa_default_api_key:

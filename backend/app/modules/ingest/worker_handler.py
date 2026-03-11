@@ -7,23 +7,24 @@ import structlog
 
 from app.api.errors import AppError
 from app.infra.telemetry.context import bind_observability_context
+from app.infra.storage.file_store import (
+    load_file_bytes,
+    materialize_stored_file_for_parser,
+    stored_file_exists,
+)
 from app.infra.telemetry.metrics import observe_ingest_fallback, observe_ingest_parse, observe_job
 from app.infra.db.session import get_session_manager
 from app.modules.auth.repo import get_user_by_id
+from app.modules.ingest.content_mutation import apply_parsed_content, record_article_ready
+from app.modules.ingest.index_pipeline import index_article_content
 from app.modules.ingest.markdown_cleaner import clean_markdown
 from app.modules.ingest.parser_router import parse_file_content
 from app.modules.ingest.quality_scorer import score_markdown
-from app.modules.ingest.service import _apply_parsed_content, _index_article_content, record_article_ready
 from app.modules.ingest.parsers.exa_contents_parser import fetch_markdown_with_exa
 from app.modules.ingest.parsers.llm_markdown_fallback import fallback_to_markdown
 from app.modules.ingest.parsers.trafilatura_parser import fetch_markdown_with_trafilatura
 from app.modules.jobs import repo as jobs_repo
 from app.modules.search import repo_article
-from app.modules.search.file_storage import (
-    load_file_bytes,
-    materialize_stored_file_for_parser,
-    stored_file_exists,
-)
 from app.modules.search.service_search import execute_search
 from app.modules.settings.runtime import resolve_search_api_key
 
@@ -124,7 +125,7 @@ async def process_article_ingest(job_id: str) -> None:
                         llm_fallback_applied = True
 
                 commit_started = perf_counter()
-                _apply_parsed_content(article, markdown, parser_name, datetime.now(UTC))
+                apply_parsed_content(article, markdown, parser_name, datetime.now(UTC))
                 article.chunk_status = "processing"
                 article.index_status = "processing"
                 await session.commit()
@@ -138,7 +139,7 @@ async def process_article_ingest(job_id: str) -> None:
                     parser=parser_name or "unknown",
                 )
                 if user is not None:
-                    index_stats = await _index_article_content(session, article, user=user)
+                    index_stats = await index_article_content(session, article, user=user)
                 else:
                     article.chunk_status = "not_started"
                     article.index_status = "not_started"

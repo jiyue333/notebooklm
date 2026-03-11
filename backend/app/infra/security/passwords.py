@@ -4,9 +4,6 @@ import base64
 import hashlib
 import hmac
 import secrets
-from datetime import UTC, datetime, timedelta
-
-from app.core.config import get_settings
 
 PBKDF2_ITERATIONS = 600_000
 
@@ -42,16 +39,3 @@ def verify_password(password: str, encoded_password: str) -> bool:
         rounds,
     )
     return hmac.compare_digest(_b64encode(derived), digest_value)
-
-
-def generate_session_token() -> str:
-    return secrets.token_urlsafe(32)
-
-
-def hash_session_token(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-def build_token_expiry() -> datetime:
-    settings = get_settings()
-    return datetime.now(UTC) + timedelta(days=settings.auth_token_ttl_days)

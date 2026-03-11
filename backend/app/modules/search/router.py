@@ -8,16 +8,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.errors import AppError
 from app.api.deps import current_user_dep, db_session_dep
 from app.api.response import success_response
+from app.infra.storage.file_store import (
+    build_presigned_get_url,
+    resolve_storage_path,
+    stored_file_exists,
+)
 from app.modules.search import repo_article
+from app.modules.search.drafts import UploadedSourceFile
 from app.modules.search.schemas import (
     ImportSearchResultsRequest,
     ManualSourceRequest,
     SearchSourcesRequest,
 )
-from app.modules.search.file_storage import build_presigned_get_url, resolve_storage_path, stored_file_exists
 from app.modules.search.service_import import import_results
 from app.modules.search.service_manual import create_source, upload_files
 from app.modules.search.service_search import get_search_session, start_search
+from app.modules.notebooks.service import get_notebook_detail
 
 router = APIRouter(tags=["search"])
 
@@ -53,13 +59,14 @@ async def import_sources_endpoint(
     current_user=Depends(current_user_dep),
     session: AsyncSession = Depends(db_session_dep),
 ):
-    item = await import_results(
+    await import_results(
         session,
         user=current_user,
         notebook_id=notebook_id,
         search_session_id=payload.searchSessionId,
         search_result_ids=payload.searchResultIds,
     )
+    item = await get_notebook_detail(session, user_id=current_user.id, notebook_id=notebook_id)
     return success_response(item=item)
 
 
@@ -70,7 +77,7 @@ async def create_source_endpoint(
     current_user=Depends(current_user_dep),
     session: AsyncSession = Depends(db_session_dep),
 ):
-    item = await create_source(
+    await create_source(
         session,
         user=current_user,
         notebook_id=notebook_id,
@@ -79,6 +86,7 @@ async def create_source_endpoint(
         title=payload.title,
         content=payload.content,
     )
+    item = await get_notebook_detail(session, user_id=current_user.id, notebook_id=notebook_id)
     return success_response(item=item)
 
 
@@ -89,12 +97,21 @@ async def upload_sources_endpoint(
     current_user=Depends(current_user_dep),
     session: AsyncSession = Depends(db_session_dep),
 ):
-    item = await upload_files(
+    uploaded_files = [
+        UploadedSourceFile(
+            file_name=upload.filename,
+            content_type=upload.content_type,
+            data=await upload.read(),
+        )
+        for upload in files
+    ]
+    await upload_files(
         session,
         user=current_user,
         notebook_id=notebook_id,
-        files=files,
+        files=uploaded_files,
     )
+    item = await get_notebook_detail(session, user_id=current_user.id, notebook_id=notebook_id)
     return success_response(item=item)
 
 

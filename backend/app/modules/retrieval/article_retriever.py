@@ -8,8 +8,8 @@ from sqlalchemy import case, desc, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.infra.ai.embedder import Embedder
 from app.modules.auth.repo import get_user_by_id
-from app.modules.ingest.embedder import Embedder
 from app.modules.notebooks.models import Article
 from app.modules.retrieval.fusion import rrf_fuse_with_details
 

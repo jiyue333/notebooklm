@@ -6,16 +6,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import AppError
+from app.infra.security.passwords import hash_password, verify_password
+from app.infra.security.session_tokens import (
+    build_token_expiry,
+    generate_session_token,
+    hash_session_token,
+)
 from app.modules.auth import repo
 from app.modules.auth.models import User
 from app.modules.auth.schemas import UserView
-from app.modules.auth.security import (
-    build_token_expiry,
-    generate_session_token,
-    hash_password,
-    hash_session_token,
-    verify_password,
-)
 
 
 def build_user_view(user: User) -> UserView:

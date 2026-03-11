@@ -5,7 +5,8 @@ from typing import Literal, cast
 import structlog
 from pydantic import BaseModel, Field
 
-from app.modules.ai.langchain_factory import build_chat_router_prompt, require_user_chat_model
+from app.infra.ai.chat_models import require_user_chat_model
+from app.modules.ai.langchain_factory import build_chat_router_prompt
 
 ChatRoute = Literal["CURRENT_ARTICLE", "RELATED_ARTICLES", "EVIDENCE_LOOKUP", "GENERAL"]
 

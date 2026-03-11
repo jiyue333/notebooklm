@@ -20,7 +20,9 @@ from app.modules.jobs import repo as jobs_repo
 from app.modules.notebooks import repo as notebooks_repo
 from app.modules.settings.runtime import resolve_search_api_key
 from app.modules.search import repo_search
-from app.modules.search.models import SearchResult, SearchSession
+from app.modules.search.error_utils import sanitize_search_error_message
+from app.modules.search.view_builder import build_search_response, build_search_session_view
+from app.modules.search.models import SearchSession
 
 logger = structlog.get_logger(__name__)
 
@@ -29,45 +31,6 @@ MODE_LABELS = {
     "auto": "Auto Research",
     "deep": "Deep Research",
 }
-MAX_SEARCH_ERROR_MESSAGE_LENGTH = 4000
-
-
-def _sanitize_error_message(error: Exception) -> str:
-    message = str(error).replace("\x00", "").strip()
-    if len(message) <= MAX_SEARCH_ERROR_MESSAGE_LENGTH:
-        return message
-    return f"{message[:MAX_SEARCH_ERROR_MESSAGE_LENGTH - 1]}..."
-
-
-def _build_search_result_view(result: SearchResult) -> dict:
-    return {
-        "id": result.id,
-        "title": result.title,
-        "description": result.description or result.preview_markdown or "",
-        "icon": "🌐",
-        "url": result.raw_url,
-        "selected": True,
-    }
-
-
-def _build_session_view(search_session: SearchSession) -> dict:
-    return {
-        "searchSessionId": search_session.id,
-        "mode": search_session.mode,
-        "modeLabel": search_session.mode_label,
-        "status": search_session.status,
-        "execution": search_session.execution_mode,
-    }
-
-
-def _build_response(search_session: SearchSession, results: list[SearchResult], *, meta: dict | None = None) -> dict:
-    return {
-        "item": _build_session_view(search_session),
-        "items": [_build_search_result_view(result) for result in results],
-        "meta": meta or {"provider": search_session.provider_name},
-    }
-
-
 async def start_search(
     request_session: AsyncSession,
     *,
@@ -127,7 +90,7 @@ async def start_search(
         await _enqueue_search_job(request_session, search_session.id)
         observe_search_request(mode=mode, execution="async", status="accepted")
         return {
-            "item": _build_session_view(search_session),
+            "item": build_search_session_view(search_session),
             "items": [],
             "message": "search accepted",
         }
@@ -157,7 +120,7 @@ async def start_search(
         await _enqueue_search_job(request_session, search_session.id)
         observe_search_request(mode=mode, execution="async_fallback", status="accepted")
         return {
-            "item": _build_session_view(search_session),
+            "item": build_search_session_view(search_session),
             "items": [],
             "message": "search accepted",
         }
@@ -264,7 +227,7 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
             raise
         except Exception as exc:
             completed_at = datetime.now(UTC)
-            error_message = _sanitize_error_message(exc)
+            error_message = sanitize_search_error_message(exc)
             await session.rollback()
             search_session = await repo_search.get_search_session_by_id(
                 session,
@@ -296,7 +259,7 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
             await client.close()
 
         results = await repo_search.list_search_results(session, search_session_id=search_session.id)
-        return _build_response(
+        return build_search_response(
             search_session,
             results,
             meta={
@@ -363,4 +326,4 @@ async def get_search_session(
     if search_session.status == "completed":
         results = await repo_search.list_search_results(session, search_session_id=search_session.id)
 
-    return _build_response(search_session, results)
+    return build_search_response(search_session, results)

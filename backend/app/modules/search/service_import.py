@@ -5,9 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.errors import AppError
 from app.infra.telemetry.context import bind_observability_context
 from app.infra.telemetry.metrics import observe_source_import
-from app.modules.ingest.service import IngestDraft, ingest_draft
+from app.modules.ingest.draft import IngestDraft
+from app.modules.ingest.service import ingest_draft
 from app.modules.jobs import publisher as job_publisher
-from app.modules.notebooks import service as notebooks_service
 from app.modules.search import repo_search
 
 
@@ -80,8 +80,4 @@ async def import_results(
     if jobs:
         await job_publisher.publish_jobs(session, jobs)
         await session.commit()
-    return await notebooks_service.get_notebook_detail(
-        session,
-        user_id=user.id,
-        notebook_id=notebook_id,
-    )
+    return {"importedCount": imported_count, "skippedCount": skipped_count}
