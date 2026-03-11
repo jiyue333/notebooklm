@@ -6,8 +6,8 @@ import threading
 import structlog
 
 from app.core.config import get_settings
-from app.infra.mq.consumer import RocketMQConsumer
 from app.infra.db.session import get_session_manager
+from app.infra.mq.consumer import RocketMQConsumer
 from app.infra.mq.topics import (
     NOTEBOOK_ASYNC_TOPIC,
     TAG_ARTICLE_INGEST,
@@ -30,11 +30,11 @@ def main() -> None:
     setup_logging(settings)
     configure_langsmith(settings)
     ensure_metrics_server(port=settings.worker_metrics_port)
-    setup_tracing(engine=get_session_manager().engine, settings=settings)
 
     consumer = RocketMQConsumer(
         group_id="notebooklm-worker",
         topic=settings.rocketmq_topic or NOTEBOOK_ASYNC_TOPIC,
+        invisible_duration=settings.rocketmq_consumer_invisible_duration_seconds,
     )
     consumer.register_handler(TAG_SEARCH_DEEP, handle_search_deep)
     consumer.register_handler(TAG_ARTICLE_INGEST, handle_article_ingest)
@@ -56,8 +56,12 @@ def main() -> None:
     # Start the poll loop in a background thread
     poll_thread: threading.Thread | None = None
     if consumer_available:
+        def run_consumer_loop() -> None:
+            setup_tracing(engine=get_session_manager().engine, settings=settings)
+            consumer.poll_loop()
+
         poll_thread = threading.Thread(
-            target=consumer.poll_loop, name="mq-poll", daemon=True
+            target=run_consumer_loop, name="mq-poll", daemon=True
         )
         poll_thread.start()
 

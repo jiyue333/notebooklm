@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 from collections.abc import Callable
 from typing import Any
@@ -12,7 +14,7 @@ from app.infra.mq.rocketmq_client import _build_client_config
 
 logger = structlog.get_logger(__name__)
 
-MessageHandler = Callable[[dict[str, Any]], None]
+MessageHandler = Callable[[dict[str, Any]], Any]
 
 
 class RocketMQConsumer:
@@ -63,47 +65,69 @@ class RocketMQConsumer:
         if consumer is None:
             return
 
-        while self._running:
-            try:
-                messages = consumer.receive(max_message_num=16, invisible_duration=30)
-                if not messages:
-                    continue
-                for msg in messages:
-                    tag = msg.tag or ""
-                    try:
-                        body = json.loads(msg.body.decode("utf-8") if isinstance(msg.body, bytes) else msg.body)
-                    except (json.JSONDecodeError, UnicodeDecodeError):
-                        logger.warning(
-                            "mq.decode_failed",
-                            message_id=msg.message_id,
-                            tag=tag,
-                        )
-                        consumer.ack(msg)
+        invisible_duration = int(self._kwargs.get("invisible_duration", 300))
+        runner = asyncio.Runner()
+        try:
+            while self._running:
+                try:
+                    messages = consumer.receive(
+                        max_message_num=16,
+                        invisible_duration=invisible_duration,
+                    )
+                    if not messages:
                         continue
-
-                    handler = self._handlers.get(tag)
-                    if handler is not None:
+                    for msg in messages:
+                        tag = msg.tag or ""
+                        should_ack = False
                         try:
-                            handler(body)
-                        except Exception:
-                            logger.exception(
-                                "mq.handler_error",
+                            body = json.loads(
+                                msg.body.decode("utf-8") if isinstance(msg.body, bytes) else msg.body
+                            )
+                        except (json.JSONDecodeError, UnicodeDecodeError):
+                            logger.warning(
+                                "mq.decode_failed",
                                 message_id=msg.message_id,
                                 tag=tag,
                             )
-                    else:
-                        logger.warning(
-                            "mq.no_handler",
-                            message_id=msg.message_id,
-                            tag=tag,
-                        )
+                            should_ack = True
+                        else:
+                            handler = self._handlers.get(tag)
+                            if handler is not None:
+                                try:
+                                    result = handler(body)
+                                    if inspect.isawaitable(result):
+                                        runner.run(result)
+                                    should_ack = True
+                                except Exception:
+                                    logger.exception(
+                                        "mq.handler_error",
+                                        message_id=msg.message_id,
+                                        tag=tag,
+                                    )
+                            else:
+                                logger.warning(
+                                    "mq.no_handler",
+                                    message_id=msg.message_id,
+                                    tag=tag,
+                                )
+                                should_ack = True
 
-                    consumer.ack(msg)
-            except Exception:
-                if self._running:
-                    logger.exception("mq.poll_error")
-                    import time
-                    time.sleep(1)
+                        if should_ack:
+                            try:
+                                consumer.ack(msg)
+                            except Exception:
+                                logger.exception(
+                                    "mq.ack_failed",
+                                    message_id=msg.message_id,
+                                    tag=tag,
+                                )
+                except Exception:
+                    if self._running:
+                        logger.exception("mq.poll_error")
+                        import time
+                        time.sleep(1)
+        finally:
+            runner.close()
 
     def shutdown(self) -> None:
         self._running = False

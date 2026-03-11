@@ -56,6 +56,7 @@ class Settings(BaseSettings):
 
     rocketmq_proxy_endpoint: str = "127.0.0.1:8081"
     rocketmq_topic: str = "notebook_async"
+    rocketmq_consumer_invisible_duration_seconds: int = 300
 
     object_storage_endpoint: str = "127.0.0.1:9000"
     object_storage_access_key: str = "minioadmin"

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { memo, startTransition, useState, useCallback, useRef, useEffect, useMemo, useDeferredValue } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTheme } from '../contexts/useTheme';
 import { appApi, clearStoredSession, isAuthError } from '../services/appApi';
@@ -87,6 +87,33 @@ function stripFirstH1(markdown) {
     return result.join('\n').replace(/^\n+/, '');
 }
 
+function areTocEntriesEqual(left = [], right = []) {
+    if (left === right) return true;
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+        return false;
+    }
+    return left.every((entry, index) => (
+        entry?.id === right[index]?.id
+        && entry?.title === right[index]?.title
+        && entry?.level === right[index]?.level
+    ));
+}
+
+function isSameArticleSnapshot(current, next) {
+    if (current === next) return true;
+    if (!current || !next || current.id !== next.id) return false;
+    return current.title === next.title
+        && current.author === next.author
+        && current.date === next.date
+        && current.content === next.content
+        && current.contentReady === next.contentReady
+        && current.parseStatus === next.parseStatus
+        && current.renderMode === next.renderMode
+        && current.fileUrl === next.fileUrl
+        && current.processingHint === next.processingHint
+        && areTocEntriesEqual(current.toc, next.toc);
+}
+
 const createChatMessageId = () => `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const CHAT_ROUTE_LABELS = {
     CURRENT_ARTICLE: '当前文章',
@@ -94,6 +121,127 @@ const CHAT_ROUTE_LABELS = {
     EVIDENCE_LOOKUP: '证据检索',
     GENERAL: '通用问题',
 };
+
+const ARTICLE_MARKDOWN_REMARK_PLUGINS = [remarkGfm];
+const ARTICLE_MARKDOWN_REHYPE_PLUGINS = [rehypeRaw, rehypeSlug];
+
+const MarkdownDocument = memo(function MarkdownDocument({ content, className }) {
+    if (!content?.trim()) {
+        return null;
+    }
+
+    return (
+        <div className={className}>
+            <ReactMarkdown
+                remarkPlugins={ARTICLE_MARKDOWN_REMARK_PLUGINS}
+                rehypePlugins={ARTICLE_MARKDOWN_REHYPE_PLUGINS}
+            >
+                {content}
+            </ReactMarkdown>
+        </div>
+    );
+});
+
+const ArticleContentPane = memo(function ArticleContentPane({
+    articleId,
+    articleTitle,
+    articleFileUrl,
+    articleProcessingHint,
+    articleDisplayBlocked,
+    articleRenderMode,
+    renderedArticleContent,
+    fontSize,
+    pageWidth,
+    showSummary,
+    summaryLoading,
+    summaryText,
+    showTranslation,
+    translationLoading,
+    translationText,
+    translationLanguage,
+    translationError,
+    setShowSummary,
+    setShowTranslation,
+}) {
+    const deferredArticleContent = useDeferredValue(renderedArticleContent);
+
+    return (
+        <div
+            className="nb-article-content"
+            style={{ fontSize: `${fontSize}rem`, maxWidth: `${pageWidth}px` }}
+            data-article-id={articleId}
+        >
+            {showSummary && (
+                <div className="nb-summary-card">
+                    <div className="nb-summary-header">
+                        <span className="nb-summary-icon">{I.sparkle}</span>
+                        <span className="nb-summary-label">摘要</span>
+                        <button className="nb-icon-btn-sm" onClick={() => setShowSummary(false)}>{I.close}</button>
+                    </div>
+                    <div className="nb-summary-body">
+                        {summaryLoading ? (
+                            <>
+                                {summaryText ? (
+                                    <MarkdownDocument className="nb-summary-markdown" content={summaryText} />
+                                ) : null}
+                                <div className="nb-summary-loading"><span className="nb-spinner" /><span>正在生成摘要...</span></div>
+                            </>
+                        ) : (
+                            <MarkdownDocument className="nb-summary-markdown" content={summaryText} />
+                        )}
+                    </div>
+                </div>
+            )}
+            {showTranslation && (
+                <div className="nb-summary-card nb-translation-card">
+                    <div className="nb-summary-header">
+                        <span className="nb-summary-icon">{I.translate}</span>
+                        <span className="nb-summary-label">
+                            {translationLoading ? '正在翻译...' : `译文${translationLanguage ? ` · ${translationLanguage}` : ''}`}
+                        </span>
+                        <button className="nb-icon-btn-sm" onClick={() => setShowTranslation(false)}>{I.close}</button>
+                    </div>
+                    <div className="nb-summary-body">
+                        {translationLoading ? (
+                            <div className="nb-summary-loading"><span className="nb-spinner" /><span>正在生成译文...</span></div>
+                        ) : translationError ? (
+                            <p>{translationError}</p>
+                        ) : (
+                            <p>当前内容已切换为译文视图。</p>
+                        )}
+                    </div>
+                </div>
+            )}
+            {articleDisplayBlocked ? (
+                <div className="nb-article-pending">
+                    <div className="nb-article-pending-icon">{I.paper}</div>
+                    <h3>正文准备中</h3>
+                    <p>{articleProcessingHint || '来源已导入，正在处理正文，请稍后刷新。'}</p>
+                </div>
+            ) : showTranslation && translationText ? (
+                <MarkdownDocument content={deferredArticleContent} />
+            ) : articleRenderMode === 'pdf' ? (
+                articleFileUrl ? (
+                    <iframe
+                        title={articleTitle}
+                        src={articleFileUrl}
+                        style={{
+                            width: '100%',
+                            minHeight: '72vh',
+                            border: '1px solid rgba(148, 163, 184, 0.28)',
+                            borderRadius: '18px',
+                            background: '#fff',
+                        }}
+                    />
+                ) : (
+                    <div className="nb-empty-hint"><p>PDF 文件暂不可访问</p></div>
+                )
+            ) : (
+                <MarkdownDocument content={deferredArticleContent} />
+            )}
+        </div>
+    );
+});
 
 /* ============================================
    SVG Icons – Tidyflux filled style (currentColor)
@@ -204,11 +352,12 @@ export default function NotebookPage() {
     const syncNotebookState = useCallback((detail) => {
         setNotebook(detail);
         setNotes(detail.notes || []);
-        setSelectedArticle((prev) => (
-            detail.articles.find((article) => article.id === prev?.id)
-            || detail.articles[0]
-            || null
-        ));
+        setSelectedArticle((prev) => {
+            const nextSelected = detail.articles.find((article) => article.id === prev?.id)
+                || detail.articles[0]
+                || null;
+            return isSameArticleSnapshot(prev, nextSelected) ? prev : nextSelected;
+        });
     }, []);
 
     useEffect(() => {
@@ -457,13 +606,19 @@ export default function NotebookPage() {
     };
 
     const handleSelectArticle = useCallback((article) => {
-        setSelectedArticle(article);
-        setSearchParams((prev) => {
-            const next = new URLSearchParams(prev);
-            next.set('articleId', article.id);
-            return next;
-        }, { replace: true });
-    }, [setSearchParams]);
+        if (!article || article.id === selectedArticle?.id) {
+            return;
+        }
+
+        startTransition(() => {
+            setSelectedArticle(article);
+            setSearchParams((prev) => {
+                const next = new URLSearchParams(prev);
+                next.set('articleId', article.id);
+                return next;
+            }, { replace: true });
+        });
+    }, [selectedArticle?.id, setSearchParams]);
 
     const buildCitationMeta = useCallback((citation) => {
         const parts = [];
@@ -690,88 +845,27 @@ export default function NotebookPage() {
                             </div>
 
                             <div className="nb-center-body">
-                                <div className="nb-article-content" style={{ fontSize: `${fontSize}rem`, maxWidth: `${pageWidth}px` }}>
-                                    {showSummary && (
-                                        <div className="nb-summary-card">
-                                            <div className="nb-summary-header">
-                                                <span className="nb-summary-icon">{I.sparkle}</span>
-                                                <span className="nb-summary-label">摘要</span>
-                                                <button className="nb-icon-btn-sm" onClick={() => setShowSummary(false)}>{I.close}</button>
-                                            </div>
-                                            <div className="nb-summary-body">
-                                                {summaryLoading ? (
-                                                    <>
-                                                        {summaryText ? (
-                                                            <div className="nb-summary-markdown">
-                                                                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSlug]}>
-                                                                    {summaryText}
-                                                                </ReactMarkdown>
-                                                            </div>
-                                                        ) : null}
-                                                        <div className="nb-summary-loading"><span className="nb-spinner" /><span>正在生成摘要...</span></div>
-                                                    </>
-                                                ) : (
-                                                    <div className="nb-summary-markdown">
-                                                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSlug]}>
-                                                            {summaryText}
-                                                        </ReactMarkdown>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-                                    )}
-                                    {showTranslation && (
-                                        <div className="nb-summary-card nb-translation-card">
-                                            <div className="nb-summary-header">
-                                                <span className="nb-summary-icon">{I.translate}</span>
-                                                <span className="nb-summary-label">
-                                                    {translationLoading ? '正在翻译...' : `译文${translationLanguage ? ` · ${translationLanguage}` : ''}`}
-                                                </span>
-                                                <button className="nb-icon-btn-sm" onClick={() => setShowTranslation(false)}>{I.close}</button>
-                                            </div>
-                                            <div className="nb-summary-body">
-                                                {translationLoading ? (
-                                                    <div className="nb-summary-loading"><span className="nb-spinner" /><span>正在生成译文...</span></div>
-                                                ) : translationError ? (
-                                                    <p>{translationError}</p>
-                                                ) : (
-                                                    <p>当前内容已切换为译文视图。</p>
-                                                )}
-                                            </div>
-                                        </div>
-                                    )}
-                                    {articleDisplayBlocked ? (
-                                        <div className="nb-article-pending">
-                                            <div className="nb-article-pending-icon">{I.paper}</div>
-                                            <h3>正文准备中</h3>
-                                            <p>{selectedArticle.processingHint || '来源已导入，正在处理正文，请稍后刷新。'}</p>
-                                        </div>
-                                    ) : showTranslation && translationText ? (
-                                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSlug]}>
-                                            {renderedArticleContent}
-                                        </ReactMarkdown>
-                                    ) : articleRenderMode === 'pdf' ? (
-                                        selectedArticle.fileUrl ? (
-                                            <iframe
-                                                title={selectedArticle.title}
-                                                src={selectedArticle.fileUrl}
-                                                style={{
-                                                    width: '100%',
-                                                    minHeight: '72vh',
-                                                    border: '1px solid rgba(148, 163, 184, 0.28)',
-                                                    borderRadius: '18px',
-                                                    background: '#fff',
-                                                }}
-                                            />
-                                        ) : (
-                                            <div className="nb-empty-hint"><p>PDF 文件暂不可访问</p></div>
-                                        )
-                                    ) : (
-                                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSlug]}>
-                                            {renderedArticleContent}
-                                        </ReactMarkdown>
-                                    )}
-                                </div>
+                                <ArticleContentPane
+                                    articleId={selectedArticle.id}
+                                    articleTitle={selectedArticle.title}
+                                    articleFileUrl={selectedArticle.fileUrl}
+                                    articleProcessingHint={selectedArticle.processingHint}
+                                    articleDisplayBlocked={articleDisplayBlocked}
+                                    articleRenderMode={articleRenderMode}
+                                    renderedArticleContent={renderedArticleContent}
+                                    fontSize={fontSize}
+                                    pageWidth={pageWidth}
+                                    showSummary={showSummary}
+                                    summaryLoading={summaryLoading}
+                                    summaryText={summaryText}
+                                    showTranslation={showTranslation}
+                                    translationLoading={translationLoading}
+                                    translationText={translationText}
+                                    translationLanguage={translationLanguage}
+                                    translationError={translationError}
+                                    setShowSummary={setShowSummary}
+                                    setShowTranslation={setShowTranslation}
+                                />
                             </div>
                         </>
                     ) : (

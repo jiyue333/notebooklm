@@ -733,9 +733,10 @@
     width: 100%;
     line-height: 1.8;
     color: var(--text-color);
-    animation: fadeIn 0.3s ease-out both;
     overflow-wrap: anywhere;
     word-break: break-word;
+    content-visibility: auto;
+    contain-intrinsic-size: 960px;
 }
 
 .nb-article-pending {
