@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.errors import AppError
 from app.modules.notes import repo
 from app.modules.notebooks import repo as notebooks_repo
+from app.modules.notebooks.service import invalidate_notebook_detail_cache
 from app.modules.notebooks.assembler import build_note_view
 
 
@@ -53,6 +54,7 @@ async def save_note(
 
     await session.commit()
     await session.refresh(note)
+    await invalidate_notebook_detail_cache(user_id=user_id, notebook_id=notebook_id)
     return build_note_view(note)
 
 
@@ -68,3 +70,4 @@ async def delete_note(
         raise AppError(404, "未找到对应笔记", code="note_not_found")
     await repo.delete_note(session, note)
     await session.commit()
+    await invalidate_notebook_detail_cache(user_id=user_id, notebook_id=notebook_id)

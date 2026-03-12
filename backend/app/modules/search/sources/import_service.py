@@ -8,6 +8,7 @@ from app.infra.telemetry.metrics import observe_source_import
 from app.modules.ingest.articles.draft import IngestDraft
 from app.modules.ingest.articles.service import ingest_draft
 from app.modules.jobs import publisher as job_publisher
+from app.modules.notebooks.service import invalidate_notebook_detail_cache
 from app.modules.search.sessions import repo as repo_search
 
 
@@ -77,6 +78,8 @@ async def import_results(
     if skipped_count:
         observe_source_import(source_type="search_result", result="skipped", count=skipped_count)
     await session.commit()
+    if imported_count or skipped_count:
+        await invalidate_notebook_detail_cache(user_id=user.id, notebook_id=notebook_id)
     if jobs:
         await job_publisher.publish_jobs(session, jobs)
         await session.commit()

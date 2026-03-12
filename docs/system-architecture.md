@@ -642,41 +642,94 @@ sequenceDiagram
 - Context builder: `ai/chat/context_builder.py`
 - Route decision: `retrieval/router.py`
 
-#### 4.4.1 流程图
+#### 4.4.1 `ai/chat` 包内文件职责
+
+| 文件 | 主要职责 |
+| --- | --- |
+| `service.py` | Chat 的同步/流式入口编排，负责调用 prepare、模型执行、finalize、SSE 输出 |
+| `context_builder.py` | 组装 `PreparedChatReply`，串起 notebook 校验、conversation、route、retrieval、prompt |
+| `conversation.py` | conversation 的创建/复用、user/assistant message 追加、最近历史窗口读取 |
+| `repo.py` | `Conversation` / `ConversationMessage` 的数据库读写 |
+| `message_mapper.py` | 把 ORM message 转成 LangChain `HumanMessage` / `AIMessage` |
+| `rollup.py` | 长会话历史压缩，把旧消息总结进 `rolling_summary`，并删除溢出消息 |
+| `runner.py` | 非流式 `ainvoke()` 包装和 LLM 调用错误统一处理 |
+| `result_serializer.py` | 组装 API 响应、citation、retrieval snapshot |
+| `models.py` | `Conversation` 和 `ConversationMessage` 的表结构 |
+| `schemas.py` | `ChatRequest` 请求体定义 |
+
+#### 4.4.2 总流程图
 
 ```mermaid
 flowchart TD
     A["POST /chat or /chat/stream"] --> B["prepare_chat_reply()"]
-    B --> C["load_or_create_conversation()"]
-    C --> D["append_user_message()"]
-    D --> E{"route_chat_message()"}
+    B --> C["校验 notebook 是否存在"]
+    C --> D["load_or_create_conversation()"]
+    D --> E["append_user_message()"]
+    E --> F["commit user turn"]
+    F --> G["route_chat_message()"]
 
-    E -->|"CURRENT_ARTICLE"| F["load current article markdown"]
-    E -->|"EVIDENCE_LOOKUP"| G["retrieve_notebook_evidence_chunks()"]
-    E -->|"RELATED_ARTICLES"| H["retrieve_related_articles()"]
-    E -->|"GENERAL"| I["build general notebook context"]
+    G -->|"CURRENT_ARTICLE"| H["读取当前文章正文"]
+    G -->|"EVIDENCE_LOOKUP"| I["检索 evidence chunks"]
+    G -->|"RELATED_ARTICLES"| J["检索 related articles"]
+    G -->|"GENERAL"| K["构造通用 notebook context"]
 
-    G --> J{"chunk hit?"}
-    J -->|"yes"| K["chunk citations + context"]
-    J -->|"no"| H
+    I --> L{"chunk 命中?"}
+    L -->|"yes"| M["chunk citations + context"]
+    L -->|"no"| J
 
-    F --> L["load_history_messages()"]
-    K --> L
-    H --> L
-    I --> L
+    H --> N["load_history_messages()"]
+    M --> N
+    J --> N
+    K --> N
 
-    L --> M["build_chat_prompt()"]
-    M --> N["require_user_chat_model()"]
-    N --> O{"stream?"}
-    O -->|"no"| P["ainvoke()"]
-    O -->|"yes"| Q["astream()"]
-    P --> R["append_assistant_message()"]
-    Q --> R
-    R --> S["maybe_rollup_conversation()"]
-    S --> T["commit and return reply"]
+    N --> O["build_chat_prompt()"]
+    O --> P["require_user_chat_model()"]
+    P --> Q{"stream?"}
+    Q -->|"no"| R["run_chat_completion()"]
+    Q -->|"yes"| S["model.astream() + SSE token"]
+    R --> T["_finalize_chat_reply()"]
+    S --> T
+    T --> U["append_assistant_message()"]
+    U --> V["maybe_rollup_conversation()"]
+    V --> W["commit and return response"]
 ```
 
-#### 4.4.2 关键时序图
+#### 4.4.3 Conversation 与历史管理流程图
+
+```mermaid
+flowchart TD
+    A["收到 conversationId + articleId + user message"] --> B{"conversationId 存在且是合法 UUID?"}
+    B -->|"yes"| C["repo.get_conversation_by_id()"]
+    B -->|"no"| D["create_conversation()"]
+
+    C --> E{"属于当前 user + notebook?"}
+    E -->|"no"| F["返回 404 conversation_not_found"]
+    E -->|"yes"| G["复用已有 conversation"]
+    C -->|"not found"| D
+
+    D --> H["初始化 current_article_id / last_message_at"]
+    G --> I{"本次请求带 articleId?"}
+    I -->|"yes"| J["更新 current_article_id / last_message_at"]
+    I -->|"no"| K["保持当前 article context"]
+    H --> L["append_user_message()"]
+    J --> L
+    K --> L
+
+    L --> M["commit user message"]
+    M --> N["load_history_messages(limit=10, exclude current user message)"]
+    N --> O["repo.list_conversation_messages(desc limit N)"]
+    O --> P["reversed() -> oldest to newest"]
+    P --> Q["to_langchain_history()"]
+    Q --> R["rolling_summary + recent history + user_message 进入 prompt"]
+    R --> S["生成 assistant answer"]
+    S --> T["append_assistant_message(retrieval_snapshot_json)"]
+    T --> U["maybe_rollup_conversation()"]
+    U --> V{"message_count > 12?"}
+    V -->|"no"| W["直接 commit"]
+    V -->|"yes"| X["汇总旧消息 -> 更新 rolling_summary -> 删除溢出消息 -> commit"]
+```
+
+#### 4.4.4 流式回答关键时序图
 
 ```mermaid
 sequenceDiagram
@@ -684,20 +737,25 @@ sequenceDiagram
     participant API as "ai/router"
     participant Chat as "chat/service"
     participant Context as "chat/context_builder"
+    participant Conv as "chat/conversation"
     participant Route as "retrieval/router"
-    participant Retrieval as "article/chunk retriever"
+    participant Retrieval as "retrieval/*"
     participant LLM as "chat model"
     participant DB as "Postgres"
 
     FE->>API: POST /chat/stream
     API->>Chat: stream_reply()
     Chat->>Context: prepare_chat_reply()
-    Context->>DB: load/create conversation + append user message
+    Context->>Conv: load_or_create_conversation()
+    Conv->>DB: get/create conversation
+    Context->>Conv: append_user_message()
+    Conv->>DB: insert user message
+    Context->>DB: commit
     Context->>Route: route_chat_message()
 
     alt CURRENT_ARTICLE
         Route-->>Context: CURRENT_ARTICLE
-        Context->>DB: load current article markdown
+        Context->>DB: load article clean_markdown
     else EVIDENCE_LOOKUP
         Route-->>Context: EVIDENCE_LOOKUP
         Context->>Retrieval: retrieve_notebook_evidence_chunks()
@@ -711,17 +769,93 @@ sequenceDiagram
         Route-->>Context: GENERAL
     end
 
-    Context->>LLM: build prompt + astream()
-    LLM-->>Chat: token chunks
-    Chat-->>FE: SSE token
-    LLM-->>Chat: done
+    Context->>Conv: load_history_messages(exclude current user message)
+    Conv->>DB: select recent messages
+    Context->>LLM: prompt.ainvoke() + model.astream()
+    Chat-->>FE: SSE start
+    loop token streaming
+        LLM-->>Chat: chunk
+        Chat-->>FE: SSE token
+    end
+    Chat->>Chat: _finalize_chat_reply(answer)
     Chat->>DB: append assistant message
-    Chat->>DB: maybe_rollup_conversation()
-    Chat->>DB: commit
+    Chat->>DB: maybe rollup + commit
     Chat-->>FE: SSE done
 ```
 
-#### 4.4.3 Route 语义
+#### 4.4.5 历史管理时序图
+
+```mermaid
+sequenceDiagram
+    participant FE as "Frontend"
+    participant Context as "chat/context_builder"
+    participant Conv as "chat/conversation"
+    participant Repo as "chat/repo"
+    participant Mapper as "chat/message_mapper"
+    participant Prompt as "chat_prompt"
+    participant DB as "Postgres"
+
+    FE->>Context: notebookId, articleId, conversationId?, message
+    Context->>Conv: load_or_create_conversation()
+    alt 传入合法 conversationId
+        Conv->>Repo: get_conversation_by_id()
+        Repo->>DB: select conversation
+        alt 会话不属于当前 user/notebook
+            Conv-->>Context: 404 conversation_not_found
+        else 命中已有会话
+            Conv->>DB: update current_article_id / last_message_at
+        end
+    else 没传或非法 conversationId
+        Conv->>Repo: create_conversation()
+        Repo->>DB: insert conversation
+    end
+
+    Context->>Conv: append_user_message()
+    Conv->>Repo: create_message(role=user)
+    Repo->>DB: insert user message
+    Context->>DB: commit
+
+    Context->>Conv: load_history_messages(exclude current user message)
+    Conv->>Repo: list_conversation_messages(limit=11)
+    Repo->>DB: select newest N messages desc
+    Repo-->>Conv: reverse to asc list
+    Conv->>Mapper: to_langchain_history()
+    Mapper-->>Context: recent history messages
+
+    Context->>Prompt: rolling_summary + history_messages + user_message
+```
+
+#### 4.4.6 历史压缩（rollup）时序图
+
+```mermaid
+sequenceDiagram
+    participant Chat as "chat/service"
+    participant Rollup as "chat/rollup"
+    participant Repo as "chat/repo"
+    participant Prompt as "chat_rollup_prompt"
+    participant LLM as "chat model"
+    participant DB as "Postgres"
+
+    Chat->>Rollup: maybe_rollup_conversation()
+    Rollup->>Repo: list_conversation_messages()
+    Repo->>DB: select all messages asc
+
+    alt message_count <= 12
+        Rollup-->>Chat: skip rollup
+    else message_count > 12
+        Rollup->>Rollup: overflow = old messages except latest 8
+        Rollup->>Prompt: existing_summary + overflow transcript
+        Prompt-->>Rollup: rollup prompt
+        Rollup->>LLM: ainvoke()
+        LLM-->>Rollup: new summary
+        Rollup->>DB: update conversation.rolling_summary
+        Rollup->>Repo: delete_conversation_messages(overflow ids)
+        Repo->>DB: delete old rows
+        Rollup-->>Chat: summary updated, history trimmed
+    end
+```
+
+#### 4.4.7 Route 语义
 
 | route              | 主要上下文来源                             | 典型场景               |
 | ------------------ | ------------------------------------------ | ---------------------- |

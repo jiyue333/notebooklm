@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import AppError
 from app.core.config import get_settings
+from app.infra.cache import delete_keys, get_json, search_session_key, set_json
 from app.infra.db.session import get_session_manager
 from app.infra.providers.exa.mapper import ExaResultMapper
 from app.infra.providers.exa.search_client import ExaSearchClient, ExaSearchMode, ExaSearchRequest
@@ -32,6 +33,8 @@ MODE_LABELS = {
     "auto": "Auto Research",
     "deep": "Deep Research",
 }
+
+
 async def start_search(
     request_session: AsyncSession,
     *,
@@ -91,11 +94,19 @@ async def start_search(
     if mode == "deep":
         await _enqueue_search_job(request_session, search_session.id)
         observe_search_request(mode=mode, execution="async", status="accepted")
-        return {
+        response = {
             "item": build_search_session_view(search_session),
             "items": [],
             "message": "search accepted",
         }
+        await _cache_search_response(
+            user_id=user.id,
+            notebook_id=notebook_id,
+            search_session_id=search_session.id,
+            response=response,
+            status=search_session.status,
+        )
+        return response
 
     deadline_seconds = get_settings().search_inline_deadline_ms / 1000
     try:
@@ -121,11 +132,19 @@ async def start_search(
             search_session = reloaded
         await _enqueue_search_job(request_session, search_session.id)
         observe_search_request(mode=mode, execution="async_fallback", status="accepted")
-        return {
+        response = {
             "item": build_search_session_view(search_session),
             "items": [],
             "message": "search accepted",
         }
+        await _cache_search_response(
+            user_id=user.id,
+            notebook_id=notebook_id,
+            search_session_id=search_session.id,
+            response=response,
+            status=search_session.status,
+        )
+        return response
 
 
 async def execute_search(search_session_id: str, *, timeout_seconds: float | None = None) -> dict:
@@ -154,6 +173,11 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
             error_message=None,
         )
         await session.commit()
+        await invalidate_search_session_cache(
+            user_id=search_session.user_id,
+            notebook_id=search_session.notebook_id,
+            search_session_id=search_session.id,
+        )
         status_for_metrics = "running"
 
         user = await get_user_by_id(session, search_session.user_id)
@@ -170,6 +194,11 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
                 completed_at=datetime.now(UTC),
             )
             await session.commit()
+            await invalidate_search_session_cache(
+                user_id=search_session.user_id,
+                notebook_id=search_session.notebook_id,
+                search_session_id=search_session.id,
+            )
             status_for_metrics = "failed"
             raise AppError(422, "请先在设置里配置 Exa API Key", code="search_api_key_required")
 
@@ -209,6 +238,11 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
                 error_message=None,
             )
             await session.commit()
+            await invalidate_search_session_cache(
+                user_id=search_session.user_id,
+                notebook_id=search_session.notebook_id,
+                search_session_id=search_session.id,
+            )
             status_for_metrics = "completed"
         except TimeoutError:
             await session.rollback()
@@ -225,6 +259,11 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
                 error_message=None,
             )
             await session.commit()
+            await invalidate_search_session_cache(
+                user_id=search_session.user_id,
+                notebook_id=search_session.notebook_id,
+                search_session_id=search_session.id,
+            )
             status_for_metrics = "queued"
             raise
         except Exception as exc:
@@ -244,6 +283,11 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
                 completed_at=completed_at,
             )
             await session.commit()
+            await invalidate_search_session_cache(
+                user_id=search_session.user_id,
+                notebook_id=search_session.notebook_id,
+                search_session_id=search_session.id,
+            )
             status_for_metrics = "failed"
             logger.exception(
                 "sources.search.execute_failed",
@@ -261,7 +305,7 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
             await client.close()
 
         results = await repo_search.list_search_results(session, search_session_id=search_session.id)
-        return build_search_response(
+        response = build_search_response(
             search_session,
             results,
             meta={
@@ -269,6 +313,14 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
                 "elapsedMs": round((perf_counter() - started_at) * 1000, 2),
             },
         )
+        await _cache_search_response(
+            user_id=search_session.user_id,
+            notebook_id=search_session.notebook_id,
+            search_session_id=search_session.id,
+            response=response,
+            status=search_session.status,
+        )
+        return response
 
     raise AppError(500, "search execution unavailable", code="search_execution_unavailable")
 
@@ -302,6 +354,15 @@ async def get_search_session(
     notebook_id: str,
     search_session_id: str,
 ) -> dict:
+    cache_key = search_session_key(
+        user_id=user_id,
+        notebook_id=notebook_id,
+        search_session_id=search_session_id,
+    )
+    cached = await get_json(cache_key)
+    if isinstance(cached, dict):
+        return cached
+
     search_session = await repo_search.get_search_session(
         session,
         user_id=user_id,
@@ -323,9 +384,64 @@ async def get_search_session(
             completed_at=datetime.now(UTC),
         )
         await session.commit()
+        await invalidate_search_session_cache(
+            user_id=user_id,
+            notebook_id=notebook_id,
+            search_session_id=search_session.id,
+        )
 
     results = []
     if search_session.status == "completed":
         results = await repo_search.list_search_results(session, search_session_id=search_session.id)
 
-    return build_search_response(search_session, results)
+    response = build_search_response(search_session, results)
+    await _cache_search_response(
+        user_id=user_id,
+        notebook_id=notebook_id,
+        search_session_id=search_session.id,
+        response=response,
+        status=search_session.status,
+    )
+    return response
+
+
+async def invalidate_search_session_cache(
+    *,
+    user_id: str,
+    notebook_id: str,
+    search_session_id: str,
+) -> None:
+    await delete_keys(
+        [
+            search_session_key(
+                user_id=user_id,
+                notebook_id=notebook_id,
+                search_session_id=search_session_id,
+            )
+        ]
+    )
+
+
+async def _cache_search_response(
+    *,
+    user_id: str,
+    notebook_id: str,
+    search_session_id: str,
+    response: dict,
+    status: str,
+) -> None:
+    settings = get_settings()
+    ttl_seconds = (
+        settings.cache_ttl_search_session_completed_seconds
+        if status in {"completed", "failed", "expired"}
+        else settings.cache_ttl_search_session_pending_seconds
+    )
+    await set_json(
+        search_session_key(
+            user_id=user_id,
+            notebook_id=notebook_id,
+            search_session_id=search_session_id,
+        ),
+        response,
+        ttl_seconds=ttl_seconds,
+    )

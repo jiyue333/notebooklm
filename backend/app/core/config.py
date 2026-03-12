@@ -34,6 +34,12 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://127.0.0.1:6379/0"
     redis_decode_responses: bool = False
+    redis_cache_enabled: bool = True
+    cache_ttl_notebook_detail_seconds: int = 30
+    cache_ttl_notebook_detail_pending_seconds: int = 2
+    cache_ttl_search_session_completed_seconds: int = 300
+    cache_ttl_search_session_pending_seconds: int = 2
+    cache_ttl_settings_seconds: int = 900
 
     exa_base_url: str = "https://api.exa.ai"
     exa_default_api_key: str | None = None

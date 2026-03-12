@@ -1,3 +1,0 @@
-Uploaded plain text fixture for NotebookLM HTTP replay.
-
-This file is used to exercise the multipart upload endpoint with a non-markdown file.

@@ -6,9 +6,18 @@ from datetime import UTC, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import AppError
+from app.core.config import get_settings as get_system_settings
+from app.infra.cache import (
+    delete_keys,
+    get_json,
+    notebook_detail_key,
+    set_json,
+    settings_view_key,
+)
 from app.infra.security.credential_crypto import get_credential_crypto
 from app.modules.auth.models import User
 from app.modules.jobs import publisher as job_publisher
+from app.modules.notebooks import repo as notebooks_repo
 from app.modules.settings.defaults import get_default_user_settings
 from app.modules.settings.patcher import apply_credential_updates, merge_settings_payload
 from app.modules.settings.reindex import (
@@ -32,7 +41,18 @@ class EmbeddingUpdatePlan:
 
 
 async def get_settings(user: User) -> dict:
-    return build_settings_view(user)
+    cache_key = settings_view_key(user_id=user.id)
+    cached = await get_json(cache_key)
+    if isinstance(cached, dict):
+        return cached
+
+    item = build_settings_view(user)
+    await set_json(
+        cache_key,
+        item,
+        ttl_seconds=get_system_settings().cache_ttl_settings_seconds,
+    )
+    return item
 
 
 async def update_settings(
@@ -64,7 +84,15 @@ async def update_settings(
     await session.commit()
     await _publish_reindex_jobs(session, reindex_jobs)
     await session.refresh(user)
-    return build_settings_view(user)
+    await invalidate_settings_view_cache(user_id=user.id)
+    await _invalidate_user_notebook_detail_caches(session, user_id=user.id, embedding_changed=embedding_update.changed)
+    item = build_settings_view(user)
+    await set_json(
+        settings_view_key(user_id=user.id),
+        item,
+        ttl_seconds=get_system_settings().cache_ttl_settings_seconds,
+    )
+    return item
 
 
 def _merge_user_settings(*, user: User, payload: dict) -> tuple[dict, dict]:
@@ -148,3 +176,24 @@ async def _publish_reindex_jobs(session: AsyncSession, jobs: list) -> None:
         pass
     finally:
         await session.commit()
+
+
+async def invalidate_settings_view_cache(*, user_id: str) -> None:
+    await delete_keys([settings_view_key(user_id=user_id)])
+
+
+async def _invalidate_user_notebook_detail_caches(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    embedding_changed: bool,
+) -> None:
+    if not embedding_changed:
+        return
+    notebooks = await notebooks_repo.list_notebooks(session, user_id=user_id)
+    await delete_keys(
+        [
+            notebook_detail_key(user_id=user_id, notebook_id=notebook.id)
+            for notebook in notebooks
+        ]
+    )

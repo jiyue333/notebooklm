@@ -10,6 +10,7 @@ from app.modules.ingest.articles.draft import IngestDraft
 from app.modules.ingest.articles.service import ingest_draft
 from app.modules.jobs import publisher as job_publisher
 from app.modules.notebooks import repo as notebooks_repo
+from app.modules.notebooks.service import invalidate_notebook_detail_cache
 from app.modules.search.sources.drafts import UploadedSourceFile
 from app.modules.search.markdown_utils import (
     build_web_placeholder,
@@ -50,6 +51,7 @@ async def create_source(
         )
         observe_source_import(source_type="text", result="imported")
         await session.commit()
+        await invalidate_notebook_detail_cache(user_id=user.id, notebook_id=notebook_id)
         return {"importedCount": 1, "skippedCount": 0}
 
     if source_type != "web":
@@ -74,6 +76,7 @@ async def create_source(
     )
     observe_source_import(source_type="url", result="imported" if _article is not None else "skipped")
     await session.commit()
+    await invalidate_notebook_detail_cache(user_id=user.id, notebook_id=notebook_id)
     if job is not None:
         await job_publisher.publish_jobs(session, [job])
         await session.commit()
@@ -130,6 +133,8 @@ async def upload_files(
     if skipped_count:
         observe_source_import(source_type="file", result="skipped", count=skipped_count)
     await session.commit()
+    if imported_count or skipped_count:
+        await invalidate_notebook_detail_cache(user_id=user.id, notebook_id=notebook_id)
     if jobs:
         await job_publisher.publish_jobs(session, jobs)
         await session.commit()

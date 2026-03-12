@@ -1,3 +1,5 @@
+# NotebookLM 单服务器公网部署指南
+
 ## 1. 快速部署流程
 
 如果你想先按一遍命令把服务跑起来，按下面顺序执行。
@@ -35,10 +37,6 @@ apt update
 apt install -y git curl nginx python3 python3-venv python3-pip ca-certificates gnupg lsb-release
 curl -fsSL https://get.docker.com | sh
 systemctl enable --now docker
-curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-apt install -y nodejs
-node -v
-npm -v
 ```
 
 ### 1.4 拉取项目代码
@@ -88,19 +86,25 @@ source /srv/notebooklm/.venv/bin/activate
 alembic upgrade head
 ```
 
-### 1.7 构建前端
+### 1.7 构建并运行前端 Nginx 镜像
 
 ```bash
-cd /srv/notebooklm/frontend
-npm ci
-npm run build
+cd /srv/notebooklm
+docker build -t notebooklm-frontend:latest ./frontend
+docker rm -f notebooklm-frontend 2>/dev/null || true
+docker run -d \
+  --name notebooklm-frontend \
+  --restart unless-stopped \
+  -p 127.0.0.1:8081:80 \
+  notebooklm-frontend:latest
+docker ps --filter name=notebooklm-frontend
 ```
 
-构建输出目录应为：
+前端容器内部已经自带 Nginx，并且会把 Vite 构建产物直接服务在：
 
-- `/srv/notebooklm/frontend/dist`
+- `http://127.0.0.1:8081`
 
-### 1.8 启用前端 Nginx 配置
+### 1.8 启用宿主机 Nginx 反向代理配置
 
 仓库里已经准备好了可直接用的配置文件：
 
@@ -156,6 +160,7 @@ systemctl status certbot.timer
 ### 1.11 做上线验证
 
 ```bash
+curl -I http://127.0.0.1:8081
 curl -I https://note.example.com/
 curl https://note.example.com/api/health
 curl https://note.example.com/api/ready
@@ -191,7 +196,7 @@ ssh -L 9001:127.0.0.1:9001 <your-user>@note.example.com
 
 本方案会部署这些组件：
 
-- `frontend`
+- `frontend-nginx`
 - `api`
 - `worker`
 - `scheduler`
@@ -224,14 +229,17 @@ ssh -L 9001:127.0.0.1:9001 <your-user>@note.example.com
 ```text
 Internet
    |
-   `-- note.example.com ----------> Nginx
+   `-- note.example.com ----------> host nginx
                                          |
-                                         +--> /              -> frontend/dist
+                                         +--> /              -> 127.0.0.1:8081 (frontend nginx container)
                                          +--> /api/*         -> 127.0.0.1:8080
                                          `--> /notebooklm/*  -> 127.0.0.1:9000
 
 
 Server internals
+   |
+   +-- docker run
+   |    `-- notebooklm-frontend -> nginx serving dist on 127.0.0.1:8081
    |
    +-- scripts/prod/*.sh
    |    +-- api       -> FastAPI
@@ -261,9 +269,10 @@ External services
    `-- OpenAI-compatible chat / embedding provider
 ```
 
-### 这套拓扑的设计原则
+### 3.1 这套拓扑的设计原则
 
-- 前端静态文件由 `nginx` 托管。
+- 前端打包进 `nginx` 镜像，宿主机不需要单独安装 Node.js。
+- 宿主机 `nginx` 只负责一个公网入口和统一反向代理。
 - 后端应用进程用脚本启动，因为你当前更关注简单直接。
 - 状态型基础设施全部走 Docker Compose，便于启动、停止、迁移。
 - 所有内部组件只绑定到 `127.0.0.1`。
@@ -417,14 +426,9 @@ sudo usermod -aG docker $USER
 
 重新登录一次 shell。
 
-### 7.3 安装 Node.js 20
+### 7.3 前端不再需要单独安装 Node.js
 
-```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt install -y nodejs
-node -v
-npm -v
-```
+前端镜像会在 `Dockerfile` 里完成 `npm ci` 和 `vite build`，所以服务器上不需要额外安装 Node.js。
 
 ### 7.4 创建部署目录
 
@@ -767,7 +771,7 @@ alembic upgrade head
 
 ## 10. 前端部署
 
-### 10.1 构建前端
+### 10.1 构建并运行前端 Nginx 镜像
 
 当前前端默认使用：
 
@@ -776,14 +780,19 @@ alembic upgrade head
 因此主站和 API 同域时，不需要额外改动。
 
 ```bash
-cd /srv/notebooklm/frontend
-npm ci
-npm run build
+cd /srv/notebooklm
+docker build -t notebooklm-frontend:latest ./frontend
+docker rm -f notebooklm-frontend 2>/dev/null || true
+docker run -d \
+  --name notebooklm-frontend \
+  --restart unless-stopped \
+  -p 127.0.0.1:8081:80 \
+  notebooklm-frontend:latest
 ```
 
-构建结果在：
+前端容器会监听：
 
-- `/srv/notebooklm/frontend/dist`
+- `127.0.0.1:8081`
 
 
 ## 11. 用脚本管理 API / Worker / Scheduler
@@ -890,10 +899,9 @@ tail -f /srv/notebooklm/logs/scheduler.log
 
 这个文件已经包含：
 
-- 前端静态目录 `root /srv/notebooklm/frontend/dist`
+- `/` -> `127.0.0.1:8081`
 - `/api/` -> `127.0.0.1:8080`
 - `/notebooklm/` -> `127.0.0.1:9000`
-- SPA 所需的 `try_files $uri /index.html`
 - SSE 需要的长连接超时和关闭缓冲
 
 如果你的实际域名不是 `note.example.com`，先把这个文件里的 `server_name` 改成你自己的域名。
@@ -1030,6 +1038,24 @@ ssh -L 9001:127.0.0.1:9001 <你的服务器用户名>@note.example.com
 - 能进行 chat
 - 能生成 summary
 
+## 15. 关键说明
+
+### 15.1 为什么 Redis 也部署
+
+当前项目依赖 `Redis` 做缓存和运行时辅助能力，所以单机部署里也应该带上，不建议省掉。
+
+### 15.2 为什么 MinIO 仍然能只用一个域名
+
+因为对象 URL 最终会基于 `OBJECT_STORAGE_ENDPOINT` 生成，只要它指向 `note.example.com`，再由宿主机 `nginx` 把 `/notebooklm/` 反代到 `127.0.0.1:9000`，浏览器就能通过同一个域名访问对象存储。
+
+### 15.3 为什么观测栈和 Console 仍然放内网端口
+
+因为这些入口不是主业务路径。对个人项目来说，把它们限制在 `127.0.0.1` 再通过 SSH 隧道访问，更简单，也更不容易把运维入口直接暴露到公网。
+
+### 15.4 为什么前端改成 Nginx 镜像
+
+这样宿主机不需要再单独装 Node.js，也不需要手动维护 `frontend/dist`。前端镜像天然就包含构建产物，更新时只要重新 `docker build` 再替换容器即可。
+
 ## 16. 最终推荐参数
 
 如果你现在马上部署，我建议：
@@ -1053,11 +1079,16 @@ ssh -L 9001:127.0.0.1:9001 <你的服务器用户名>@note.example.com
 
 ## 17. 后续可以再做但现在不是必须的
 
-- 为应用补 Dockerfile
 - 把 API / worker / scheduler 也容器化
 - 为 Grafana 单独加登录保护策略
 - 补日志轮转
 - 补数据库备份
 - 把 Postgres / Kafka / MinIO 替换成托管服务
 
+## 18. 参考资料
 
+- [FastAPI Deployment Concepts](https://fastapi.tiangolo.com/deployment/concepts/)
+- [Docker Compose Startup Order](https://docs.docker.com/compose/how-tos/startup-order/)
+- [Docker Restart Policies](https://docs.docker.com/engine/containers/start-containers-automatically/)
+- [Nginx Reverse Proxy Guide](https://docs.nginx.com/nginx/admin-guide/web-server/reverse-proxy/)
+- [PostgreSQL Backup and Restore](https://www.postgresql.org/docs/current/backup-dump.html)

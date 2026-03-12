@@ -24,6 +24,7 @@ from app.modules.ingest.parsers.trafilatura_parser import fetch_markdown_with_tr
 from app.modules.ingest.quality.markdown_cleaner import clean_markdown
 from app.modules.ingest.quality.quality_scorer import score_markdown
 from app.modules.jobs import repo as jobs_repo
+from app.modules.notebooks.service import invalidate_notebook_detail_cache
 from app.modules.search.articles import repo as repo_article
 from app.modules.search.sessions.service import execute_search
 from app.modules.settings.runtime import resolve_search_api_key
@@ -129,6 +130,10 @@ async def process_article_ingest(job_id: str) -> None:
                 article.chunk_status = "processing"
                 article.index_status = "processing"
                 await session.commit()
+                await invalidate_notebook_detail_cache(
+                    user_id=article.user_id,
+                    notebook_id=article.notebook_id,
+                )
                 parse_commit_ms = round((perf_counter() - commit_started) * 1000, 2)
                 parsed_content_committed = True
                 if not content_was_ready:
@@ -154,6 +159,10 @@ async def process_article_ingest(job_id: str) -> None:
                 await jobs_repo.mark_job_succeeded(job)
                 observe_job(job_type=job.job_type, status="succeeded")
                 await session.commit()
+                await invalidate_notebook_detail_cache(
+                    user_id=article.user_id,
+                    notebook_id=article.notebook_id,
+                )
                 logger.info(
                     "ingest.article_completed",
                     article_id=article.id,
@@ -186,6 +195,10 @@ async def process_article_ingest(job_id: str) -> None:
                 )
                 observe_job(job_type=job.job_type, status="failed")
                 await session.commit()
+                await invalidate_notebook_detail_cache(
+                    user_id=article.user_id,
+                    notebook_id=article.notebook_id,
+                )
                 logger.warning(
                     "ingest.article_failed",
                     article_id=article.id,
@@ -209,6 +222,10 @@ async def process_article_ingest(job_id: str) -> None:
                 article.parse_error_message = str(exc)
             await jobs_repo.mark_job_failed(job, error=str(exc))
             await session.commit()
+            await invalidate_notebook_detail_cache(
+                user_id=article.user_id,
+                notebook_id=article.notebook_id,
+            )
             if not parsed_content_committed:
                 observe_ingest_parse(
                     input_type=article.input_type,
@@ -280,6 +297,10 @@ async def process_article_reindex(job_id: str) -> None:
             index_stats = await index_article_content(session, article, user=user)
             await jobs_repo.mark_job_succeeded(job)
             await session.commit()
+            await invalidate_notebook_detail_cache(
+                user_id=article.user_id,
+                notebook_id=article.notebook_id,
+            )
             observe_job(job_type=job.job_type, status="succeeded")
             logger.info(
                 "ingest.article_reindex_completed",
@@ -294,6 +315,10 @@ async def process_article_reindex(job_id: str) -> None:
             article.index_status = "failed"
             await jobs_repo.mark_job_failed(job, error=str(exc))
             await session.commit()
+            await invalidate_notebook_detail_cache(
+                user_id=article.user_id,
+                notebook_id=article.notebook_id,
+            )
             observe_job(job_type=job.job_type, status="failed")
             logger.exception(
                 "ingest.article_reindex_failed",

@@ -7,6 +7,7 @@ from app.infra.security.passwords import hash_password, verify_password
 from app.modules.auth import repo as auth_repo
 from app.modules.auth.models import User
 from app.modules.auth.service import build_user_view
+from app.modules.settings.service import invalidate_settings_view_cache
 
 
 async def update_profile(session: AsyncSession, *, user: User, username: str) -> dict:
@@ -18,6 +19,7 @@ async def update_profile(session: AsyncSession, *, user: User, username: str) ->
     user.name = normalized_username
     await session.commit()
     await session.refresh(user)
+    await invalidate_settings_view_cache(user_id=user.id)
     return build_user_view(user).model_dump()
 
 

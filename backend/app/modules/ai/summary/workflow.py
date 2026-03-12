@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from app.api.errors import AppError
+from app.core.config import get_settings
+from app.infra.cache import get_json, set_json, summary_cache_key
 from app.infra.ai.chat_models import get_user_generation_settings, require_user_chat_model
 from app.infra.telemetry.context import bind_observability_context
 from app.modules.ai.summary import repo as summary_repo
@@ -48,6 +50,14 @@ async def prepare_summary(
         raise AppError(409, "文章正文尚未准备完成", code="article_not_ready")
 
     model_settings = get_user_generation_settings(user)
+    cache_key = summary_cache_key(
+        article_id=article.id,
+        content_hash=article.content_hash,
+        prompt_version=SUMMARY_PROMPT_VERSION,
+        model_provider=model_settings["modelProvider"],
+        model_name=model_settings["modelName"],
+        output_language=model_settings["outputLanguage"],
+    )
     trace_metadata = {
         "user_id": user.id,
         "notebook_id": notebook_id,
@@ -62,6 +72,22 @@ async def prepare_summary(
         provider=model_settings["modelProvider"],
         model_name=model_settings["modelName"],
     )
+    cached = await get_json(cache_key)
+    if isinstance(cached, dict):
+        return PreparedSummary(
+            user=user,
+            article=article,
+            model_settings=model_settings,
+            trace_metadata=trace_metadata,
+            cached_item={
+                "summary": cached.get("summary", ""),
+                "cacheHit": True,
+                "promptVersion": cached.get("promptVersion", SUMMARY_PROMPT_VERSION),
+            },
+            messages=None,
+            model=None,
+        )
+
     cached = await summary_repo.get_summary_cache(
         session,
         article_id=article.id,
@@ -72,15 +98,23 @@ async def prepare_summary(
         output_language=model_settings["outputLanguage"],
     )
     if cached is not None:
+        cached_payload = {
+            "summary": cached.summary_text,
+            "promptVersion": SUMMARY_PROMPT_VERSION,
+        }
+        await set_json(
+            cache_key,
+            cached_payload,
+            ttl_seconds=get_settings().summary_cache_ttl_days * 24 * 60 * 60,
+        )
         return PreparedSummary(
             user=user,
             article=article,
             model_settings=model_settings,
             trace_metadata=trace_metadata,
             cached_item={
-                "summary": cached.summary_text,
+                **cached_payload,
                 "cacheHit": True,
-                "promptVersion": SUMMARY_PROMPT_VERSION,
             },
             messages=None,
             model=None,
@@ -121,8 +155,24 @@ async def finalize_summary(session, *, prepared: PreparedSummary, summary: str) 
         ),
     )
     await session.commit()
-    return {
+    result = {
         "summary": summary,
         "cacheHit": False,
         "promptVersion": SUMMARY_PROMPT_VERSION,
     }
+    await set_json(
+        summary_cache_key(
+            article_id=prepared.article.id,
+            content_hash=prepared.article.content_hash,
+            prompt_version=SUMMARY_PROMPT_VERSION,
+            model_provider=prepared.model_settings["modelProvider"],
+            model_name=prepared.model_settings["modelName"],
+            output_language=prepared.model_settings["outputLanguage"],
+        ),
+        {
+            "summary": summary,
+            "promptVersion": SUMMARY_PROMPT_VERSION,
+        },
+        ttl_seconds=get_settings().summary_cache_ttl_days * 24 * 60 * 60,
+    )
+    return result
