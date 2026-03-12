@@ -17,11 +17,13 @@ from app.infra.mq.topics import (
 )
 from app.infra.telemetry.langsmith import configure_langsmith
 from app.infra.telemetry.logging import setup_logging
-from app.infra.telemetry.metrics_server import ensure_metrics_server
+from app.infra.telemetry.metrics import ensure_metrics_server
 from app.infra.telemetry.tracing import setup_tracing, shutdown_tracing
-from app.workers.handlers.handle_article_ingest import handle_article_ingest
-from app.workers.handlers.handle_article_reindex import handle_article_reindex
-from app.workers.handlers.handle_search_deep import handle_search_deep
+from app.workers.handlers import (
+    handle_article_ingest,
+    handle_article_reindex,
+    handle_search_deep,
+)
 
 logger = structlog.get_logger(__name__)
 

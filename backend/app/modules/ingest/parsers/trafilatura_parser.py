@@ -15,5 +15,8 @@ def fetch_markdown_with_trafilatura(*, url: str) -> tuple[str | None, str]:
         output_format="markdown",
         include_links=True,
         include_tables=True,
+        include_images=True,
+        include_formatting=True,
+        url=url,
     )
     return (markdown.strip() if markdown else None), "trafilatura"

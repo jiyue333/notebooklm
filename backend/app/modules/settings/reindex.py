@@ -2,28 +2,20 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 
 from app.modules.jobs import repo as jobs_repo
 from app.modules.notebooks.models import Article, ArticleChunk
 
 
 async def count_reindexable_articles(session, *, user) -> int:
-    result = await session.execute(
-        select(Article.id).where(
-            Article.user_id == user.id,
-            Article.clean_markdown.is_not(None),
-        )
-    )
-    return len(list(result.scalars().all()))
+    result = await session.execute(select(func.count(Article.id)).where(*_reindexable_article_filters(user_id=user.id)))
+    return int(result.scalar_one() or 0)
 
 
 async def clear_existing_embeddings(session, *, user, next_runtime) -> None:
     article_result = await session.execute(
-        select(Article.id).where(
-            Article.user_id == user.id,
-            Article.clean_markdown.is_not(None),
-        )
+        select(Article.id).where(*_reindexable_article_filters(user_id=user.id))
     )
     article_ids = list(article_result.scalars().all())
     if not article_ids:
@@ -47,10 +39,7 @@ async def clear_existing_embeddings(session, *, user, next_runtime) -> None:
 
 async def schedule_embedding_reindex(session, *, user, runtime_config) -> list:
     result = await session.execute(
-        select(Article).where(
-            Article.user_id == user.id,
-            Article.clean_markdown.is_not(None),
-        )
+        select(Article).where(*_reindexable_article_filters(user_id=user.id))
     )
     articles = list(result.scalars().all())
     jobs = []
@@ -72,3 +61,10 @@ async def schedule_embedding_reindex(session, *, user, runtime_config) -> list:
         )
         jobs.append(job)
     return jobs
+
+
+def _reindexable_article_filters(*, user_id: str):
+    return (
+        Article.user_id == user_id,
+        Article.clean_markdown.is_not(None),
+    )

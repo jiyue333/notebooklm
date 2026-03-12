@@ -184,6 +184,39 @@
     color: var(--text-secondary);
 }
 
+.add-source-helper {
+    margin: -4px 2px 0;
+    font-size: 0.78rem;
+    color: var(--meta-color);
+    line-height: 1.5;
+}
+
+.add-source-pasted-files {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--accent-color), transparent 94%);
+    color: var(--text-color);
+    font-size: 0.8rem;
+}
+
+.add-source-link-btn {
+    border: none;
+    background: transparent;
+    color: var(--accent-color);
+    font: inherit;
+    cursor: pointer;
+    padding: 0;
+}
+
+.add-source-link-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
 /* Action buttons */
 .add-source-buttons {
     display: flex;

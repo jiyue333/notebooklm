@@ -12,6 +12,7 @@ from app.infra.db.models import import_models
 
 class DatabaseSessionManager:
     def __init__(self, settings: Settings) -> None:
+        # TODO: 参数调优 
         self._engine: AsyncEngine = create_async_engine(
             settings.database_url,
             echo=settings.database_echo,

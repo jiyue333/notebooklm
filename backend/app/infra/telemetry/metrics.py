@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from prometheus_client import Counter, Histogram, generate_latest
+from prometheus_client import Counter, Histogram, generate_latest, start_http_server
 
 LATENCY_MS_BUCKETS = (
     10,
@@ -31,6 +31,7 @@ CHUNK_COUNT_BUCKETS = (
     512,
     1024,
 )
+_STARTED_PORTS: set[tuple[str, int]] = set()
 
 HTTP_REQUEST_COUNTER = Counter(
     "notebooklm_http_requests_total",
@@ -211,6 +212,14 @@ def observe_mq_publish(*, topic: str, tag: str, status: str, duration_ms: float)
 
 def observe_mq_consume(*, topic: str, tag: str, status: str) -> None:
     MQ_CONSUME_COUNTER.labels(topic=topic, tag=tag, status=status).inc()
+
+
+def ensure_metrics_server(*, port: int, addr: str = "127.0.0.1") -> None:
+    key = (addr, port)
+    if key in _STARTED_PORTS:
+        return
+    start_http_server(port, addr=addr)
+    _STARTED_PORTS.add(key)
 
 
 def render_metrics() -> bytes:

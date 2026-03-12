@@ -89,19 +89,24 @@ def resolve_search_api_key(user, settings: Settings | None = None) -> tuple[str 
 def resolve_chat_runtime_config(user, settings: Settings | None = None) -> ChatRuntimeConfig:
     runtime_settings = settings or get_settings()
     merged = get_merged_user_settings(user)
-    defaults = get_default_user_settings()
-    provider = normalize_chat_provider(merged.get("modelProvider"))
-    api_key, key_source = _resolve_model_key(
+    provider, model_name, api_url = _resolve_provider_model_api(
+        merged=merged,
+        provider_field="modelProvider",
+        model_field="modelName",
+        api_url_field="apiUrl",
+        normalize_provider=normalize_chat_provider,
+    )
+    api_key, key_source = _resolve_provider_api_key(
         provider=provider,
         ciphertext=user.llm_api_key_ciphertext,
         default_key=runtime_settings.llm_default_api_key,
     )
     return ChatRuntimeConfig(
         provider=provider,
-        model_name=str(merged.get("modelName") or defaults["modelName"]).strip(),
-        api_url=_normalize_api_base(str(merged.get("apiUrl") or defaults["apiUrl"])),
+        model_name=model_name,
+        api_url=api_url,
         api_key=api_key,
-        output_language=str(merged.get("outputLanguage") or defaults["outputLanguage"]),
+        output_language=_resolve_defaulted_string(merged=merged, field="outputLanguage"),
         key_source=key_source,
     )
 
@@ -122,10 +127,13 @@ def resolve_embedding_profile_key_from_merged(
     settings: Settings | None = None,
 ) -> str:
     runtime_settings = settings or get_settings()
-    defaults = get_default_user_settings()
-    provider = normalize_embedding_provider(merged.get("embeddingProvider"))
-    model_name = str(merged.get("embeddingModel") or defaults["embeddingModel"]).strip()
-    api_url = _normalize_api_base(str(merged.get("embeddingApiUrl") or defaults["embeddingApiUrl"]))
+    provider, model_name, api_url = _resolve_provider_model_api(
+        merged=merged,
+        provider_field="embeddingProvider",
+        model_field="embeddingModel",
+        api_url_field="embeddingApiUrl",
+        normalize_provider=normalize_embedding_provider,
+    )
     raw = f"{provider}|{model_name}|{api_url.rstrip('/')}|{runtime_settings.embedding_output_dimensions}"
     return sha256(raw.encode("utf-8")).hexdigest()
 
@@ -137,17 +145,22 @@ def resolve_embedding_runtime_config_from_merged(
     settings: Settings | None = None,
 ) -> EmbeddingRuntimeConfig:
     runtime_settings = settings or get_settings()
-    defaults = get_default_user_settings()
-    provider = normalize_embedding_provider(merged.get("embeddingProvider"))
-    api_key, key_source = _resolve_model_key(
+    provider, model_name, api_url = _resolve_provider_model_api(
+        merged=merged,
+        provider_field="embeddingProvider",
+        model_field="embeddingModel",
+        api_url_field="embeddingApiUrl",
+        normalize_provider=normalize_embedding_provider,
+    )
+    api_key, key_source = _resolve_provider_api_key(
         provider=provider,
         ciphertext=getattr(user, "embedding_api_key_ciphertext", None),
         default_key=runtime_settings.embedding_default_api_key,
     )
     return EmbeddingRuntimeConfig(
         provider=provider,
-        model_name=str(merged.get("embeddingModel") or defaults["embeddingModel"]).strip(),
-        api_url=_normalize_api_base(str(merged.get("embeddingApiUrl") or defaults["embeddingApiUrl"])),
+        model_name=model_name,
+        api_url=api_url,
         api_key=api_key,
         output_dimensions=runtime_settings.embedding_output_dimensions,
         key_source=key_source,
@@ -185,7 +198,7 @@ def _resolve_key(*, ciphertext: str | None, default_key: str | None) -> tuple[st
     return None, "missing"
 
 
-def _resolve_model_key(
+def _resolve_provider_api_key(
     *,
     provider: str,
     ciphertext: str | None,
@@ -194,6 +207,27 @@ def _resolve_model_key(
     if provider == "ollama":
         return None, "not_required"
     return _resolve_key(ciphertext=ciphertext, default_key=default_key)
+
+
+def _resolve_provider_model_api(
+    *,
+    merged: dict,
+    provider_field: str,
+    model_field: str,
+    api_url_field: str,
+    normalize_provider,
+) -> tuple[str, str, str]:
+    provider = normalize_provider(merged.get(provider_field))
+    return (
+        provider,
+        _resolve_defaulted_string(merged=merged, field=model_field),
+        _normalize_api_base(_resolve_defaulted_string(merged=merged, field=api_url_field)),
+    )
+
+
+def _resolve_defaulted_string(*, merged: dict, field: str) -> str:
+    defaults = get_default_user_settings()
+    return str(merged.get(field) or defaults[field]).strip()
 
 
 def _normalize_api_base(api_url: str) -> str:

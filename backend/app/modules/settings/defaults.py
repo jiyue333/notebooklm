@@ -2,6 +2,23 @@ from __future__ import annotations
 
 from app.core.config import get_settings
 
+MODEL_SETTINGS_FIELDS = ("modelProvider", "modelName", "apiUrl")
+SEARCH_SETTINGS_FIELDS = ("searchProvider",)
+EMBEDDING_SETTINGS_FIELDS = ("embeddingProvider", "embeddingModel", "embeddingApiUrl")
+SETTINGS_SCOPE_FIELDS = {
+    "model": MODEL_SETTINGS_FIELDS,
+    "search": SEARCH_SETTINGS_FIELDS,
+    "embedding": EMBEDDING_SETTINGS_FIELDS,
+}
+SETTINGS_FIELDS = (
+    "outputLanguage",
+    "themeColor",
+    "colorMode",
+    *MODEL_SETTINGS_FIELDS,
+    *SEARCH_SETTINGS_FIELDS,
+    *EMBEDDING_SETTINGS_FIELDS,
+)
+
 
 def get_default_user_settings() -> dict:
     settings = get_settings()
@@ -17,17 +34,3 @@ def get_default_user_settings() -> dict:
         "embeddingModel": settings.default_embedding_model_name,
         "embeddingApiUrl": settings.default_embedding_api_url,
     }
-
-
-SETTINGS_FIELDS = {
-    "outputLanguage",
-    "themeColor",
-    "colorMode",
-    "modelProvider",
-    "modelName",
-    "apiUrl",
-    "searchProvider",
-    "embeddingProvider",
-    "embeddingModel",
-    "embeddingApiUrl",
-}

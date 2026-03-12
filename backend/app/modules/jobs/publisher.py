@@ -43,6 +43,7 @@ async def publish_jobs(session: AsyncSession, jobs: list[Job]) -> None:
     try:
         for job in jobs:
             await producer.publish(_build_message(job))
+            # TODO 假如程序在这里崩溃了？
             await repo.mark_job_queued(job)
     except ImportError as exc:
         logger.warning("jobs.publish_unavailable", error=str(exc))

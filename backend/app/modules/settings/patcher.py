@@ -1,12 +1,59 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 
-from app.modules.settings.defaults import SETTINGS_FIELDS
+from app.modules.settings.defaults import SETTINGS_FIELDS, SETTINGS_SCOPE_FIELDS
+from app.infra.security.credential_crypto import CredentialCrypto
 
-MODEL_SETTINGS_FIELDS = ("modelProvider", "modelName", "apiUrl")
-SEARCH_SETTINGS_FIELDS = ("searchProvider",)
-EMBEDDING_SETTINGS_FIELDS = ("embeddingProvider", "embeddingModel", "embeddingApiUrl")
+SETTINGS_SCOPE_FLAGS = {
+    "model": "useDefaultModelConfig",
+    "search": "useDefaultSearchConfig",
+    "embedding": "useDefaultEmbeddingConfig",
+}
+SETTINGS_FIELD_TO_SCOPE = {
+    field: scope
+    for scope, fields in SETTINGS_SCOPE_FIELDS.items()
+    for field in fields
+}
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialUpdateSpec:
+    use_default_flag: str
+    clear_flag: str
+    payload_field: str
+    ciphertext_attr: str
+    last4_attr: str
+    updated_at_attr: str
+
+
+CREDENTIAL_UPDATE_SPECS = (
+    CredentialUpdateSpec(
+        use_default_flag="useDefaultModelConfig",
+        clear_flag="clearApiKey",
+        payload_field="apiKey",
+        ciphertext_attr="llm_api_key_ciphertext",
+        last4_attr="llm_api_key_last4",
+        updated_at_attr="llm_api_key_updated_at",
+    ),
+    CredentialUpdateSpec(
+        use_default_flag="useDefaultSearchConfig",
+        clear_flag="clearSearchApiKey",
+        payload_field="searchApiKey",
+        ciphertext_attr="exa_api_key_ciphertext",
+        last4_attr="exa_api_key_last4",
+        updated_at_attr="exa_api_key_updated_at",
+    ),
+    CredentialUpdateSpec(
+        use_default_flag="useDefaultEmbeddingConfig",
+        clear_flag="clearEmbeddingApiKey",
+        payload_field="embeddingApiKey",
+        ciphertext_attr="embedding_api_key_ciphertext",
+        last4_attr="embedding_api_key_last4",
+        updated_at_attr="embedding_api_key_updated_at",
+    ),
+)
 
 
 def merge_settings_payload(
@@ -16,28 +63,22 @@ def merge_settings_payload(
     default_settings: dict,
 ) -> tuple[dict, dict]:
     settings_json = {**stored_settings}
-    use_default_model_config = bool(payload.get("useDefaultModelConfig"))
-    use_default_search_config = bool(payload.get("useDefaultSearchConfig"))
-    use_default_embedding_config = bool(payload.get("useDefaultEmbeddingConfig"))
-
     for field in SETTINGS_FIELDS:
-        if use_default_model_config and field in MODEL_SETTINGS_FIELDS:
-            continue
-        if use_default_search_config and field in SEARCH_SETTINGS_FIELDS:
-            continue
-        if use_default_embedding_config and field in EMBEDDING_SETTINGS_FIELDS:
+        if _should_skip_settings_field(field=field, payload=payload):
             continue
         if field in payload and payload[field] is not None:
             settings_json[field] = payload[field]
 
-    if use_default_model_config:
-        drop_settings_fields(settings_json, MODEL_SETTINGS_FIELDS)
-    if use_default_search_config:
-        drop_settings_fields(settings_json, SEARCH_SETTINGS_FIELDS)
-    if use_default_embedding_config:
-        drop_settings_fields(settings_json, EMBEDDING_SETTINGS_FIELDS)
+    for scope, fields in SETTINGS_SCOPE_FIELDS.items():
+        if payload.get(SETTINGS_SCOPE_FLAGS[scope]):
+            drop_settings_fields(settings_json, fields)
 
     return settings_json, {**default_settings, **settings_json}
+
+
+def _should_skip_settings_field(*, field: str, payload: dict) -> bool:
+    scope = SETTINGS_FIELD_TO_SCOPE.get(field)
+    return bool(scope and payload.get(SETTINGS_SCOPE_FLAGS[scope]))
 
 
 def drop_settings_fields(settings_json: dict, fields: tuple[str, ...]) -> None:
@@ -46,32 +87,27 @@ def drop_settings_fields(settings_json: dict, fields: tuple[str, ...]) -> None:
 
 
 def apply_credential_updates(*, user, payload: dict, crypto, now: datetime) -> None:
-    if payload.get("useDefaultModelConfig") or payload.get("clearApiKey"):
-        user.llm_api_key_ciphertext = None
-        user.llm_api_key_last4 = None
-        user.llm_api_key_updated_at = now
-    elif payload.get("apiKey"):
-        api_key = payload["apiKey"].strip()
-        user.llm_api_key_ciphertext = crypto.encrypt(api_key)
-        user.llm_api_key_last4 = api_key[-4:]
-        user.llm_api_key_updated_at = now
+    for spec in CREDENTIAL_UPDATE_SPECS:
+        _apply_credential_update(
+            user=user,
+            payload=payload,
+            crypto=crypto,
+            now=now,
+            spec=spec,
+        )
 
-    if payload.get("useDefaultSearchConfig") or payload.get("clearSearchApiKey"):
-        user.exa_api_key_ciphertext = None
-        user.exa_api_key_last4 = None
-        user.exa_api_key_updated_at = now
-    elif payload.get("searchApiKey"):
-        search_api_key = payload["searchApiKey"].strip()
-        user.exa_api_key_ciphertext = crypto.encrypt(search_api_key)
-        user.exa_api_key_last4 = search_api_key[-4:]
-        user.exa_api_key_updated_at = now
 
-    if payload.get("useDefaultEmbeddingConfig") or payload.get("clearEmbeddingApiKey"):
-        user.embedding_api_key_ciphertext = None
-        user.embedding_api_key_last4 = None
-        user.embedding_api_key_updated_at = now
-    elif payload.get("embeddingApiKey"):
-        embedding_api_key = payload["embeddingApiKey"].strip()
-        user.embedding_api_key_ciphertext = crypto.encrypt(embedding_api_key)
-        user.embedding_api_key_last4 = embedding_api_key[-4:]
-        user.embedding_api_key_updated_at = now
+def _apply_credential_update(*, user, payload: dict, crypto: CredentialCrypto, now: datetime, spec: CredentialUpdateSpec) -> None:
+    if payload.get(spec.use_default_flag) or payload.get(spec.clear_flag):
+        setattr(user, spec.ciphertext_attr, None)
+        setattr(user, spec.last4_attr, None)
+        setattr(user, spec.updated_at_attr, now)
+        return
+
+    if not payload.get(spec.payload_field):
+        return
+
+    api_key = payload[spec.payload_field].strip()
+    setattr(user, spec.ciphertext_attr, crypto.encrypt(api_key))
+    setattr(user, spec.last4_attr, api_key[-4:])
+    setattr(user, spec.updated_at_attr, now)

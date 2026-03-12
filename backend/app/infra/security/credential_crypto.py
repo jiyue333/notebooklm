@@ -10,6 +10,7 @@ from app.core.config import Settings, get_settings
 
 
 class CredentialCrypto:
+    # TODO 项目安全性调研 补充
     def __init__(self, settings: Settings) -> None:
         derived = hashlib.sha256(settings.secret_key.encode("utf-8")).digest()
         self._fernet = Fernet(base64.urlsafe_b64encode(derived))

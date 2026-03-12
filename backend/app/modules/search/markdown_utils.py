@@ -46,6 +46,26 @@ def normalize_text_to_markdown(*, title: str, content: str) -> str:
     return f"# {title.strip()}\n\n{normalized_content}\n"
 
 
+def build_image_markdown(*, title: str, image_url: str, body: str | None = None) -> str:
+    normalized_title = title.strip() or "图片来源"
+    normalized_body = (body or "").strip()
+    sections = [
+        f"# {normalized_title}",
+        "",
+        f"![{normalized_title}]({image_url})",
+    ]
+    if normalized_body:
+        sections.extend(["", normalized_body])
+    return "\n".join(sections).strip() + "\n"
+
+
+def contains_image_markup(markdown: str | None) -> bool:
+    if not markdown:
+        return False
+    lowered = markdown.lower()
+    return "![" in markdown or "<img" in lowered
+
+
 def decode_text_bytes(data: bytes) -> str:
     for encoding in ("utf-8", "utf-8-sig", "gb18030"):
         try:

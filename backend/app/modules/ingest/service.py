@@ -9,6 +9,7 @@ from app.infra.storage.file_store import (
     materialize_uploaded_file_for_parser,
     store_file_bytes,
 )
+from app.infra.storage.mime import is_image_mime
 from app.infra.telemetry.metrics import observe_ingest_parse
 from app.modules.auth.repo import get_user_by_id
 from app.modules.ingest.content_mutation import apply_parsed_content, record_article_ready
@@ -22,6 +23,7 @@ from app.modules.jobs.models import Job
 from app.modules.notebooks.models import Article
 from app.modules.search import repo_article
 from app.modules.search.markdown_utils import (
+    build_image_markdown,
     build_web_placeholder,
     normalize_text_to_markdown,
 )
@@ -89,23 +91,36 @@ async def ingest_draft(
             content_type=draft.file_mime or "application/octet-stream",
         )
         article.file_storage_key = storage_key
-        with materialize_uploaded_file_for_parser(
-            file_name=draft.file_name,
-            file_bytes=draft.file_bytes,
-        ) as temp_path:
-            parsed = parse_file_content(
-                file_name=draft.file_name,
-                file_path=temp_path,
-                file_bytes=draft.file_bytes,
+        if is_image_mime(draft.file_mime):
+            markdown = build_image_markdown(
+                title=draft.title,
+                image_url=f"/api/notebooks/{notebook_id}/articles/{article.id}/file",
             )
-        apply_parsed_content(article, parsed.markdown, parsed.parser_name, now)
-        if parsed.markdown:
+            apply_parsed_content(article, markdown, "image_upload", now)
             observe_ingest_parse(
                 input_type="file",
                 status="ready",
-                parser=parsed.parser_name or "unknown",
+                parser="image_upload",
             )
             record_article_ready(article)
+        else:
+            with materialize_uploaded_file_for_parser(
+                file_name=draft.file_name,
+                file_bytes=draft.file_bytes,
+            ) as temp_path:
+                parsed = parse_file_content(
+                    file_name=draft.file_name,
+                    file_path=temp_path,
+                    file_bytes=draft.file_bytes,
+                )
+            apply_parsed_content(article, parsed.markdown, parsed.parser_name, now)
+            if parsed.markdown:
+                observe_ingest_parse(
+                    input_type="file",
+                    status="ready",
+                    parser=parsed.parser_name or "unknown",
+                )
+                record_article_ready(article)
     elif draft.input_type == "text":
         markdown = normalize_text_to_markdown(title=draft.title, content=draft.raw_text_input or "")
         apply_parsed_content(article, markdown, "raw_text", now)

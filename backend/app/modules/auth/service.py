@@ -25,23 +25,6 @@ def build_user_view(user: User) -> UserView:
         avatar=user.avatar_url,
     )
 
-
-async def _issue_session_token(session: AsyncSession, user: User) -> str:
-    raw_token = generate_session_token()
-    await repo.create_auth_token(
-        session,
-        user_id=user.id,
-        token_hash=hash_session_token(raw_token),
-        expires_at=build_token_expiry(),
-        created_at=datetime.now(UTC),
-    )
-    return raw_token
-
-
-def _normalize_email(email: str) -> str:
-    return email.strip().lower()
-
-
 async def lookup_email(session: AsyncSession, *, email: str) -> bool:
     normalized_email = _normalize_email(email)
     if not normalized_email:
@@ -50,13 +33,8 @@ async def lookup_email(session: AsyncSession, *, email: str) -> bool:
         raise AppError(422, "请输入有效的邮箱地址", code="invalid_email")
     return await repo.get_user_by_email(session, normalized_email) is not None
 
-
-async def _get_user_for_login(session: AsyncSession, identifier: str) -> User | None:
-    normalized_identifier = identifier.strip()
-    if "@" in normalized_identifier:
-        return await repo.get_user_by_email(session, _normalize_email(normalized_identifier))
-    return await repo.get_user_by_name(session, normalized_identifier)
-
+def _normalize_email(email: str) -> str:
+    return email.strip().lower()
 
 async def login(session: AsyncSession, *, username: str, password: str) -> tuple[str, UserView]:
     normalized_username = username.strip()
@@ -105,6 +83,24 @@ async def register(
         raise AppError(409, "用户名或邮箱已存在", code="user_conflict") from exc
 
     return raw_token, build_user_view(user)
+
+async def _issue_session_token(session: AsyncSession, user: User) -> str:
+    raw_token = generate_session_token()
+    await repo.create_auth_token(
+        session,
+        user_id=user.id,
+        token_hash=hash_session_token(raw_token),
+        expires_at=build_token_expiry(),
+        created_at=datetime.now(UTC),
+    )
+    return raw_token
+
+async def _get_user_for_login(session: AsyncSession, identifier: str) -> User | None:
+    normalized_identifier = identifier.strip()
+    if "@" in normalized_identifier:
+        return await repo.get_user_by_email(session, _normalize_email(normalized_identifier))
+    return await repo.get_user_by_name(session, normalized_identifier)
+
 
 
 async def logout(session: AsyncSession, token: str) -> None:
