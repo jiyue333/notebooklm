@@ -7,8 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.ai.embedder import Embedder
 from app.infra.telemetry.metrics import observe_ingest_chunks
-from app.modules.ingest.chunker import chunk_markdown
-from app.modules.ingest.indexer import replace_article_chunks
+from app.modules.ingest.indexing.chunker import chunk_markdown
+from app.modules.ingest.indexing.indexer import replace_article_chunks
 from app.modules.notebooks.models import Article
 
 logger = structlog.get_logger(__name__)

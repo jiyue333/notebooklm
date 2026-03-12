@@ -5,10 +5,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.errors import AppError
 from app.infra.telemetry.context import bind_observability_context
 from app.infra.telemetry.metrics import observe_source_import
-from app.modules.ingest.draft import IngestDraft
-from app.modules.ingest.service import ingest_draft
+from app.modules.ingest.articles.draft import IngestDraft
+from app.modules.ingest.articles.service import ingest_draft
 from app.modules.jobs import publisher as job_publisher
-from app.modules.search import repo_search
+from app.modules.search.sessions import repo as repo_search
 
 
 async def import_results(

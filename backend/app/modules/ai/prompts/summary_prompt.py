@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from langchain_core.prompts import ChatPromptTemplate
+
 SUMMARY_PROMPT_VERSION = "summary.v1"
 
 SUMMARY_SYSTEM_PROMPT = """
@@ -16,3 +18,12 @@ SUMMARY_USER_PROMPT = """
 正文：
 {content}
 """.strip()
+
+
+def build_summary_prompt() -> ChatPromptTemplate:
+    return ChatPromptTemplate.from_messages(
+        [
+            ("system", SUMMARY_SYSTEM_PROMPT),
+            ("human", SUMMARY_USER_PROMPT),
+        ]
+    )

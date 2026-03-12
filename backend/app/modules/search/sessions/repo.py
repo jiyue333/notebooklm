@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import datetime
 from hashlib import sha256
 from typing import Any
@@ -9,8 +10,8 @@ from datetime import UTC, datetime
 from sqlalchemy import delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.search.dto import SearchCandidateDTO
-from app.modules.search.models import SearchResult, SearchSession
+from app.modules.search.sessions.dto import CreateSearchSessionInput, SearchCandidateDTO
+from app.modules.search.sessions.models import SearchResult, SearchSession
 
 
 def _sanitize_text(value: str | None) -> str | None:
@@ -35,33 +36,11 @@ def _sanitize_json(value: Any) -> Any:
 async def create_search_session(
     session: AsyncSession,
     *,
-    user_id: str,
-    notebook_id: str,
-    query: str,
-    normalized_query: str,
-    mode: str,
-    execution_mode: str,
-    provider_name: str,
-    provider_request_json: dict,
-    status: str,
-    mode_label: str,
-    created_at: datetime,
-    expires_at: datetime,
+    input: CreateSearchSessionInput,
 ) -> SearchSession:
     search_session = SearchSession(
-        user_id=user_id,
-        notebook_id=notebook_id,
-        query=query,
-        normalized_query=normalized_query,
-        mode=mode,
-        execution_mode=execution_mode,
-        provider_name=provider_name,
-        provider_request_json=provider_request_json,
-        status=status,
-        mode_label=mode_label,
+        **asdict(input),
         result_count=0,
-        created_at=created_at,
-        expires_at=expires_at,
     )
     session.add(search_session)
     await session.flush()

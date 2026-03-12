@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from urllib.parse import urlparse, urlunparse
 
-from app.modules.search.dto import SearchCandidateDTO
+from app.modules.search.sessions.dto import SearchCandidateDTO
 
 
 def _parse_datetime(value: str | None) -> datetime | None:

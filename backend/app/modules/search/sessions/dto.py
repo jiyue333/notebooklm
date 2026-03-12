@@ -19,3 +19,21 @@ class SearchCandidateDTO:
     display_rank: int = 0
     preview_markdown: str | None = None
     raw_payload: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class CreateSearchSessionInput:
+    """service → repo 之间传递创建搜索会话所需的全部参数。"""
+
+    user_id: str
+    notebook_id: str
+    query: str
+    normalized_query: str
+    mode: str
+    execution_mode: str
+    provider_name: str
+    provider_request_json: dict[str, Any]
+    status: str
+    mode_label: str
+    created_at: datetime
+    expires_at: datetime

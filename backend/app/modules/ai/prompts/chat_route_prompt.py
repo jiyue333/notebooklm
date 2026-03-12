@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from langchain_core.prompts import ChatPromptTemplate
+
 CHAT_ROUTE_PROMPT_VERSION = "chat_route.v2"
 
 CHAT_ROUTE_SYSTEM_PROMPT = """
@@ -42,3 +44,12 @@ CHAT_ROUTE_USER_PROMPT = """
 用户问题：
 {user_message}
 """.strip()
+
+
+def build_chat_router_prompt() -> ChatPromptTemplate:
+    return ChatPromptTemplate.from_messages(
+        [
+            ("system", CHAT_ROUTE_SYSTEM_PROMPT),
+            ("human", CHAT_ROUTE_USER_PROMPT),
+        ]
+    )

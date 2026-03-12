@@ -16,9 +16,3 @@ class ImportSearchResultsRequest(BaseModel):
     searchSessionId: str
     searchResultIds: list[str] = Field(min_length=1)
 
-
-class ManualSourceRequest(BaseModel):
-    sourceType: Literal["web", "text"]
-    url: str | None = None
-    title: str | None = Field(default=None, max_length=255)
-    content: str | None = None

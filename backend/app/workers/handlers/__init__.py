@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 import structlog
 
 from app.infra.telemetry.metrics import observe_job
-from app.modules.ingest.worker_handler import (
+from app.modules.ingest.articles.worker import (
     process_article_ingest,
     process_article_reindex,
     process_search_deep,

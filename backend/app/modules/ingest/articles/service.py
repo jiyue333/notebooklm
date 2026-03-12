@@ -12,16 +12,16 @@ from app.infra.storage.file_store import (
 from app.infra.storage.mime import is_image_mime
 from app.infra.telemetry.metrics import observe_ingest_parse
 from app.modules.auth.repo import get_user_by_id
-from app.modules.ingest.content_mutation import apply_parsed_content, record_article_ready
-from app.modules.ingest.dedupe import build_dedupe_key, extract_file_ext
-from app.modules.ingest.draft import IngestDraft
-from app.modules.ingest.index_pipeline import index_article_content
-from app.modules.ingest.parser_router import parse_file_content
-from app.modules.ingest.retrieval_text_builder import build_article_retrieval_text
+from app.modules.ingest.articles.content import apply_parsed_content, record_article_ready
+from app.modules.ingest.articles.dedupe import build_dedupe_key, extract_file_ext
+from app.modules.ingest.articles.draft import IngestDraft
+from app.modules.ingest.indexing.pipeline import index_article_content
+from app.modules.ingest.indexing.retrieval_text_builder import build_article_retrieval_text
+from app.modules.ingest.parsers.router import parse_file_content
 from app.modules.jobs import repo as jobs_repo
 from app.modules.jobs.models import Job
 from app.modules.notebooks.models import Article
-from app.modules.search import repo_article
+from app.modules.search.articles import repo as repo_article
 from app.modules.search.markdown_utils import (
     build_image_markdown,
     build_web_placeholder,

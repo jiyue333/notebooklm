@@ -5,15 +5,15 @@ from time import perf_counter
 from app.infra.ai.chat_models import get_user_generation_settings, require_user_chat_model
 from app.infra.telemetry.llm import extract_llm_text_and_usage
 from app.infra.telemetry.metrics import observe_llm_call
-from app.modules.ai import repo as ai_repo
-from app.modules.ai.langchain_factory import build_chat_rollup_prompt
+from app.modules.ai.chat import repo as chat_repo
+from app.modules.ai.prompts.chat_prompt import build_chat_rollup_prompt
 
 ROLLUP_TRIGGER_COUNT = 12
 ROLLUP_KEEP_MESSAGES = 8
 
 
 async def maybe_rollup_conversation(session, *, conversation, user) -> None:
-    messages = await ai_repo.list_conversation_messages(
+    messages = await chat_repo.list_conversation_messages(
         session,
         conversation_id=conversation.id,
     )
@@ -73,7 +73,7 @@ async def maybe_rollup_conversation(session, *, conversation, user) -> None:
     if summary:
         conversation.rolling_summary = summary
 
-    await ai_repo.delete_conversation_messages(
+    await chat_repo.delete_conversation_messages(
         session,
         message_ids=[message.id for message in overflow_messages],
     )

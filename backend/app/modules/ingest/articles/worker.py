@@ -15,17 +15,17 @@ from app.infra.storage.file_store import (
 from app.infra.telemetry.metrics import observe_ingest_fallback, observe_ingest_parse, observe_job
 from app.infra.db.session import get_session_manager
 from app.modules.auth.repo import get_user_by_id
-from app.modules.ingest.content_mutation import apply_parsed_content, record_article_ready
-from app.modules.ingest.index_pipeline import index_article_content
-from app.modules.ingest.markdown_cleaner import clean_markdown
-from app.modules.ingest.parser_router import parse_file_content
-from app.modules.ingest.quality_scorer import score_markdown
+from app.modules.ingest.articles.content import apply_parsed_content, record_article_ready
+from app.modules.ingest.indexing.pipeline import index_article_content
 from app.modules.ingest.parsers.exa_contents_parser import fetch_markdown_with_exa
 from app.modules.ingest.parsers.llm_markdown_fallback import fallback_to_markdown
+from app.modules.ingest.parsers.router import parse_file_content
 from app.modules.ingest.parsers.trafilatura_parser import fetch_markdown_with_trafilatura
+from app.modules.ingest.quality.markdown_cleaner import clean_markdown
+from app.modules.ingest.quality.quality_scorer import score_markdown
 from app.modules.jobs import repo as jobs_repo
-from app.modules.search import repo_article
-from app.modules.search.service_search import execute_search
+from app.modules.search.articles import repo as repo_article
+from app.modules.search.sessions.service import execute_search
 from app.modules.settings.runtime import resolve_search_api_key
 
 logger = structlog.get_logger(__name__)
@@ -277,7 +277,7 @@ async def process_article_reindex(job_id: str) -> None:
                 return
 
             article.index_status = "reindexing"
-            index_stats = await _index_article_content(session, article, user=user)
+            index_stats = await index_article_content(session, article, user=user)
             await jobs_repo.mark_job_succeeded(job)
             await session.commit()
             observe_job(job_type=job.job_type, status="succeeded")

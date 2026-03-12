@@ -13,16 +13,16 @@ from app.infra.storage.file_store import (
     resolve_storage_path,
     stored_file_exists,
 )
-from app.modules.search import repo_article
-from app.modules.search.drafts import UploadedSourceFile
-from app.modules.search.schemas import (
+from app.modules.search.articles import repo as repo_article
+from app.modules.search.sessions.service import get_search_session, start_search
+from app.modules.search.sessions.schemas import (
     ImportSearchResultsRequest,
-    ManualSourceRequest,
     SearchSourcesRequest,
 )
-from app.modules.search.service_import import import_results
-from app.modules.search.service_manual import create_source, upload_files
-from app.modules.search.service_search import get_search_session, start_search
+from app.modules.search.sources.drafts import UploadedSourceFile
+from app.modules.search.sources.import_service import import_results
+from app.modules.search.sources.manual_service import create_source, upload_files
+from app.modules.search.sources.schemas import ManualSourceRequest
 from app.modules.notebooks.service import get_notebook_detail
 
 router = APIRouter(tags=["search"])

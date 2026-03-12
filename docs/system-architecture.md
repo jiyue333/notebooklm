@@ -23,7 +23,7 @@
 | 文件存储   | MinIO / 本地文件                    | `backend/app/modules/search/file_storage.py`, `backend/app/infra/storage/object_store.py`                                           | 上传文件落盘/对象存储、文件回放与下载                               | API、Worker                                              |
 | 队列       | Kafka + kafka-exporter              | `backend/app/infra/mq/*`, `docker-compose.yml`, `docker/prometheus/prometheus.yml`                                                  | Job 传递、消费者位点管理、lag/offset 指标暴露                       | API、Worker、Scheduler                                   |
 | 搜索提供方 | Exa                                 | `backend/app/infra/providers/exa/*`                                                                                                 | 搜索结果与网页正文抓取                                              | API、Worker                                              |
-| 模型提供方 | Ollama / OpenAI-compatible          | `backend/app/modules/ai/langchain_factory.py`, `backend/app/modules/ingest/embedder.py`                                             | Chat、Summary、Embedding                                            | API、Worker                                              |
+| 模型提供方 | Ollama / OpenAI-compatible          | `backend/app/modules/ai/prompts/*`, `backend/app/infra/ai/chat_models.py`, `backend/app/infra/ai/embedder.py`                       | Chat、Summary、Embedding                                            | API、Worker                                              |
 | 观测       | Prometheus / Loki / Tempo / Grafana | `docker/prometheus/prometheus.yml`, `docker/promtail/config.yaml`, `backend/app/infra/telemetry/*`                                  | 指标、日志、Trace 聚合与展示                                        | API、Worker、Scheduler                                   |
 
 ## 2. 总体架构图
@@ -224,301 +224,580 @@ flowchart LR
 
 ## 4. 关键流程
 
-### 4.1 搜索流程
+本节只画当前代码里真实存在的主链路，重点覆盖：
 
-#### 4.1.1 目标
+- Search 的同步执行、深度搜索异步化和轮询回读
+- Source 导入到 Ingest 的 parse-ready 边界
+- Worker 与 Scheduler 的异步执行与维护动作
+- AI Chat 的路由分支与流式输出
+- Summary 的缓存命中与未命中
 
-用户在 Notebook 内发起搜索后，系统需要：
+### 4.1 Search 流程
 
-1. 创建 `SearchSession`
-2. 调用 Exa 搜索
-3. 写入 `SearchResult`
-4. 对 `deep` 模式改走异步 job
-5. 将结果返回前端供后续导入
+关键入口：
 
-#### 4.1.2 Mermaid 流程图
+- API: `search/router.py`
+- Service: `search/sessions/service.py`
+- Async handler: `ingest/articles/worker.py -> process_search_deep()`
 
-```mermaid
-flowchart TD
-    A["Frontend SourcePanel<br/>输入 query + mode"] --> B["POST /api/notebooks/{id}/sources/search"]
-    B --> C["start_search()"]
-    C --> D["创建 SearchSession"]
-    D --> E{"mode == deep ?"}
-
-    E -- "yes" --> F["创建 search_deep Job"]
-    F --> G["publish_jobs() -> Kafka"]
-    G --> H["API 立即返回 accepted"]
-    G --> I["Worker 消费 search_deep"]
-    I --> J["execute_search()"]
-
-    E -- "no" --> J
-    J --> K["resolve_search_api_key()"]
-    K --> L["ExaSearchClient.search()"]
-    L --> M["ExaResultMapper.map_search_results()"]
-    M --> N["replace_search_results()"]
-    N --> O["SearchSession status=completed"]
-    O --> P["返回 items / session meta"]
-
-    J --> Q{"inline timeout?"}
-    Q -- "yes" --> F
-```
-
-#### 4.1.3 步骤说明
-
-| 步骤                     | 所在组件      | 关键函数                                          | 输出                                   |
-| ------------------------ | ------------- | ------------------------------------------------- | -------------------------------------- |
-| 校验 notebook 与 Exa key | API/Search    | `start_search()`                                  | 可执行搜索的上下文                     |
-| 创建搜索会话             | API/Search    | `create_search_session()`                         | `SearchSession(status=queued/running)` |
-| 同步搜索                 | API/Search    | `execute_search()`                                | inline 结果                            |
-| 深度搜索异步化           | Jobs + Worker | `_enqueue_search_job()` / `process_search_deep()` | 由 worker 完成 Exa 搜索                |
-| Exa 结果标准化           | API/Search    | `ExaResultMapper.map_search_results()`            | `SearchResult[]`                       |
-| 结果持久化               | API/Search    | `replace_search_results()`                        | 搜索结果可轮询                         |
-
-#### 4.1.4 状态与模式
-
-| 模式   | execution_mode | 执行方式     | 说明                   |
-| ------ | -------------- | ------------ | ---------------------- |
-| `fast` | `sync`         | API inline   | 默认短链路             |
-| `auto` | `sync`         | API inline   | 超时会 fallback 为异步 |
-| `deep` | `async`        | Job + Worker | API 只返回 accepted    |
-
-### 4.2 导入与 Ingest 流程
-
-#### 4.2.1 目标
-
-系统需要把不同来源统一落成 `Article`，然后根据来源类型决定：
-
-- 是立即得到正文并索引
-- 还是先创建占位 article，再由 worker 异步抓正文
-
-#### 4.2.2 Mermaid 流程图
+#### 4.1.1 流程图
 
 ```mermaid
 flowchart TD
-    A["来源进入系统<br/>search_result / url / text / file"] --> B["ingest_draft()"]
-    B --> C{"input_type"}
+    A["Frontend 发起 sources/search"] --> B["start_search()"]
+    B --> C["创建 SearchSession"]
+    C --> D{"mode == deep?"}
 
-    C -- "text" --> D["normalize_text_to_markdown()"]
-    C -- "file" --> E["store_file_bytes() + parse_file_content()"]
-    C -- "url / search_result" --> F["创建 preview placeholder"]
+    D -->|"yes"| E["create search_deep job"]
+    E --> F["publish_jobs()"]
+    F --> G["返回 queued SearchSession"]
 
-    D --> G["_apply_parsed_content()"]
-    E --> G
-    F --> H["create article_ingest Job"]
+    D -->|"no"| H["execute_search() inline"]
+    H --> I["resolve_search_api_key()"]
+    I --> J["ExaSearchClient.search()"]
+    J --> K["ExaResultMapper.map_search_results()"]
+    K --> L["replace_search_results()"]
+    L --> M["SearchSession = completed"]
+    M --> N["返回 session + results"]
 
-    G --> I{"article.clean_markdown exists ?"}
-    I -- "yes" --> J["_index_article_content()"]
-    I -- "no" --> H
+    H --> O{"inline timeout?"}
+    O -->|"yes"| E
 
-    H --> K["publish_jobs() -> Kafka"]
-    K --> L["Worker process_article_ingest()"]
-    L --> M["Exa Contents / Trafilatura / 文件解析"]
-    M --> N["clean_markdown() + score_markdown()"]
-    N --> O{"needs_llm_fallback ?"}
-    O -- "yes" --> P["fallback_to_markdown()"]
-    O -- "no" --> Q["_apply_parsed_content() + record_article_ready()"]
-    P --> Q
-    Q --> R["_index_article_content()"]
-    R --> S["replace_article_chunks() + article_vector/chunk_vector"]
-    S --> T["mark_job_succeeded()"]
+    P["Frontend 轮询 search-sessions/:id"] --> Q["get_search_session()"]
+    Q --> R{"status == completed?"}
+    R -->|"yes"| S["返回 session + results"]
+    R -->|"no"| T["返回 session only"]
 ```
 
-#### 4.2.3 来源类型差异
-
-| 来源类型        | 入口              | 是否立即得到正文 | 是否创建 job | 说明                               |
-| --------------- | ----------------- | ---------------- | ------------ | ---------------------------------- |
-| `text`          | `/sources`        | 是               | 否           | 直接把文本规范化成 Markdown        |
-| `file`          | `/sources/upload` | 是               | 通常否       | 上传后直接解析文件内容并索引       |
-| `url`           | `/sources`        | 否               | 是           | 先建 placeholder，再异步抓正文     |
-| `search_result` | `/sources/import` | 否               | 是           | 先导入搜索结果，再由 worker 抓正文 |
-
-#### 4.2.4 文章状态说明
-
-| 字段           | 典型值                                              | 含义                    |
-| -------------- | --------------------------------------------------- | ----------------------- |
-| `parse_status` | `queued / ready / failed`                           | 正文解析是否完成        |
-| `chunk_status` | `not_started / processing / ready / failed / stale` | chunk 切分是否完成      |
-| `index_status` | `not_started / processing / ready / failed / stale` | 检索索引是否完成        |
-| `ingested_at`  | datetime                                            | 第一次正文 ready 的时间 |
-
-关键点：
-
-- 前端看到“正文准备中”，本质上看的是 `parse_status != ready`。
-- 一旦 worker 把 `parse_status=ready` 提交，正文就可以展示。
-- embedding 或 chunking 失败不会把正文回滚成不可见，只会影响检索能力。
-
-### 4.3 Job 系统与调度流程
-
-#### 4.3.1 目标
-
-Job 层负责把长耗时/可重试任务从 API 线程移走，同时提供：
-
-- job 建模
-- Kafka 发布
-- worker 消费
-- scheduler 重发 pending job
-- 配置变化触发 reindex
-
-#### 4.3.2 Mermaid 流程图
+#### 4.1.2 关键时序图
 
 ```mermaid
-flowchart LR
-    A["业务 Service<br/>search/import/settings"] --> B["create Job row<br/>status=pending_publish"]
-    B --> C["publish_jobs()"]
-    C -->|"Kafka 发送成功"| D["mark_job_queued()"]
-    C -->|"Kafka 异常"| E["run_job_inline() 或保持 pending_publish"]
+sequenceDiagram
+    participant FE as "Frontend"
+    participant API as "search/router"
+    participant Search as "search/sessions/service"
+    participant Jobs as "jobs/publisher"
+    participant Kafka as "Kafka"
+    participant Worker as "worker"
+    participant Exa as "Exa"
+    participant DB as "Postgres"
 
-    D --> F["Kafka"]
-    F --> G["Worker consumer"]
-    G --> H["mark_job_running()"]
-    H --> I["process_*()"]
-    I --> J{"success ?"}
-    J -- "yes" --> K["mark_job_succeeded()"]
-    J -- "no" --> L["mark_job_failed() / dead"]
+    FE->>API: POST /sources/search
+    API->>Search: start_search()
+    Search->>DB: create search_session
 
-    M["Scheduler tick"] --> N["republish_pending_jobs()"]
-    N --> C
+    alt mode=deep or inline timeout
+        Search->>DB: create search_deep job
+        Search->>Jobs: publish_jobs()
+        Jobs->>Kafka: publish(tag=search_deep)
+        Search-->>FE: queued session
+        Worker->>Kafka: consume search_deep
+        Worker->>Search: execute_search(searchSessionId)
+        Search->>Exa: search()
+        Exa-->>Search: results
+        Search->>DB: save search_results + mark session completed
+        FE->>API: GET /search-sessions/:id
+        API->>Search: get_search_session()
+        Search->>DB: load session/results
+        Search-->>FE: session + results
+    else inline success
+        Search->>Exa: search()
+        Exa-->>Search: results
+        Search->>DB: save search_results + mark session completed
+        Search-->>FE: session + results
+    end
 ```
 
-#### 4.3.3 Job 类型说明
+#### 4.1.3 关键状态
 
-| job_type          | 触发位置                                              | 处理函数                    | 作用                                          |
-| ----------------- | ----------------------------------------------------- | --------------------------- | --------------------------------------------- |
-| `search_deep`     | 搜索模式为 `deep`，或 inline 搜索超时 fallback        | `process_search_deep()`     | 异步完成 Exa 搜索并写入 `SearchResult`        |
-| `article_ingest`  | 导入 `url` / `search_result`，或其他尚未 ready 的来源 | `process_article_ingest()`  | 抓正文、清洗、质量评分、必要时 fallback、索引 |
-| `article_reindex` | 设置里 embedding profile 变更                         | `process_article_reindex()` | 清旧向量、重新 chunk + embedding              |
+| 模式   | execution_mode | 实际执行位置     | 前端观察方式                 |
+| ------ | -------------- | ---------------- | ---------------------------- |
+| `fast` | `sync`         | API inline       | 直接拿到 results             |
+| `auto` | `sync`         | API inline       | 超时后退化为 queued + 轮询   |
+| `deep` | `async`        | Job + Worker     | 先拿 session，再轮询结果     |
 
-#### 4.3.4 Scheduler 维护动作
+#### 4.1.4 `manual_service` 入口流程
 
-| 动作                      | 来源函数                          | 作用                                    |
+```mermaid
+flowchart TD
+    A["Frontend 提交手动来源或上传文件"] --> B["校验 notebook 是否存在"]
+    B --> C{"入口类型"}
+
+    C -->|"text"| D["整理标题和正文"]
+    D --> E["创建文本 draft"]
+    E --> F["统一交给 ingest_draft"]
+    F --> G["正文立即 ready"]
+    G --> H["返回 notebook detail"]
+
+    C -->|"web"| I["校验 URL"]
+    I --> J["创建网页 placeholder draft"]
+    J --> K["统一交给 ingest_draft"]
+    K --> L["创建占位文章和 ingest job"]
+    L --> M["发布异步任务"]
+    M --> H
+
+    C -->|"file upload"| N["逐个读取上传文件"]
+    N --> O["为每个文件创建 draft"]
+    O --> P["统一交给 ingest_draft"]
+    P --> Q{"文件是否能 inline 解析?"}
+    Q -->|"yes"| R["正文直接 ready 并索引"]
+    Q -->|"no"| S["创建 ingest job"]
+    R --> T["汇总导入结果"]
+    S --> T
+    T --> U["发布需要异步处理的任务"]
+    U --> H
+```
+
+#### 4.1.5 `import_service` 入口流程
+
+```mermaid
+flowchart TD
+    A["Frontend 选择搜索结果并导入"] --> B["加载 SearchSession"]
+    B --> C{"搜索会话已完成?"}
+    C -->|"no"| D["返回 search_session_not_ready"]
+    C -->|"yes"| E["校验 search_result_ids 属于当前会话"]
+    E --> F["逐个搜索结果构造 draft"]
+    F --> G["统一交给 ingest_draft"]
+    G --> H{"是否命中去重?"}
+    H -->|"yes"| I["计入 skipped"]
+    H -->|"no"| J["创建 Article 和可选 ingest job"]
+    I --> K["汇总 imported/skipped 统计"]
+    J --> K
+    K --> L["提交文章和任务"]
+    L --> M{"是否存在异步 job?"}
+    M -->|"yes"| N["发布 ingest 任务"]
+    M -->|"no"| O["直接返回"]
+    N --> O["返回 notebook detail"]
+```
+
+### 4.2 Source 导入与 Ingest 流程
+
+关键入口：
+
+- Source service: `search/sources/manual_service.py`, `search/sources/import_service.py`
+- Draft ingest: `ingest/articles/service.py`
+- Async ingest: `ingest/articles/worker.py`
+
+#### 4.2.1 流程图
+
+```mermaid
+flowchart TD
+    A["来源进入系统"] --> B["ingest_draft()"]
+    B --> C["build dedupe_key()"]
+    C --> D{"already exists?"}
+    D -->|"yes"| E["skip"]
+    D -->|"no"| F["create Article placeholder"]
+
+    F --> G{"input_type"}
+    G -->|"text"| H["normalize_text_to_markdown()"]
+    G -->|"file(image)"| I["store file + build image markdown"]
+    G -->|"file(document)"| J["store file + parse_file_content()"]
+    G -->|"url"| K["save preview placeholder"]
+    G -->|"search_result"| L["save search result metadata"]
+
+    H --> M["apply_parsed_content()"]
+    I --> M
+    J --> M
+    K --> N["create article_ingest job"]
+    L --> N
+
+    M --> O["record_article_ready()"]
+    O --> P{"clean_markdown exists?"}
+    P -->|"yes"| Q["index_article_content() inline"]
+    P -->|"no"| R["done"]
+
+    N --> S["publish_jobs() -> Kafka"]
+    S --> T["worker process_article_ingest()"]
+    T --> U["fetch/parse/clean/score/fallback"]
+    U --> V["commit parsed content first"]
+    V --> W["record_article_ready()"]
+    W --> X["index_article_content()"]
+    X --> Y["mark job succeeded"]
+```
+
+#### 4.2.2 关键时序图
+
+```mermaid
+sequenceDiagram
+    participant FE as "Frontend"
+    participant API as "search/router"
+    participant Source as "source service"
+    participant Ingest as "ingest_draft()"
+    participant Jobs as "jobs/publisher"
+    participant Kafka as "Kafka"
+    participant Worker as "process_article_ingest()"
+    participant Parser as "Exa/Trafilatura/File parser"
+    participant Index as "index_article_content()"
+    participant DB as "Postgres"
+
+    FE->>API: POST /sources or /sources/import or /sources/upload
+    API->>Source: create_source()/import_results()/upload_files()
+    Source->>Ingest: ingest_draft()
+
+    alt text or inline file parse
+        Ingest->>DB: create article
+        Ingest->>DB: apply_parsed_content(parse_status=ready)
+        Ingest->>Index: index_article_content()
+        Index->>DB: save chunks/vectors/status
+        API-->>FE: notebook detail with contentReady=true
+    else url or search_result or deferred parse
+        Ingest->>DB: create article placeholder + create job
+        Source->>Jobs: publish_jobs()
+        Jobs->>Kafka: publish(article_ingest)
+        API-->>FE: notebook detail with placeholder
+        Worker->>Kafka: consume article_ingest
+        Worker->>Parser: fetch/parse/clean/quality/fallback
+        Parser-->>Worker: markdown
+        Worker->>DB: commit parsed content first
+        Worker->>Index: index_article_content()
+        Index->>DB: save chunks/vectors/status
+        Worker->>DB: mark job succeeded
+        FE->>API: poll notebook detail
+        API-->>FE: contentReady=true after parse commit
+    end
+```
+
+#### 4.2.3 来源差异
+
+| 来源类型        | 入口              | 正文 ready 时机      | 是否创建 job | 备注                         |
+| --------------- | ----------------- | -------------------- | ------------ | ---------------------------- |
+| `text`          | `/sources`        | API 内立即完成       | 否           | 文本直接转 Markdown          |
+| `file`          | `/sources/upload` | 通常 API 内立即完成  | 视文件类型而定 | 图片直接转图片 Markdown      |
+| `url`           | `/sources`        | Worker fetch 后完成  | 是           | 先占位，再抓正文             |
+| `search_result` | `/sources/import` | Worker fetch 后完成  | 是           | 先落 Article，再抓正文       |
+
+#### 4.2.4 parse-ready 边界
+
+- `parse_status=ready` 才表示正文可读。
+- `chunk_status` 和 `index_status` 是检索就绪状态，不是阅读就绪状态。
+- Worker 在 `process_article_ingest()` 里先提交 parsed content，再继续索引；因此 embedding 失败不会让正文重新不可见。
+
+### 4.3 Worker 与 Scheduler 流程
+
+关键入口：
+
+- Worker bootstrap: `workers/run_worker.py`
+- Consumer: `infra/mq/consumer.py`
+- Handlers: `workers/handlers/__init__.py`
+- Scheduler bootstrap: `workers/run_scheduler.py`
+- Tick logic: `modules/jobs/scheduler.py`
+
+#### 4.3.1 Worker 流程图
+
+```mermaid
+flowchart TD
+    A["Worker 进程启动"] --> B["建立 Kafka consumer"]
+    B --> C["持续拉取消息批次"]
+    C --> D["解析 tag 和消息体"]
+    D --> E{"消息是否可处理?"}
+
+    E -->|"no"| F["记录告警和指标"]
+    F --> G["提交 offset 丢弃坏消息"]
+
+    E -->|"yes"| H{"任务类型"}
+    H -->|"search_deep"| I["分发到深度搜索处理链"]
+    H -->|"article_ingest"| J["分发到文章导入处理链"]
+    H -->|"article_reindex"| K["分发到文章重建索引处理链"]
+
+    I --> L["执行具体任务处理"]
+    J --> L
+    K --> L
+
+    L --> M{"处理是否成功?"}
+    M -->|"yes"| N["标记任务成功"]
+    N --> O["提交 offset"]
+    M -->|"no"| P["标记任务失败或 dead"]
+    P --> Q["保留 offset 以便后续重试"]
+```
+
+#### 4.3.2 `search_deep` 处理流程
+
+```mermaid
+flowchart TD
+    A["收到深度搜索任务"] --> B["加载 Job"]
+    B --> C["将任务标记为 running"]
+    C --> D["按 searchSessionId 执行搜索"]
+    D --> E{"搜索是否成功?"}
+    E -->|"yes"| F["写入搜索结果并标记成功"]
+    E -->|"no"| G["记录错误并标记失败或 dead"]
+```
+
+#### 4.3.3 `article_ingest` 处理流程
+
+```mermaid
+flowchart TD
+    A["收到文章导入任务"] --> B["加载 Job、Article、User"]
+    B --> C{"是否已有正文?"}
+    C -->|"yes"| D["直接复用现有正文"]
+    C -->|"no"| E{"来源类型"}
+
+    E -->|"url / search_result"| F["抓取网页正文"]
+    E -->|"file"| G["读取存储文件并解析"]
+
+    F --> H["得到原始 Markdown"]
+    G --> H
+    D --> H
+
+    H --> I{"是否提取到正文?"}
+    I -->|"no"| J["标记 parse 失败并结束任务"]
+    I -->|"yes"| K["清洗正文并做质量评分"]
+
+    K --> L{"是否需要 LLM fallback?"}
+    L -->|"yes"| M["执行 fallback 生成更干净的 Markdown"]
+    L -->|"no"| N["沿用当前正文"]
+    M --> N
+
+    N --> O["写入 clean_markdown 和内容元数据"]
+    O --> P["先提交 parse-ready 状态"]
+    P --> Q["记录 article_ready 事件"]
+    Q --> R["继续做 chunking、embedding、索引写回"]
+    R --> S{"索引是否成功?"}
+    S -->|"yes"| T["标记任务成功"]
+    S -->|"no"| U["保留正文可读，仅标记索引失败"]
+```
+
+#### 4.3.4 `article_reindex` 处理流程
+
+```mermaid
+flowchart TD
+    A["收到重建索引任务"] --> B["加载 Job、Article、User"]
+    B --> C{"正文是否已准备好?"}
+    C -->|"no"| D["直接标记任务失败"]
+    C -->|"yes"| E["将文章标记为 reindexing"]
+    E --> F["重新做 chunking、embedding 和索引写回"]
+    F --> G{"重建是否成功?"}
+    G -->|"yes"| H["标记任务成功"]
+    G -->|"no"| I["将文章索引状态标记为 failed"]
+```
+
+#### 4.3.5 Scheduler 流程图
+
+```mermaid
+flowchart TD
+    A["Scheduler 进程启动"] --> B["进入周期循环"]
+    B --> C{"收到停止信号?"}
+    C -->|"yes"| D["退出 Scheduler"]
+    C -->|"no"| E["扫描未成功发布的任务"]
+    E --> F["重新投递仍可重发的任务"]
+    F --> G["结束超时未完成的搜索会话"]
+    G --> H["清理过期摘要缓存"]
+    H --> I["清理历史失败或 dead 任务"]
+    I --> J["提交本轮修改并记录统计"]
+    J --> K["等待下一轮 tick"]
+    K --> C
+```
+
+#### 4.3.6 Job 发布与消费时序图
+
+```mermaid
+sequenceDiagram
+    participant Service as "search/import/settings service"
+    participant DB as "Postgres"
+    participant Publisher as "publish_jobs()"
+    participant Kafka as "Kafka"
+    participant Worker as "KafkaConsumer"
+    participant Handler as "process_*()"
+    participant Scheduler as "run_scheduler_tick()"
+
+    Service->>DB: create Job(status=pending_publish)
+    Service->>Publisher: publish_jobs()
+
+    alt Kafka publish success
+        Publisher->>Kafka: publish message
+        Publisher->>DB: mark job queued
+    else Kafka publish failed
+        Publisher->>Handler: run_job_inline() or keep pending_publish
+        Publisher->>DB: mark pending_publish with last_error
+    end
+
+    Worker->>Kafka: poll message
+    Worker->>Handler: dispatch by tag
+    alt handler success
+        Handler->>DB: mark job succeeded
+        Worker->>Kafka: commit offset
+    else handler failure
+        Handler->>DB: mark job failed/dead
+        Worker-->>Kafka: do not commit offset
+    end
+
+    Scheduler->>DB: list pending_publish jobs
+    Scheduler->>Publisher: republish_pending_jobs()
+```
+
+#### 4.3.7 Scheduler 维护动作
+
+| 动作                      | 函数                              | 作用                                    |
 | ------------------------- | --------------------------------- | --------------------------------------- |
 | `republished_jobs`        | `republish_pending_jobs()`        | 把 `pending_publish` 的 job 重新推回 MQ |
-| `expired_search_sessions` | `expire_stale_search_sessions()`  | 让过期搜索会话自动收尾                  |
+| `expired_search_sessions` | `expire_stale_search_sessions()`  | 结束超时未完成的搜索会话                |
 | `cleaned_summary_cache`   | `cleanup_expired_summary_cache()` | 清理过期摘要缓存                        |
-| `cleaned_failed_jobs`     | `cleanup_failed_jobs()`           | 清理历史失败/死亡 job                   |
+| `cleaned_failed_jobs`     | `cleanup_failed_jobs()`           | 清理历史 `failed/dead` job              |
 
-#### 4.3.5 与设置的关系
+### 4.4 AI Chat 流程
 
-用户在设置里修改 embedding provider / model / apiUrl 时：
+关键入口：
 
-1. `update_settings()` 计算 embedding profile 是否变化
-2. 若变化且已有已解析文章，会要求确认重建索引
-3. 系统会清空 `Article.article_vector` 和 `ArticleChunk`
-4. 将文章状态标为 `stale`
-5. 为每篇文章创建 `article_reindex` job
+- API: `ai/router.py`
+- Chat service: `ai/chat/service.py`
+- Context builder: `ai/chat/context_builder.py`
+- Route decision: `retrieval/router.py`
 
-也就是说，设置页并不直接重建索引，而是通过 job 系统异步完成。
+#### 4.4.1 流程图
 
-### 4.4 Chat 流程
+```mermaid
+flowchart TD
+    A["POST /chat or /chat/stream"] --> B["prepare_chat_reply()"]
+    B --> C["load_or_create_conversation()"]
+    C --> D["append_user_message()"]
+    D --> E{"route_chat_message()"}
 
-#### 4.4.1 目标
+    E -->|"CURRENT_ARTICLE"| F["load current article markdown"]
+    E -->|"EVIDENCE_LOOKUP"| G["retrieve_notebook_evidence_chunks()"]
+    E -->|"RELATED_ARTICLES"| H["retrieve_related_articles()"]
+    E -->|"GENERAL"| I["build general notebook context"]
 
-Chat 不是单一路由，而是先做“问题路由”，然后再决定使用：
+    G --> J{"chunk hit?"}
+    J -->|"yes"| K["chunk citations + context"]
+    J -->|"no"| H
 
-- 当前文章正文
-- 相关文章
-- 证据 chunk
-- 通用问题上下文
+    F --> L["load_history_messages()"]
+    K --> L
+    H --> L
+    I --> L
 
-#### 4.4.2 Mermaid 时序图
+    L --> M["build_chat_prompt()"]
+    M --> N["require_user_chat_model()"]
+    N --> O{"stream?"}
+    O -->|"no"| P["ainvoke()"]
+    O -->|"yes"| Q["astream()"]
+    P --> R["append_assistant_message()"]
+    Q --> R
+    R --> S["maybe_rollup_conversation()"]
+    S --> T["commit and return reply"]
+```
+
+#### 4.4.2 关键时序图
 
 ```mermaid
 sequenceDiagram
-    participant FE as Frontend NotebookPage
-    participant API as /chat/stream
-    participant Conv as conversation_service
-    participant Router as retrieval/router.py
-    participant Ret as article/chunk retriever
-    participant LLM as Chat Model
-    participant DB as Postgres
+    participant FE as "Frontend"
+    participant API as "ai/router"
+    participant Chat as "chat/service"
+    participant Context as "chat/context_builder"
+    participant Route as "retrieval/router"
+    participant Retrieval as "article/chunk retriever"
+    participant LLM as "chat model"
+    participant DB as "Postgres"
 
-    FE->>API: message + conversationId + articleId
-    API->>DB: 校验 notebook / article
-    API->>Conv: load_or_create_conversation()
-    API->>Conv: append_user_message()
-    API->>Router: route_chat_message()
+    FE->>API: POST /chat/stream
+    API->>Chat: stream_reply()
+    Chat->>Context: prepare_chat_reply()
+    Context->>DB: load/create conversation + append user message
+    Context->>Route: route_chat_message()
 
     alt CURRENT_ARTICLE
-        API->>DB: 读取 article.clean_markdown
-    else RELATED_ARTICLES
-        API->>Ret: retrieve_related_articles()
+        Route-->>Context: CURRENT_ARTICLE
+        Context->>DB: load current article markdown
     else EVIDENCE_LOOKUP
-        API->>Ret: retrieve_notebook_evidence_chunks()
+        Route-->>Context: EVIDENCE_LOOKUP
+        Context->>Retrieval: retrieve_notebook_evidence_chunks()
+        alt no chunk hit
+            Context->>Retrieval: retrieve_related_articles()
+        end
+    else RELATED_ARTICLES
+        Route-->>Context: RELATED_ARTICLES
+        Context->>Retrieval: retrieve_related_articles()
     else GENERAL
-        API->>API: 构造 notebook 级通用上下文
+        Route-->>Context: GENERAL
     end
 
-    API->>Conv: load_history_messages()
-    API->>LLM: prompt + route + context + history
-    LLM-->>API: stream tokens
-    API->>Conv: append_assistant_message()
-    API->>Conv: maybe_rollup_conversation()
-    API-->>FE: SSE token / done + citations + route
+    Context->>LLM: build prompt + astream()
+    LLM-->>Chat: token chunks
+    Chat-->>FE: SSE token
+    LLM-->>Chat: done
+    Chat->>DB: append assistant message
+    Chat->>DB: maybe_rollup_conversation()
+    Chat->>DB: commit
+    Chat-->>FE: SSE done
 ```
 
-#### 4.4.3 Chat Route 说明
+#### 4.4.3 Route 语义
 
-| route              | 使用场景                 | 主要上下文来源                             | 典型输出             |
-| ------------------ | ------------------------ | ------------------------------------------ | -------------------- |
-| `CURRENT_ARTICLE`  | 用户明确在问当前文章     | `article.clean_markdown`                   | 当前文章问答         |
-| `RELATED_ARTICLES` | 用户问相似/相关内容      | `retrieve_related_articles()`              | 跨文章总结、比较     |
-| `EVIDENCE_LOOKUP`  | 用户要原文、证据、出处   | `retrieve_notebook_evidence_chunks()` 优先 | chunk 级证据引用     |
-| `GENERAL`          | 通用问题、产品问法、寒暄 | notebook + current article 标题级上下文    | 不依赖正文的直接回答 |
+| route              | 主要上下文来源                             | 典型场景               |
+| ------------------ | ------------------------------------------ | ---------------------- |
+| `CURRENT_ARTICLE`  | 当前文章 `clean_markdown`                  | 问当前文章正文         |
+| `RELATED_ARTICLES` | `retrieve_related_articles()`              | 问相似文章、横向比较   |
+| `EVIDENCE_LOOKUP`  | `retrieve_notebook_evidence_chunks()` 优先 | 问证据、出处、引用     |
+| `GENERAL`          | notebook 标题 + 当前文章标题               | 通用问题或不依赖正文   |
 
-#### 4.4.4 Chat 的持久化结果
+### 4.5 AI Summary 流程
 
-| 持久化对象                            | 内容                                           |
-| ------------------------------------- | ---------------------------------------------- |
-| `Conversation`                        | 当前会话归属 notebook/article、rolling_summary |
-| `ConversationMessage(role=user)`      | 用户提问                                       |
-| `ConversationMessage(role=assistant)` | 模型回答、route、retrieval snapshot            |
+关键入口：
 
-### 4.5 Summary 流程
+- API: `ai/router.py`
+- Summary service: `ai/summary/service.py`
+- Summary workflow: `ai/summary/workflow.py`
 
-#### 4.5.1 目标
+#### 4.5.1 流程图
 
-Summary 需要基于文章正文生成摘要，同时尽量复用缓存，避免重复调模型。
+```mermaid
+flowchart TD
+    A["POST /summary or /summary/stream"] --> B["prepare_summary()"]
+    B --> C["load article + validate clean_markdown/content_hash"]
+    C --> D{"summary cache hit?"}
+    D -->|"yes"| E["return cached summary"]
+    D -->|"no"| F["build_summary_prompt()"]
+    F --> G["require_user_chat_model()"]
+    G --> H{"stream?"}
+    H -->|"no"| I["ainvoke()"]
+    H -->|"yes"| J["astream()"]
+    I --> K["finalize_summary()"]
+    J --> K
+    K --> L["write SummaryCache + commit"]
+    L --> M["return summary"]
+```
 
-#### 4.5.2 Mermaid 时序图
+#### 4.5.2 关键时序图
 
 ```mermaid
 sequenceDiagram
-    participant FE as Frontend NotebookPage
-    participant API as /summary/stream
-    participant DB as Postgres
-    participant Cache as SummaryCache
-    participant LLM as Summary Model
+    participant FE as "Frontend"
+    participant API as "ai/router"
+    participant Summary as "summary/service"
+    participant Workflow as "summary/workflow"
+    participant Cache as "SummaryCache"
+    participant LLM as "chat model"
+    participant DB as "Postgres"
 
-    FE->>API: articleId
-    API->>DB: get article by notebook/article
-    API->>DB: 检查 article.clean_markdown + content_hash
-    API->>Cache: 查询 SummaryCache
+    FE->>API: POST /summary or /summary/stream
+    API->>Summary: get_summary()/stream_summary()
+    Summary->>Workflow: prepare_summary()
+    Workflow->>DB: load article + validate content_hash
+    Workflow->>Cache: lookup by article/content_hash/prompt/model/lang
 
     alt cache hit
-        Cache-->>API: summary_text
-        API-->>FE: SSE done(cacheHit=true)
+        Cache-->>Workflow: cached summary
+        Workflow-->>Summary: cached_item
+        Summary-->>FE: return summary(cacheHit=true)
     else cache miss
-        API->>LLM: summary prompt + article.clean_markdown[:16000]
-        LLM-->>API: streamed summary tokens
-        API->>Cache: create_summary_cache()
-        API-->>FE: SSE done(cacheHit=false)
+        Workflow->>LLM: build prompt + invoke/stream
+        LLM-->>Summary: summary text
+        Summary->>Workflow: finalize_summary()
+        Workflow->>DB: insert summary_cache + commit
+        Summary-->>FE: return summary(cacheHit=false)
     end
 ```
 
-#### 4.5.3 Summary Cache Key
-
-缓存并不是只按 `article_id` 命中，而是按以下维度共同决定：
+#### 4.5.3 Summary Cache 维度
 
 | 维度              | 作用                 |
 | ----------------- | -------------------- |
-| `article_id`      | 同一篇文章           |
-| `content_hash`    | 文章正文变了就失效   |
-| `prompt_version`  | prompt 改版后失效    |
-| `model_provider`  | 模型提供方变化后失效 |
-| `model_name`      | 模型变化后失效       |
-| `output_language` | 输出语言变化后失效   |
-
-因此 Summary Cache 的策略是“强一致地复用相同输入”。
+| `article_id`      | 锁定同一篇文章       |
+| `content_hash`    | 正文变更即失效       |
+| `prompt_version`  | prompt 变更即失效    |
+| `model_provider`  | 模型提供方变化即失效 |
+| `model_name`      | 模型变化即失效       |
+| `output_language` | 输出语言变化即失效   |
 
 ## 5. 观测与运行时链路
 

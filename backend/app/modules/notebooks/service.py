@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.errors import AppError
 from app.modules.notes import repo as notes_repo
 from app.modules.notebooks import assembler, repo
-from app.modules.search import repo_article
+from app.modules.search.articles import repo as repo_article
 
 
 async def list_notebooks(session: AsyncSession, *, user_id: str, query: str | None = None) -> list[dict]:

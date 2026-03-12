@@ -4,9 +4,9 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from app.api.errors import AppError
-from app.modules.ai import repo as ai_repo
-from app.modules.ai.message_mapper import to_langchain_history
-from app.modules.ai.models import Conversation, ConversationMessage
+from app.modules.ai.chat import repo as chat_repo
+from app.modules.ai.chat.message_mapper import to_langchain_history
+from app.modules.ai.chat.models import Conversation, ConversationMessage
 
 RECENT_WINDOW_SIZE = 10
 
@@ -26,7 +26,7 @@ async def load_or_create_conversation(
         except ValueError:
             conversation_id = None
         existing = (
-            await ai_repo.get_conversation_by_id(session, conversation_id=conversation_id)
+            await chat_repo.get_conversation_by_id(session, conversation_id=conversation_id)
             if conversation_id
             else None
         )
@@ -36,7 +36,7 @@ async def load_or_create_conversation(
             conversation = existing
 
     if conversation is None:
-        conversation = await ai_repo.create_conversation(
+        conversation = await chat_repo.create_conversation(
             session,
             Conversation(
                 id=conversation_id or str(uuid4()),
@@ -61,7 +61,7 @@ async def append_user_message(
     content: str,
 ) -> ConversationMessage:
     conversation.last_message_at = datetime.now(UTC)
-    return await ai_repo.create_message(
+    return await chat_repo.create_message(
         session,
         ConversationMessage(
             conversation_id=conversation.id,
@@ -82,7 +82,7 @@ async def append_assistant_message(
     retrieval_snapshot: dict | None,
 ) -> ConversationMessage:
     conversation.last_message_at = datetime.now(UTC)
-    return await ai_repo.create_message(
+    return await chat_repo.create_message(
         session,
         ConversationMessage(
             conversation_id=conversation.id,
@@ -101,7 +101,7 @@ async def load_history_messages(
     conversation_id: str,
     exclude_message_id: str | None = None,
 ) -> list:
-    messages = await ai_repo.list_conversation_messages(
+    messages = await chat_repo.list_conversation_messages(
         session,
         conversation_id=conversation_id,
         limit=RECENT_WINDOW_SIZE + (1 if exclude_message_id else 0),

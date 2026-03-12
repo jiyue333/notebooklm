@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.ingest.chunker import ChunkDraft
+from app.modules.ingest.indexing.chunker import ChunkDraft
 from app.modules.notebooks.models import Article, ArticleChunk
 
 

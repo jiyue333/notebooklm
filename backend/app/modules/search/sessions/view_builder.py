@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.modules.search.models import SearchResult, SearchSession
+from app.modules.search.sessions.models import SearchResult, SearchSession
 
 
 def build_search_result_view(result: SearchResult) -> dict:

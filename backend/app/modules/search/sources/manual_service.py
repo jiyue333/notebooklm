@@ -6,11 +6,11 @@ from app.api.errors import AppError
 from app.infra.storage.mime import guess_mime_from_suffix
 from app.infra.telemetry.context import bind_observability_context
 from app.infra.telemetry.metrics import observe_source_import
-from app.modules.ingest.draft import IngestDraft
-from app.modules.ingest.service import ingest_draft
+from app.modules.ingest.articles.draft import IngestDraft
+from app.modules.ingest.articles.service import ingest_draft
 from app.modules.jobs import publisher as job_publisher
 from app.modules.notebooks import repo as notebooks_repo
-from app.modules.search.drafts import UploadedSourceFile
+from app.modules.search.sources.drafts import UploadedSourceFile
 from app.modules.search.markdown_utils import (
     build_web_placeholder,
 )

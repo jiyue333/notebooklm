@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import structlog
 
 from app.infra.telemetry.metrics import observe_ingest_ready
-from app.modules.ingest.retrieval_text_builder import build_article_retrieval_text
+from app.modules.ingest.indexing.retrieval_text_builder import build_article_retrieval_text
 from app.modules.notebooks.models import Article
 from app.modules.search.markdown_utils import compute_content_hash, extract_toc
 

@@ -6,7 +6,7 @@ import structlog
 from pydantic import BaseModel, Field
 
 from app.infra.ai.chat_models import require_user_chat_model
-from app.modules.ai.langchain_factory import build_chat_router_prompt
+from app.modules.ai.prompts.chat_route_prompt import build_chat_router_prompt
 
 ChatRoute = Literal["CURRENT_ARTICLE", "RELATED_ARTICLES", "EVIDENCE_LOOKUP", "GENERAL"]
 
@@ -22,6 +22,7 @@ class ChatRouteDecision(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+# TODO 路由逻辑优化（agent化）
 async def route_chat_message(
     *,
     user,

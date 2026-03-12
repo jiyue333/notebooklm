@@ -19,10 +19,11 @@ from app.modules.jobs import publisher as job_publisher
 from app.modules.jobs import repo as jobs_repo
 from app.modules.notebooks import repo as notebooks_repo
 from app.modules.settings.runtime import resolve_search_api_key
-from app.modules.search import repo_search
-from app.modules.search.error_utils import sanitize_search_error_message
-from app.modules.search.view_builder import build_search_response, build_search_session_view
-from app.modules.search.models import SearchSession
+from app.modules.search.sessions import repo as repo_search
+from app.modules.search.sessions.dto import CreateSearchSessionInput
+from app.modules.search.sessions.error_utils import sanitize_search_error_message
+from app.modules.search.sessions.models import SearchSession
+from app.modules.search.sessions.view_builder import build_search_response, build_search_session_view
 
 logger = structlog.get_logger(__name__)
 
@@ -41,11 +42,7 @@ async def start_search(
     max_results: int,
     freshness_hours: int | None,
 ) -> dict:
-    bind_observability_context(
-        user_id=user.id,
-        notebook_id=notebook_id,
-        provider="exa",
-    )
+    bind_observability_context(user_id=user.id, notebook_id=notebook_id, provider="exa")
     notebook = await notebooks_repo.get_notebook(
         request_session,
         user_id=user.id,
@@ -68,8 +65,7 @@ async def start_search(
     execution_mode = "async" if mode == "deep" else "sync"
     status = "queued" if mode == "deep" else "running"
 
-    search_session = await repo_search.create_search_session(
-        request_session,
+    create_input = CreateSearchSessionInput(
         user_id=user.id,
         notebook_id=notebook_id,
         query=normalized_query,
@@ -83,9 +79,15 @@ async def start_search(
         created_at=now,
         expires_at=now + timedelta(days=1),
     )
+    # 1. create session
+    search_session = await repo_search.create_search_session(
+        request_session,
+        input=create_input,
+    )
     await request_session.commit()
     await request_session.refresh(search_session)
 
+    # 2. jobs or sync
     if mode == "deep":
         await _enqueue_search_job(request_session, search_session.id)
         observe_search_request(mode=mode, execution="async", status="accepted")

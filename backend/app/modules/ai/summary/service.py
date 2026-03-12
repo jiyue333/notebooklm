@@ -8,7 +8,7 @@ from app.api.errors import AppError
 from app.api.sse import encode_sse_event, extract_stream_text
 from app.infra.telemetry.llm import extract_llm_text_and_usage
 from app.infra.telemetry.metrics import observe_llm_call
-from app.modules.ai.summary_workflow import finalize_summary, prepare_summary
+from app.modules.ai.summary.workflow import finalize_summary, prepare_summary
 
 logger = structlog.get_logger(__name__)
 

@@ -6,24 +6,24 @@ from typing import TYPE_CHECKING
 from app.api.errors import AppError
 from app.infra.ai.chat_models import get_user_generation_settings, require_user_chat_model
 from app.infra.telemetry.context import bind_observability_context
-from app.modules.ai.chat_result_serializer import serialize_chunk_match, serialize_related_match
-from app.modules.ai.conversation_service import (
+from app.modules.ai.chat.conversation import (
     append_user_message,
     load_history_messages,
     load_or_create_conversation,
 )
-from app.modules.ai.langchain_factory import build_chat_prompt
+from app.modules.ai.chat.result_serializer import serialize_chunk_match, serialize_related_match
+from app.modules.ai.prompts.chat_prompt import build_chat_prompt
 from app.modules.notebooks import repo as notebooks_repo
 from app.modules.retrieval.article_retriever import retrieve_related_articles
 from app.modules.retrieval.chunk_retriever import retrieve_notebook_evidence_chunks
 from app.modules.retrieval.router import route_chat_message
-from app.modules.search import repo_article
+from app.modules.search.articles import repo as repo_article
 
 if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
     from langchain_core.prompt_values import PromptValue
 
-    from app.modules.ai.models import Conversation, ConversationMessage
+    from app.modules.ai.chat.models import Conversation, ConversationMessage
     from app.modules.auth.models import User
 
 CURRENT_ARTICLE_CONTEXT_LIMIT = 2000

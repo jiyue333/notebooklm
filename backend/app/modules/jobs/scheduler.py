@@ -3,10 +3,10 @@ from __future__ import annotations
 from app.core.config import get_settings
 from app.infra.telemetry.metrics import observe_scheduler_action
 from app.infra.db.session import get_session_manager
-from app.modules.ai import repo as ai_repo
+from app.modules.ai.summary import repo as summary_repo
 from app.modules.jobs import repo as jobs_repo
 from app.modules.jobs.publisher import republish_pending_jobs
-from app.modules.search import repo_search
+from app.modules.search.sessions import repo as repo_search
 
 
 async def run_scheduler_tick() -> dict[str, int]:
@@ -14,7 +14,7 @@ async def run_scheduler_tick() -> dict[str, int]:
         settings = get_settings()
         published = await republish_pending_jobs(session, limit=100)
         expired_sessions = await repo_search.expire_stale_search_sessions(session)
-        cleaned_summary_cache = await ai_repo.cleanup_expired_summary_cache(
+        cleaned_summary_cache = await summary_repo.cleanup_expired_summary_cache(
             session,
             ttl_days=settings.summary_cache_ttl_days,
         )

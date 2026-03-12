@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
 CHAT_PROMPT_VERSION = "chat.v1"
 CHAT_ROLLUP_PROMPT_VERSION = "chat_rollup.v1"
 
@@ -34,3 +36,22 @@ CHAT_ROLLUP_USER_PROMPT = """
 需要压缩的新对话：
 {conversation}
 """.strip()
+
+
+def build_chat_prompt() -> ChatPromptTemplate:
+    return ChatPromptTemplate.from_messages(
+        [
+            ("system", CHAT_SYSTEM_PROMPT),
+            MessagesPlaceholder("history_messages"),
+            ("human", CHAT_USER_PROMPT),
+        ]
+    )
+
+
+def build_chat_rollup_prompt() -> ChatPromptTemplate:
+    return ChatPromptTemplate.from_messages(
+        [
+            ("system", CHAT_ROLLUP_SYSTEM_PROMPT),
+            ("human", CHAT_ROLLUP_USER_PROMPT),
+        ]
+    )

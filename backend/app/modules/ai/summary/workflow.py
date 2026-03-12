@@ -1,28 +1,32 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 from app.api.errors import AppError
 from app.infra.ai.chat_models import get_user_generation_settings, require_user_chat_model
 from app.infra.telemetry.context import bind_observability_context
-from app.modules.ai import repo as ai_repo
-from app.modules.ai.langchain_factory import build_summary_prompt
-from app.modules.ai.models import SummaryCache
-from app.modules.ai.prompts.summary_prompt import SUMMARY_PROMPT_VERSION
-from app.modules.search import repo_article
+from app.modules.ai.summary import repo as summary_repo
+from app.modules.ai.summary.models import SummaryCache
+from app.modules.ai.prompts.summary_prompt import SUMMARY_PROMPT_VERSION, build_summary_prompt
+from app.modules.search.articles import repo as repo_article
+
+if TYPE_CHECKING:
+    from app.modules.auth.models import User
+    from app.modules.notebooks.models import Article
 
 SUMMARY_INPUT_CHAR_LIMIT = 16000
 
 
 @dataclass(slots=True)
 class PreparedSummary:
-    user: object
-    article: object
+    user: User
+    article: Article
     model_settings: dict
     trace_metadata: dict
     cached_item: dict | None
-    messages: list | None
-    model: object | None
+    messages: Any | None
+    model: Any | None
 
 
 async def prepare_summary(
@@ -58,7 +62,7 @@ async def prepare_summary(
         provider=model_settings["modelProvider"],
         model_name=model_settings["modelName"],
     )
-    cached = await ai_repo.get_summary_cache(
+    cached = await summary_repo.get_summary_cache(
         session,
         article_id=article.id,
         content_hash=article.content_hash,
@@ -103,7 +107,7 @@ async def prepare_summary(
 
 
 async def finalize_summary(session, *, prepared: PreparedSummary, summary: str) -> dict:
-    await ai_repo.create_summary_cache(
+    await summary_repo.create_summary_cache(
         session,
         SummaryCache(
             user_id=prepared.user.id,

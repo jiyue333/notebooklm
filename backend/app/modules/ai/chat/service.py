@@ -8,14 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.errors import AppError
 from app.api.sse import encode_sse_event, extract_stream_text
 from app.infra.telemetry.metrics import observe_llm_call
-from app.modules.ai.chat_context_builder import prepare_chat_reply
-from app.modules.ai.chat_result_serializer import (
+from app.modules.ai.chat.context_builder import prepare_chat_reply
+from app.modules.ai.chat.conversation import append_assistant_message
+from app.modules.ai.chat.result_serializer import (
     build_chat_response,
     build_retrieval_snapshot,
 )
-from app.modules.ai.chat_runner import run_chat_completion
-from app.modules.ai.conversation_rollup import maybe_rollup_conversation
-from app.modules.ai.conversation_service import append_assistant_message
+from app.modules.ai.chat.rollup import maybe_rollup_conversation
+from app.modules.ai.chat.runner import run_chat_completion
 
 logger = structlog.get_logger(__name__)
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -12,38 +12,6 @@ from app.infra.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 if TYPE_CHECKING:
     from app.modules.notebooks.models import Article, Notebook
     from app.modules.auth.models import User
-
-
-class SummaryCache(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    __tablename__ = "summary_cache"  # type: ignore[assignment]
-    __table_args__ = (
-        UniqueConstraint(
-            "article_id",
-            "content_hash",
-            "prompt_version",
-            "model_provider",
-            "model_name",
-            "output_language",
-            name="uq_summary_cache_identity",
-        ),
-    )
-
-    user_id: Mapped[str] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    article_id: Mapped[str] = mapped_column(
-        ForeignKey("articles.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    model_provider: Mapped[str] = mapped_column(String(64), nullable=False)
-    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    output_language: Mapped[str] = mapped_column(String(64), nullable=False)
-    summary_text: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class Conversation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -102,3 +70,4 @@ class ConversationMessage(UUIDPrimaryKeyMixin, Base):
     )
 
     conversation: Mapped["Conversation"] = relationship(back_populates="messages")
+

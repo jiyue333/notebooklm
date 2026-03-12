@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from app.modules.ai.models import ConversationMessage
+from app.modules.ai.chat.models import ConversationMessage
 
 
 def to_langchain_message(message: ConversationMessage):

@@ -6,9 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_user_dep, db_session_dep
 from app.api.response import success_response
-from app.modules.ai.chat_service import reply, stream_reply
-from app.modules.ai.summary_service import get_summary, stream_summary
-from app.modules.ai.schemas import ChatRequest
+from app.modules.ai.chat.schemas import ChatRequest
+from app.modules.ai.chat.service import reply, stream_reply
+from app.modules.ai.summary.service import get_summary, stream_summary
 
 router = APIRouter(tags=["ai"])
 

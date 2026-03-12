@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from hashlib import sha256
 
-from app.modules.ingest.draft import IngestDraft
+from app.modules.ingest.articles.draft import IngestDraft
 
 
 def build_dedupe_key(draft: IngestDraft) -> str:
