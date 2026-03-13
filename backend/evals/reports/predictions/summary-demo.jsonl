@@ -1,0 +1,4 @@
+{"case_id":"summary-001","summary":"OpenTelemetry tracing works best when low-cardinality attributes, manual spans around critical stages, and dashboards are used together to explain latency."}
+{"case_id":"summary-002","summary":"Redis cache quality is reflected by hit rate, evictions, slowlog growth, fragmentation, and the appearance of hotkeys and bigkeys."}
+{"case_id":"summary-003","summary":"Search quality should be judged with latency, result count, freshness satisfaction, authority hit rate, and sampled review signals instead of a single score."}
+{"case_id":"summary-004","summary":"A healthy scheduler republishes pending jobs, expires stale searches, cleans summary cache, and periodically checks Redis for bigkeys and hotkeys."}

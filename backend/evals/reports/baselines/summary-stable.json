@@ -1,0 +1,17 @@
+{
+  "benchmark": "summary",
+  "generated_at": "2026-03-13T04:27:53.862902+00:00",
+  "cases": 6,
+  "metrics": {
+    "rouge_1_f1": 0.8117,
+    "rouge_l_f1": 0.7949,
+    "required_phrase_hit_rate": 0.9444,
+    "compression_ratio": 0.0749,
+    "summary_length_avg": 148.5
+  },
+  "metadata": {
+    "dataset": "backend/evals/datasets/summary/stable-summary-dataset.jsonl",
+    "predictions": "backend/evals/reports/predictions/summary-stable.jsonl",
+    "with_bert_score": false
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "benchmark": "search",
+  "generated_at": "2026-03-13T03:10:42.704654+00:00",
+  "cases": 6,
+  "k": 5,
+  "metrics": {
+    "recall_at_k": 1.0,
+    "precision_at_k": 0.4,
+    "mrr": 0.8333,
+    "ndcg_at_k": 0.9205,
+    "freshness_satisfaction_rate": 0.8333,
+    "authority_hit_rate": 0.8333
+  },
+  "metadata": {
+    "dataset": "backend/evals/datasets/search/demo-search-dataset.jsonl",
+    "predictions": "backend/evals/reports/predictions/search-demo.jsonl"
+  },
+  "baseline_comparison": [
+    {
+      "metric": "metrics.authority_hit_rate",
+      "current": 0.8333,
+      "baseline": 0.76,
+      "delta": 0.0733,
+      "status": "improved"
+    },
+    {
+      "metric": "metrics.freshness_satisfaction_rate",
+      "current": 0.8333,
+      "baseline": 0.81,
+      "delta": 0.0233,
+      "status": "improved"
+    },
+    {
+      "metric": "metrics.mrr",
+      "current": 0.8333,
+      "baseline": 0.73,
+      "delta": 0.1033,
+      "status": "improved"
+    },
+    {
+      "metric": "metrics.ndcg_at_k",
+      "current": 0.9205,
+      "baseline": 0.77,
+      "delta": 0.1505,
+      "status": "improved"
+    },
+    {
+      "metric": "metrics.precision_at_k",
+      "current": 0.4,
+      "baseline": 0.62,
+      "delta": -0.22,
+      "status": "regressed"
+    },
+    {
+      "metric": "metrics.recall_at_k",
+      "current": 1.0,
+      "baseline": 0.79,
+      "delta": 0.21,
+      "status": "improved"
+    }
+  ]
+}

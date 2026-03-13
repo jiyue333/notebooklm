@@ -1,0 +1,8 @@
+{
+  "metrics": {
+    "context_precision": 0.8125,
+    "context_recall": 0.7875,
+    "faithfulness": 0.835,
+    "answer_relevancy": 0.8075
+  }
+}

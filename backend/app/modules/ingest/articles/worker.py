@@ -12,7 +12,12 @@ from app.infra.storage.file_store import (
     materialize_stored_file_for_parser,
     stored_file_exists,
 )
-from app.infra.telemetry.metrics import observe_ingest_fallback, observe_ingest_parse, observe_job
+from app.infra.telemetry.metrics import (
+    observe_ingest_fallback,
+    observe_ingest_parse,
+    observe_job,
+)
+from app.infra.telemetry.tracing import start_span
 from app.infra.db.session import get_session_manager
 from app.modules.auth.repo import get_user_by_id
 from app.modules.ingest.articles.content import apply_parsed_content, record_article_ready
@@ -28,13 +33,15 @@ from app.modules.notebooks.service import invalidate_notebook_detail_cache
 from app.modules.search.articles import repo as repo_article
 from app.modules.search.sessions.service import execute_search
 from app.modules.settings.runtime import resolve_search_api_key
+from app.modules.tracker import IngestTracker
+from app.modules.tracker.document_types import classify_document_type
+from app.modules.tracker.stage_timer import elapsed_ms
 
 logger = structlog.get_logger(__name__)
 
 
 async def process_article_ingest(job_id: str) -> None:
     async for session in get_session_manager().session():
-        total_started = perf_counter()
         job = await jobs_repo.get_job(session, job_id)
         if job is None:
             raise AppError(404, "job not found", code="job_not_found")
@@ -60,81 +67,112 @@ async def process_article_ingest(job_id: str) -> None:
         parsed_content_committed = False
         content_was_ready = article.parse_status == "ready" and bool((article.clean_markdown or "").strip())
         fetch_strategy = "existing_markdown" if markdown else "none"
-        fetch_duration_ms = 0.0
-        file_parse_ms = 0.0
-        clean_ms = 0.0
-        quality_ms = 0.0
-        llm_fallback_ms = 0.0
         llm_fallback_applied = False
-        parse_commit_ms = 0.0
         index_stats: dict[str, float | int | str] = {}
+        _log_ctx = {
+            "article_id": article.id,
+            "notebook_id": article.notebook_id,
+            "job_id": job.id,
+            "input_type": article.input_type,
+        }
+
+        tracker = IngestTracker(
+            input_type=article.input_type,
+            document_type=classify_document_type(
+                input_type=article.input_type,
+                file_name=article.file_name,
+                file_mime=article.file_mime,
+                parser_name=article.parser_name,
+                markdown=article.clean_markdown,
+            ),
+        )
 
         try:
             search_api_key, _key_source = resolve_search_api_key(user) if user is not None else (None, "missing")
             if not markdown and article.input_type in {"search_result", "url"} and article.source_url:
                 if search_api_key:
-                    fetch_started = perf_counter()
-                    markdown, parser_name = await fetch_markdown_with_exa(url=article.source_url, api_key=search_api_key)
-                    fetch_duration_ms = round((perf_counter() - fetch_started) * 1000, 2)
+                    with tracker.stage("fetch", span_attrs={"fetch_strategy": "exa_contents"}) as ctx:
+                        markdown, parser_name = await fetch_markdown_with_exa(url=article.source_url, api_key=search_api_key)
+                        if not markdown:
+                            ctx.status = "empty"
                     fetch_strategy = "exa_contents"
                     if markdown:
                         observe_ingest_fallback(fallback_type="exa_contents")
                 if not markdown:
-                    fetch_started = perf_counter()
-                    markdown, parser_name = fetch_markdown_with_trafilatura(url=article.source_url)
-                    fetch_duration_ms = round((perf_counter() - fetch_started) * 1000, 2)
+                    with tracker.stage("fetch", span_attrs={"fetch_strategy": "trafilatura"}) as ctx:
+                        markdown, parser_name = fetch_markdown_with_trafilatura(url=article.source_url)
+                        if not markdown:
+                            ctx.status = "empty"
                     fetch_strategy = "trafilatura"
                     if markdown:
                         observe_ingest_fallback(fallback_type="trafilatura")
             elif not markdown and article.input_type == "file" and article.file_storage_key:
                 if stored_file_exists(article.file_storage_key):
                     file_bytes = load_file_bytes(article.file_storage_key)
-                    parse_started = perf_counter()
-                    with materialize_stored_file_for_parser(
-                        storage_key=article.file_storage_key,
-                        file_name=article.file_name,
-                    ) as file_path:
-                        parsed = parse_file_content(
+                    with tracker.stage("parse", span_attrs={"file_name": article.file_name}) as ctx:
+                        with materialize_stored_file_for_parser(
+                            storage_key=article.file_storage_key,
                             file_name=article.file_name,
-                            file_path=file_path,
-                            file_bytes=file_bytes,
-                        )
-                    markdown = parsed.markdown
-                    parser_name = parsed.parser_name
-                    file_parse_ms = round((perf_counter() - parse_started) * 1000, 2)
+                        ) as file_path:
+                            parsed = parse_file_content(
+                                file_name=article.file_name,
+                                file_path=file_path,
+                                file_bytes=file_bytes,
+                            )
+                        markdown = parsed.markdown
+                        parser_name = parsed.parser_name
+                        if not markdown:
+                            ctx.status = "empty"
                     fetch_strategy = "file_parser"
 
             if markdown:
-                clean_started = perf_counter()
-                markdown = clean_markdown(markdown)
-                clean_ms = round((perf_counter() - clean_started) * 1000, 2)
-                quality_started = perf_counter()
-                quality = score_markdown(markdown)
-                quality_ms = round((perf_counter() - quality_started) * 1000, 2)
-                article.parse_quality_score = quality.score
-                if quality.needs_llm_fallback and user is not None:
-                    fallback_started = perf_counter()
-                    fallback_markdown, fallback_parser = await fallback_to_markdown(
-                        user=user,
-                        title=article.title,
-                        raw_text=markdown,
+                with tracker.stage("clean"):
+                    markdown = clean_markdown(markdown)
+
+                with tracker.stage("quality_score"):
+                    quality = score_markdown(markdown)
+
+                tracker.set_document_type(
+                    classify_document_type(
+                        input_type=article.input_type,
+                        file_name=article.file_name,
+                        file_mime=article.file_mime,
+                        parser_name=parser_name,
+                        markdown=markdown,
+                        quality=quality,
                     )
-                    llm_fallback_ms = round((perf_counter() - fallback_started) * 1000, 2)
+                )
+                article.parse_quality_score = quality.score
+                tracker.report_quality(score=float(quality.score))
+                for structure_type, structure_score in quality.structure_scores.items():
+                    tracker.report_structure(structure_type, float(structure_score))
+
+                if quality.needs_llm_fallback and user is not None:
+                    with tracker.stage("llm_fallback") as ctx:
+                        fallback_markdown, fallback_parser = await fallback_to_markdown(
+                            user=user,
+                            title=article.title,
+                            raw_text=markdown,
+                        )
+                        if not fallback_markdown:
+                            ctx.status = "empty"
                     if fallback_markdown:
                         markdown = clean_markdown(fallback_markdown)
                         parser_name = fallback_parser
                         llm_fallback_applied = True
+                elif quality.needs_llm_fallback:
+                    tracker.report_stage_manual("llm_fallback", "skipped", 0.0)
 
-                commit_started = perf_counter()
-                apply_parsed_content(article, markdown, parser_name, datetime.now(UTC))
-                article.chunk_status = "processing"
-                article.index_status = "processing"
-                await session.commit()
-                await invalidate_notebook_detail_cache(
-                    user_id=article.user_id,
-                    notebook_id=article.notebook_id,
-                )
-                parse_commit_ms = round((perf_counter() - commit_started) * 1000, 2)
+                with tracker.stage("parse_commit"):
+                    apply_parsed_content(article, markdown, parser_name, datetime.now(UTC))
+                    article.chunk_status = "processing"
+                    article.index_status = "processing"
+                    await session.commit()
+                    await invalidate_notebook_detail_cache(
+                        user_id=article.user_id,
+                        notebook_id=article.notebook_id,
+                    )
+
                 parsed_content_committed = True
                 if not content_was_ready:
                     record_article_ready(article)
@@ -163,23 +201,17 @@ async def process_article_ingest(job_id: str) -> None:
                     user_id=article.user_id,
                     notebook_id=article.notebook_id,
                 )
+                tracker.report_stage_manual(
+                    "end_to_end", "success",
+                    sum(tracker.timings.get(s, 0.0) for s in tracker.timings),
+                )
                 logger.info(
                     "ingest.article_completed",
-                    article_id=article.id,
-                    notebook_id=article.notebook_id,
-                    job_id=job.id,
-                    input_type=article.input_type,
+                    **_log_ctx,
                     parser=parser_name or "unknown",
                     fetch_strategy=fetch_strategy,
-                    fetch_ms=fetch_duration_ms,
-                    file_parse_ms=file_parse_ms,
-                    clean_ms=clean_ms,
-                    quality_ms=quality_ms,
-                    quality_score=float(article.parse_quality_score or 0),
-                    llm_fallback_ms=llm_fallback_ms,
                     llm_fallback_applied=llm_fallback_applied,
-                    parse_commit_ms=parse_commit_ms,
-                    total_ms=round((perf_counter() - total_started) * 1000, 2),
+                    **tracker.timings,
                     **index_stats,
                 )
             else:
@@ -194,6 +226,10 @@ async def process_article_ingest(job_id: str) -> None:
                     error_tag="parse_empty",
                 )
                 observe_job(job_type=job.job_type, status="failed")
+                tracker.report_stage_manual(
+                    "end_to_end", "failed",
+                    sum(tracker.timings.get(s, 0.0) for s in tracker.timings),
+                )
                 await session.commit()
                 await invalidate_notebook_detail_cache(
                     user_id=article.user_id,
@@ -201,16 +237,11 @@ async def process_article_ingest(job_id: str) -> None:
                 )
                 logger.warning(
                     "ingest.article_failed",
-                    article_id=article.id,
-                    notebook_id=article.notebook_id,
-                    job_id=job.id,
-                    input_type=article.input_type,
+                    **_log_ctx,
                     error_tag="parse_empty",
                     parser=parser_name or "unknown",
                     fetch_strategy=fetch_strategy,
-                    fetch_ms=fetch_duration_ms,
-                    file_parse_ms=file_parse_ms,
-                    total_ms=round((perf_counter() - total_started) * 1000, 2),
+                    **tracker.timings,
                 )
         except Exception as exc:
             if parsed_content_committed:
@@ -234,22 +265,17 @@ async def process_article_ingest(job_id: str) -> None:
                     error_tag="ingest_failed",
                 )
             observe_job(job_type=job.job_type, status="failed")
+            tracker.report_stage_manual(
+                "end_to_end", "error",
+                sum(tracker.timings.get(s, 0.0) for s in tracker.timings),
+            )
             logger.exception(
                 "ingest.article_failed",
-                article_id=article.id,
-                notebook_id=article.notebook_id,
-                job_id=job.id,
-                input_type=article.input_type,
+                **_log_ctx,
                 error_tag=article.parse_error_tag or "ingest_failed",
                 parser=parser_name or "unknown",
                 fetch_strategy=fetch_strategy,
-                fetch_ms=fetch_duration_ms,
-                file_parse_ms=file_parse_ms,
-                clean_ms=clean_ms,
-                quality_ms=quality_ms,
-                llm_fallback_ms=llm_fallback_ms,
-                parse_commit_ms=parse_commit_ms,
-                total_ms=round((perf_counter() - total_started) * 1000, 2),
+                **tracker.timings,
                 error=str(exc),
                 **index_stats,
             )
@@ -286,6 +312,12 @@ async def process_article_reindex(job_id: str) -> None:
             article_id=article.id,
             job_id=job.id,
         )
+        _log_ctx = {
+            "article_id": article.id,
+            "notebook_id": article.notebook_id,
+            "job_id": job.id,
+            "input_type": article.input_type,
+        }
         try:
             if not article.clean_markdown:
                 await jobs_repo.mark_job_failed(job, error="article clean markdown not ready")
@@ -304,11 +336,8 @@ async def process_article_reindex(job_id: str) -> None:
             observe_job(job_type=job.job_type, status="succeeded")
             logger.info(
                 "ingest.article_reindex_completed",
-                article_id=article.id,
-                notebook_id=article.notebook_id,
-                job_id=job.id,
-                input_type=article.input_type,
-                total_ms=round((perf_counter() - total_started) * 1000, 2),
+                **_log_ctx,
+                total_ms=elapsed_ms(total_started),
                 **index_stats,
             )
         except Exception as exc:
@@ -322,11 +351,8 @@ async def process_article_reindex(job_id: str) -> None:
             observe_job(job_type=job.job_type, status="failed")
             logger.exception(
                 "ingest.article_reindex_failed",
-                article_id=article.id,
-                notebook_id=article.notebook_id,
-                job_id=job.id,
-                input_type=article.input_type,
-                total_ms=round((perf_counter() - total_started) * 1000, 2),
+                **_log_ctx,
+                total_ms=elapsed_ms(total_started),
                 error=str(exc),
             )
             raise

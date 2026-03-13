@@ -10,7 +10,7 @@
       "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
       "id": 100,
       "options": {
-        "content": "### How To Read\n- **Parse Outcomes (Last 1h)**: 最近 1 小时解析成功/失败计数，按来源类型、parser 和 error tag 拆分。\n- **Fallback Usage (Last 1h)**: 使用了哪些正文抓取 fallback，例如 `exa_contents`、`trafilatura`。\n- **Chunk Count P95**: 每篇文章切分出来的 chunk 数量 P95，不是耗时。\n- **Worker Job Outcomes (Last 1h)**: ingest/reindex/maintenance job 的成功失败数量。\n- **Content Ready Latency P95**: 从文章创建到正文可展示的 P95 耗时；这里的 ready 不等 index 全部完成。",
+        "content": "### How To Read\n- **Parse Outcomes / Fallback Usage**: 看导入链路在哪类来源和 parser 上失败，是否频繁退化到 fallback。\n- **Stage Latency P95**: `fetch / parse / clean / quality_score / llm_fallback / parse_commit / chunk / embed / persist / end_to_end` 的 P95 耗时。\n- **Markdown Quality Avg**: Markdown 总质量分均值，用于观察结构完整度和噪声变化。\n- **Structure Score Avg**: 标题层级、列表、表格、图片、链接五类结构得分均值。\n- **Doc Type Outcomes / Quality**: 把 PDF、扫描件、Word、HTML、Markdown 等解析质量拆开看。\n- **Content Ready Latency / Chunk Count P95**: 体现用户何时能看到正文，以及结构切分规模是否异常。",
         "mode": "markdown"
       },
       "title": "How To Read",
@@ -19,20 +19,23 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "最近 1 小时解析结果。失败时结合 `error_tag` 看是 parse_empty、ingest_failed 还是其他问题。",
+      "description": "最近 1 小时解析结果。失败时结合 parser 和 error_tag 看异常聚集在哪类文档。",
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
-          "decimals": 0
+          "decimals": 0,
+          "unit": "short"
         },
         "overrides": []
       },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
       "id": 1,
-      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
       "targets": [
         {
-          "expr": "sum by (input_type, status, parser, error_tag) (increase(notebooklm_ingest_parse_total[1h]))",
+          "expr": "notebooklm:ingest_parse_total:increase1h",
           "legendFormat": "{{input_type}} / {{status}} / {{parser}} / {{error_tag}}",
           "refId": "A"
         }
@@ -45,17 +48,20 @@
       "description": "最近 1 小时在正文抓取阶段使用的 fallback 次数。",
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
-          "decimals": 0
+          "decimals": 0,
+          "unit": "short"
         },
         "overrides": []
       },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
       "id": 2,
-      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
+      },
       "targets": [
         {
-          "expr": "sum by (fallback_type) (increase(notebooklm_ingest_fallback_total[1h]))",
+          "expr": "notebooklm:ingest_fallback_total:increase1h",
           "legendFormat": "{{fallback_type}}",
           "refId": "A"
         }
@@ -65,20 +71,131 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "每篇文章切分出的 chunk 数量 P95。数值越高，通常说明正文更长或结构更复杂。",
+      "description": "导入各阶段的 P95 耗时，优先看 success 曲线。",
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
-          "decimals": 0
+          "decimals": 0,
+          "unit": "ms"
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 12 },
       "id": 3,
-      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le, input_type) (rate(notebooklm_ingest_chunk_count_bucket[5m])))",
+          "expr": "notebooklm:ingest_stage_duration_ms:p95_rate5m{status=~\"success|queued|skipped\"}",
+          "legendFormat": "{{stage}} / {{input_type}} / {{status}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Stage Latency P95",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Markdown 质量分均值，适合观察结构完整度和噪声变化趋势。",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "max": 1,
+          "min": 0,
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 12 },
+      "id": 4,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm:ingest_markdown_quality_score:avg_rate5m",
+          "legendFormat": "{{input_type}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Markdown Quality Avg (5m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "标题层级、列表、表格、图片、链接五类结构质量得分均值。",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "max": 1,
+          "min": 0,
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "id": 5,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm:ingest_structure_score:avg_rate5m",
+          "legendFormat": "{{input_type}} / {{structure_type}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Structure Score Avg (5m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "从文章创建到正文可展示的 P95 耗时，单位毫秒。这里的 ready 不等索引全部结束。",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "id": 6,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm:ingest_ready_duration_ms:p95_rate5m",
+          "legendFormat": "{{input_type}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Content Ready Latency P95",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "每篇文章切分出的 chunk 数量 P95。数值抬高通常说明正文更长或 chunk 边界变得更细。",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "id": 7,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm:ingest_chunk_count:p95_rate5m",
           "legendFormat": "{{input_type}}",
           "refId": "A"
         }
@@ -88,20 +205,23 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "最近 1 小时 worker job 成功/失败次数。重点关注 `article_ingest` 和 `article_reindex` 的 failed 曲线。",
+      "description": "最近 1 小时 worker job 成功/失败次数。重点关注 `article_ingest` 和 `article_reindex`。",
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
-          "decimals": 0
+          "decimals": 0,
+          "unit": "short"
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
-      "id": 4,
-      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 36 },
+      "id": 8,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
       "targets": [
         {
-          "expr": "sum by (job_type, status) (increase(notebooklm_jobs_total{job_type=~\"article_ingest|article_reindex|maintenance_cleanup\"}[1h]))",
+          "expr": "sum by (job_type, status) (increase(notebooklm_jobs_total{job_type=~\"article_ingest|article_reindex\"}[1h]))",
           "legendFormat": "{{job_type}} / {{status}}",
           "refId": "A"
         }
@@ -111,25 +231,61 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "从文章创建到正文可展示的 P95 耗时，单位毫秒。这里的 ready 指 `contentReady=true`，不等索引结束。",
+      "description": "最近 1 小时不同文档类型的 parse 结果分布。",
       "fieldConfig": {
         "defaults": {
-          "unit": "ms",
-          "decimals": 0
+          "decimals": 0,
+          "unit": "short"
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
-      "id": 5,
-      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 44 },
+      "id": 9,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
+      },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le, input_type) (rate(notebooklm_ingest_ready_duration_ms_bucket[5m])))",
-          "legendFormat": "{{input_type}}",
+          "expr": "notebooklm:ingest_doc_type_total:increase1h",
+          "legendFormat": "{{doc_type}} / {{status}}",
           "refId": "A"
         }
       ],
-      "title": "Content Ready Latency P95",
+      "title": "Doc Type Outcomes (Last 1h)",
+      "type": "barchart"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "不同文档类型的 markdown 总质量和结构恢复分数。",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "max": 1,
+          "min": 0,
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 44 },
+      "id": 10,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm:ingest_doc_type_quality_score:avg_rate5m",
+          "legendFormat": "quality / {{doc_type}}",
+          "refId": "A"
+        },
+        {
+          "expr": "notebooklm:ingest_doc_type_structure_score:avg_rate5m",
+          "legendFormat": "{{structure_type}} / {{doc_type}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Doc Type Quality Avg (5m)",
       "type": "timeseries"
     }
   ],
@@ -142,6 +298,6 @@
   "timezone": "browser",
   "title": "NotebookLM Ingest",
   "uid": "notebooklm-ingest",
-  "version": 2,
+  "version": 4,
   "weekStart": ""
 }

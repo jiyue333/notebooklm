@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 from app.api.errors import AppError
 from app.modules.ai.chat import repo as chat_repo
-from app.modules.ai.chat.message_mapper import to_langchain_history
+from app.modules.ai.chat.utils import to_langchain_history
 from app.modules.ai.chat.models import Conversation, ConversationMessage
 
 RECENT_WINDOW_SIZE = 10

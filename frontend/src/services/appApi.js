@@ -705,6 +705,11 @@ const mockProvider = {
         if (!article) throw new Error('未找到对应文章');
         return buildMockTranslation(article, targetLanguage || mockState.settings.outputLanguage || '中文');
     },
+
+    async trackAiEvent() {
+        await wait(30);
+        return { accepted: true };
+    },
 };
 
 const buildUrl = (path) => {
@@ -1109,6 +1114,20 @@ const backendProvider = {
         return consumeSseStream(response, { onToken });
     },
 
+    async trackAiEvent({ notebookId, operation, action, route, articleId, conversationId }) {
+        return request(`/notebooks/${notebookId}/ai/events`, {
+            method: 'POST',
+            body: {
+                operation,
+                action,
+                route,
+                articleId,
+                conversationId,
+            },
+            timeoutMs: 10_000,
+        });
+    },
+
     async translateArticle({ notebookId, articleId, targetLanguage }) {
         const payload = await request(`/notebooks/${notebookId}/articles/${articleId}/translate`, {
             method: 'POST',
@@ -1159,6 +1178,7 @@ export const appApi = {
         streamSummary: provider.streamSummary,
         askAssistant: provider.askAssistant,
         streamAssistant: provider.streamAssistant,
+        trackAiEvent: provider.trackAiEvent,
         translateArticle: provider.translateArticle,
     },
 };

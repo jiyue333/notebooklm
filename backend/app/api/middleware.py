@@ -29,10 +29,13 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         started_at = perf_counter()
         response = await call_next(request)
         duration_ms = round((perf_counter() - started_at) * 1000, 2)
+        route_path = _resolve_route_template(request)
+
+        bind_observability_context(http_path=route_path)
 
         observe_http_request(
             method=request.method,
-            path=request.url.path,
+            path=route_path,
             status_code=response.status_code,
             duration_ms=duration_ms,
         )
@@ -44,3 +47,11 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             duration_ms=duration_ms,
         )
         return response
+
+
+def _resolve_route_template(request: Request) -> str:
+    route = request.scope.get("route")
+    if route is None:
+        return request.url.path
+    path = getattr(route, "path_format", None) or getattr(route, "path", None)
+    return str(path or request.url.path)

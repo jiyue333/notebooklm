@@ -162,6 +162,7 @@ const ArticleContentPane = memo(function ArticleContentPane({
     translationError,
     setShowSummary,
     setShowTranslation,
+    onCopySummary,
 }) {
     const deferredArticleContent = useDeferredValue(renderedArticleContent);
 
@@ -178,7 +179,7 @@ const ArticleContentPane = memo(function ArticleContentPane({
                         <span className="nb-summary-label">摘要</span>
                         <button className="nb-icon-btn-sm" onClick={() => setShowSummary(false)}>{I.close}</button>
                     </div>
-                    <div className="nb-summary-body">
+                    <div className="nb-summary-body" onCopy={summaryLoading ? undefined : onCopySummary}>
                         {summaryLoading ? (
                             <>
                                 {summaryText ? (
@@ -337,6 +338,14 @@ export default function NotebookPage() {
         clearStoredSession();
         navigate('/login', { replace: true });
     }, [navigate]);
+
+    const trackAiEvent = useCallback((payload) => {
+        if (!notebook?.id) return;
+        void appApi.ai.trackAiEvent({
+            notebookId: notebook.id,
+            ...payload,
+        }).catch(() => {});
+    }, [notebook?.id]);
 
     // Close dropdown on outside click
     useEffect(() => {
@@ -550,6 +559,7 @@ export default function NotebookPage() {
     const handleSendChat = async () => {
         if (!chatInput.trim() || !notebook || isChatStreaming) return;
         const prompt = chatInput.trim();
+        const isFollowUp = Boolean(chatConversationId || chatMessages.some((item) => item.role === 'assistant'));
         const pendingAssistantId = createChatMessageId();
         setChatMessages((prev) => [
             ...prev,
@@ -558,6 +568,15 @@ export default function NotebookPage() {
         ]);
         setChatInput('');
         setIsChatStreaming(true);
+        if (isFollowUp) {
+            trackAiEvent({
+                operation: 'chat',
+                action: 'follow_up',
+                route: 'none',
+                articleId: selectedArticle?.id || null,
+                conversationId: chatConversationId,
+            });
+        }
         try {
             const result = await appApi.ai.streamAssistant({
                 notebookId: notebook.id,
@@ -631,10 +650,17 @@ export default function NotebookPage() {
         return parts.join(' · ');
     }, []);
 
-    const handleOpenCitation = useCallback((citation) => {
+    const handleOpenCitation = useCallback((citation, route = 'none') => {
         if (!citation?.notebookId || !citation?.articleId) {
             return;
         }
+        trackAiEvent({
+            operation: 'chat',
+            action: 'citation_open',
+            route,
+            articleId: citation.articleId,
+            conversationId: chatConversationId,
+        });
         if (citation.notebookId === notebook?.id) {
             const article = notebook.articles.find((item) => item.id === citation.articleId);
             if (article) {
@@ -643,7 +669,29 @@ export default function NotebookPage() {
             return;
         }
         navigate(`/notebook/${citation.notebookId}?articleId=${citation.articleId}`);
-    }, [handleSelectArticle, navigate, notebook]);
+    }, [chatConversationId, handleSelectArticle, navigate, notebook, trackAiEvent]);
+
+    const handleCopySummary = useCallback(() => {
+        if (!summaryText.trim()) return;
+        trackAiEvent({
+            operation: 'summary',
+            action: 'summary_copy',
+            route: 'none',
+            articleId: selectedArticle?.id || null,
+            conversationId: null,
+        });
+    }, [selectedArticle?.id, summaryText, trackAiEvent]);
+
+    const handleCopyAssistant = useCallback((msg) => {
+        if (!msg?.content?.trim()) return;
+        trackAiEvent({
+            operation: 'chat',
+            action: 'answer_copy',
+            route: msg.route || 'none',
+            articleId: selectedArticle?.id || null,
+            conversationId: chatConversationId,
+        });
+    }, [chatConversationId, selectedArticle?.id, trackAiEvent]);
 
     const clearChat = () => {
         setChatMessages([]);
@@ -865,6 +913,7 @@ export default function NotebookPage() {
                                     translationError={translationError}
                                     setShowSummary={setShowSummary}
                                     setShowTranslation={setShowTranslation}
+                                    onCopySummary={handleCopySummary}
                                 />
                             </div>
                         </>
@@ -903,7 +952,10 @@ export default function NotebookPage() {
                                 )}
                                 {chatMessages.map((msg, idx) => (
                                     <div key={msg.id || idx} className={`nb-chat-msg nb-chat-msg-${msg.role}`}>
-                                        <div className={`nb-chat-bubble nb-chat-bubble-${msg.role}`}>
+                                        <div
+                                            className={`nb-chat-bubble nb-chat-bubble-${msg.role}`}
+                                            onCopy={msg.role === 'assistant' ? () => handleCopyAssistant(msg) : undefined}
+                                        >
                                             {msg.role === 'assistant' && msg.route && (
                                                 <div className="nb-chat-route-chip">
                                                     {CHAT_ROUTE_LABELS[msg.route] || msg.route}
@@ -925,7 +977,7 @@ export default function NotebookPage() {
                                                             key={`${citation.notebookId}-${citation.articleId}`}
                                                             type="button"
                                                             className="nb-chat-citation-card"
-                                                            onClick={() => handleOpenCitation(citation)}
+                                                            onClick={() => handleOpenCitation(citation, msg.route || 'none')}
                                                         >
                                                             <span className="nb-chat-citation-title">{citation.title}</span>
                                                             <span className="nb-chat-citation-meta">{buildCitationMeta(citation)}</span>

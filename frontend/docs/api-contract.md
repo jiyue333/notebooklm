@@ -11,7 +11,7 @@
 
 ## 2. 前端切换方式
 
-环境变量位于 [`.env.example`](/Users/taless/Code/notebooklm/frontend/.env.example)：
+环境变量位于根目录 [`.env.example`](/Users/taless/Code/notebooklm/.env.example)：
 
 ```env
 VITE_DATA_SOURCE=mock

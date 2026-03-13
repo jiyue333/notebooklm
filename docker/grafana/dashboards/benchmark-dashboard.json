@@ -1,0 +1,206 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "options": {
+        "content": "### How To Read\n- Benchmark runner 可同时产出 JSON、Markdown、Prometheus textfile。\n- 这些面板展示的是最近几次离线评测结果，适合看基线回归趋势。\n- Search 重点看 Recall/NDCG/新鲜度满足率；Ingest 看 parse 成功率和结构质量；Summary 看 ROUGE/BERTScore；RAG 看 retrieval 与 citation。",
+        "mode": "markdown"
+      },
+      "title": "How To Read",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 3,
+          "max": 1,
+          "min": 0,
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "id": 1,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm_benchmark_metric{benchmark=\"search\",metric_group=\"metrics\",metric_name=\"recall_at_k\"}",
+          "legendFormat": "Recall@K",
+          "refId": "A"
+        },
+        {
+          "expr": "notebooklm_benchmark_metric{benchmark=\"search\",metric_group=\"metrics\",metric_name=\"ndcg_at_k\"}",
+          "legendFormat": "NDCG@K",
+          "refId": "B"
+        },
+        {
+          "expr": "notebooklm_benchmark_metric{benchmark=\"search\",metric_group=\"metrics\",metric_name=\"freshness_satisfaction_rate\"}",
+          "legendFormat": "Freshness Satisfied",
+          "refId": "C"
+        }
+      ],
+      "title": "Search Benchmark Trend",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 3,
+          "max": 1,
+          "min": 0,
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "id": 2,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm_benchmark_metric{benchmark=\"ingest\",metric_group=\"process_metrics\",metric_name=\"parse_success_rate\"}",
+          "legendFormat": "Parse Success",
+          "refId": "A"
+        },
+        {
+          "expr": "notebooklm_benchmark_metric{benchmark=\"ingest\",metric_group=\"process_metrics\",metric_name=\"quality_score_avg\"}",
+          "legendFormat": "Quality Score",
+          "refId": "B"
+        },
+        {
+          "expr": "notebooklm_benchmark_metric{benchmark=\"ingest\",metric_group=\"structure_metrics\",metric_name=\"title_hierarchy\"}",
+          "legendFormat": "Title Hierarchy",
+          "refId": "C"
+        }
+      ],
+      "title": "Ingest Benchmark Trend",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 3,
+          "max": 1,
+          "min": 0,
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "id": 3,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm_benchmark_metric{benchmark=\"summary\",metric_group=\"metrics\",metric_name=\"rouge_l_f1\"}",
+          "legendFormat": "ROUGE-L",
+          "refId": "A"
+        },
+        {
+          "expr": "notebooklm_benchmark_metric{benchmark=\"summary\",metric_group=\"metrics\",metric_name=\"required_phrase_hit_rate\"}",
+          "legendFormat": "Phrase Hit",
+          "refId": "B"
+        },
+        {
+          "expr": "notebooklm_benchmark_metric{benchmark=\"summary\",metric_group=\"metrics\",metric_name=\"bert_score_f1\"}",
+          "legendFormat": "BERTScore F1",
+          "refId": "C"
+        }
+      ],
+      "title": "Summary Benchmark Trend",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 3,
+          "max": 1,
+          "min": 0,
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "id": 4,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm_benchmark_metric{benchmark=\"rag\",metric_group=\"retrieval_metrics\",metric_name=\"context_precision\"}",
+          "legendFormat": "Context Precision",
+          "refId": "A"
+        },
+        {
+          "expr": "notebooklm_benchmark_metric{benchmark=\"rag\",metric_group=\"retrieval_metrics\",metric_name=\"context_recall\"}",
+          "legendFormat": "Context Recall",
+          "refId": "B"
+        },
+        {
+          "expr": "notebooklm_benchmark_metric{benchmark=\"rag\",metric_group=\"citation_metrics\",metric_name=\"citation_correct_rate\"}",
+          "legendFormat": "Citation Correct",
+          "refId": "C"
+        }
+      ],
+      "title": "RAG Benchmark Trend",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "id": 5,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm_benchmark_cases",
+          "legendFormat": "{{benchmark}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Benchmark Cases",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["notebooklm", "benchmark", "offline-evals"],
+  "templating": { "list": [] },
+  "time": { "from": "now-30d", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "NotebookLM Benchmarks",
+  "uid": "notebooklm-benchmarks",
+  "version": 1,
+  "weekStart": ""
+}

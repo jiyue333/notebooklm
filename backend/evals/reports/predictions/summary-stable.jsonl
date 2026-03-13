@@ -1,0 +1,6 @@
+{"case_id":"summary-001","summary":"OpenTelemetry tracing should rely on low-cardinality attributes, manual spans around critical stages, and dashboards that correlate latency with backend pressure."}
+{"case_id":"summary-002","summary":"Redis cache quality depends on hit rate, evictions, slowlog behavior, fragmentation, and whether hotkeys or bigkeys are increasing."}
+{"case_id":"summary-003","summary":"Search quality should be observed through latency, result count, freshness satisfaction, authority hit rate, and sampled review signals instead of one aggregate score."}
+{"case_id":"summary-004","summary":"A good scheduler republishes pending jobs, expires stale searches, cleans summary cache, and inspects Redis for bigkeys and hotkeys on a fixed cadence."}
+{"case_id":"summary-005","summary":"Online AI review should score groundedness, faithfulness, completeness, and send low-quality samples into a bad-case stream for follow-up."}
+{"case_id":"summary-006","summary":"Import quality needs per-document-type metrics so PDF, scanned PDF, Word, HTML, markdown, and plain text regressions can be compared directly."}

@@ -1,0 +1,114 @@
+{
+  "benchmark": "ingest",
+  "generated_at": "2026-03-13T03:10:42.704597+00:00",
+  "cases": 5,
+  "process_metrics": {
+    "parse_success_rate": 1.0,
+    "ocr_trigger_rate": 0.2,
+    "parse_duration_ms_avg": 1798.0,
+    "clean_duration_ms_avg": 340.0,
+    "quality_score_avg": 0.836
+  },
+  "text_metrics": {
+    "field_exact_match_rate": 1.0,
+    "required_phrase_hit_rate": 1.0
+  },
+  "structure_metrics": {
+    "title_hierarchy": 0.888,
+    "list": 0.368,
+    "table": 0.176,
+    "image": 0.162,
+    "link": 0.342
+  },
+  "metadata": {
+    "dataset": "backend/evals/datasets/ingest/demo-ingest-dataset.jsonl",
+    "results": "backend/evals/reports/predictions/ingest-demo.jsonl",
+    "with_bert_score": false
+  },
+  "baseline_comparison": [
+    {
+      "metric": "process_metrics.clean_duration_ms_avg",
+      "current": 340.0,
+      "baseline": 420.0,
+      "delta": -80.0,
+      "status": "improved"
+    },
+    {
+      "metric": "process_metrics.ocr_trigger_rate",
+      "current": 0.2,
+      "baseline": 0.34,
+      "delta": -0.14,
+      "status": "improved"
+    },
+    {
+      "metric": "process_metrics.parse_duration_ms_avg",
+      "current": 1798.0,
+      "baseline": 1840.0,
+      "delta": -42.0,
+      "status": "improved"
+    },
+    {
+      "metric": "process_metrics.parse_success_rate",
+      "current": 1.0,
+      "baseline": 0.93,
+      "delta": 0.07,
+      "status": "improved"
+    },
+    {
+      "metric": "process_metrics.quality_score_avg",
+      "current": 0.836,
+      "baseline": 0.84,
+      "delta": -0.004,
+      "status": "regressed"
+    },
+    {
+      "metric": "structure_metrics.image",
+      "current": 0.162,
+      "baseline": 0.74,
+      "delta": -0.578,
+      "status": "regressed"
+    },
+    {
+      "metric": "structure_metrics.link",
+      "current": 0.342,
+      "baseline": 0.81,
+      "delta": -0.468,
+      "status": "regressed"
+    },
+    {
+      "metric": "structure_metrics.list",
+      "current": 0.368,
+      "baseline": 0.83,
+      "delta": -0.462,
+      "status": "regressed"
+    },
+    {
+      "metric": "structure_metrics.table",
+      "current": 0.176,
+      "baseline": 0.78,
+      "delta": -0.604,
+      "status": "regressed"
+    },
+    {
+      "metric": "structure_metrics.title_hierarchy",
+      "current": 0.888,
+      "baseline": 0.91,
+      "delta": -0.022,
+      "status": "regressed"
+    },
+    {
+      "metric": "text_metrics.field_exact_match_rate",
+      "current": 1.0,
+      "baseline": 0.88,
+      "delta": 0.12,
+      "status": "improved"
+    },
+    {
+      "metric": "text_metrics.required_phrase_hit_rate",
+      "current": 1.0,
+      "baseline": 0.86,
+      "delta": 0.14,
+      "status": "improved"
+    }
+  ]
+}

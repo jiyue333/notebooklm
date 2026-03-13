@@ -1,0 +1,54 @@
+{
+  "benchmark": "summary",
+  "generated_at": "2026-03-13T04:30:15.144017+00:00",
+  "cases": 6,
+  "metrics": {
+    "rouge_1_f1": 0.8117,
+    "rouge_l_f1": 0.7949,
+    "required_phrase_hit_rate": 0.9444,
+    "compression_ratio": 0.0749,
+    "summary_length_avg": 148.5
+  },
+  "metadata": {
+    "dataset": "backend/evals/datasets/summary/stable-summary-dataset.jsonl",
+    "predictions": "backend/evals/reports/predictions/summary-stable.jsonl",
+    "with_bert_score": false
+  },
+  "baseline_comparison": [
+    {
+      "metric": "metrics.compression_ratio",
+      "current": 0.0749,
+      "baseline": 0.0749,
+      "delta": 0.0,
+      "status": "unchanged"
+    },
+    {
+      "metric": "metrics.required_phrase_hit_rate",
+      "current": 0.9444,
+      "baseline": 0.9444,
+      "delta": 0.0,
+      "status": "unchanged"
+    },
+    {
+      "metric": "metrics.rouge_1_f1",
+      "current": 0.8117,
+      "baseline": 0.8117,
+      "delta": 0.0,
+      "status": "unchanged"
+    },
+    {
+      "metric": "metrics.rouge_l_f1",
+      "current": 0.7949,
+      "baseline": 0.7949,
+      "delta": 0.0,
+      "status": "unchanged"
+    },
+    {
+      "metric": "metrics.summary_length_avg",
+      "current": 148.5,
+      "baseline": 148.5,
+      "delta": 0.0,
+      "status": "unchanged"
+    }
+  ]
+}

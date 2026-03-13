@@ -74,11 +74,12 @@ source /srv/notebooklm/.venv/bin/activate
 python -m pip install --upgrade pip wheel
 cd /srv/notebooklm/backend
 pip install -e .
+cd /srv/notebooklm
 cp .env.example .env
 chmod 600 .env
 ```
 
-然后按本文 `9.2` 填好 `/srv/notebooklm/backend/.env`，再执行迁移：
+然后按本文 `9.2` 填好 `/srv/notebooklm/.env`，再执行迁移：
 
 ```bash
 cd /srv/notebooklm/backend
@@ -130,9 +131,9 @@ systemctl reload nginx
 
 ```bash
 cd /srv/notebooklm
-chmod +x scripts/prod/*.sh
-./scripts/prod/start-all.sh
-./scripts/prod/status.sh
+chmod +x scripts/*.sh
+./scripts/prod.sh start all
+./scripts/prod.sh status
 ```
 
 日志位置：
@@ -164,7 +165,7 @@ curl -I http://127.0.0.1:8081
 curl -I https://note.example.com/
 curl https://note.example.com/api/health
 curl https://note.example.com/api/ready
-./scripts/prod/status.sh
+./scripts/prod.sh status
 docker compose --env-file /srv/notebooklm/.env.infra -f /srv/notebooklm/docker-compose.prod.yml ps
 ```
 
@@ -241,7 +242,7 @@ Server internals
    +-- docker run
    |    `-- notebooklm-frontend -> nginx serving dist on 127.0.0.1:8081
    |
-   +-- scripts/prod/*.sh
+   +-- scripts/prod.sh
    |    +-- api       -> FastAPI
    |    +-- worker    -> Kafka consumer
    |    `-- scheduler -> periodic tasks
@@ -845,41 +846,36 @@ touch /srv/notebooklm/logs/scheduler.log
 
 ### 11.3 使用仓库里的现成脚本
 
-我已经把这些脚本放进仓库：
+我已经把生产脚本统一收口到：
 
-- [start-api.sh](/Users/taless/Code/notebooklm/scripts/prod/start-api.sh)
-- [start-worker.sh](/Users/taless/Code/notebooklm/scripts/prod/start-worker.sh)
-- [start-scheduler.sh](/Users/taless/Code/notebooklm/scripts/prod/start-scheduler.sh)
-- [start-all.sh](/Users/taless/Code/notebooklm/scripts/prod/start-all.sh)
-- [stop-all.sh](/Users/taless/Code/notebooklm/scripts/prod/stop-all.sh)
-- [status.sh](/Users/taless/Code/notebooklm/scripts/prod/status.sh)
+- [prod.sh](/Users/taless/Code/notebooklm/scripts/prod.sh)
 
 先赋可执行权限：
 
 ```bash
 cd /srv/notebooklm
-chmod +x scripts/prod/*.sh
+chmod +x scripts/*.sh
 ```
 
 ### 11.4 启动进程
 
 ```bash
 cd /srv/notebooklm
-./scripts/prod/start-all.sh
+./scripts/prod.sh start all
 ```
 
 ### 11.5 查看状态
 
 ```bash
 cd /srv/notebooklm
-./scripts/prod/status.sh
+./scripts/prod.sh status
 ```
 
 ### 11.6 停止进程
 
 ```bash
 cd /srv/notebooklm
-./scripts/prod/stop-all.sh
+./scripts/prod.sh stop all
 ```
 
 ### 11.7 查看日志
@@ -1072,7 +1068,7 @@ ssh -L 9001:127.0.0.1:9001 <你的服务器用户名>@note.example.com
   - `kafka`
   - `grafana/prometheus/loki/tempo`
 - 进程管理：
-  - `scripts/prod/*.sh`
+  - `scripts/prod.sh`
 - 入口：
   - `nginx + certbot`
 

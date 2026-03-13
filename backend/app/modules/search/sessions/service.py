@@ -14,7 +14,7 @@ from app.infra.db.session import get_session_manager
 from app.infra.providers.exa.mapper import ExaResultMapper
 from app.infra.providers.exa.search_client import ExaSearchClient, ExaSearchMode, ExaSearchRequest
 from app.infra.telemetry.context import bind_observability_context
-from app.infra.telemetry.metrics import observe_search_provider, observe_search_request
+from app.infra.telemetry.metrics import observe_search_request
 from app.modules.auth.repo import get_user_by_id
 from app.modules.jobs import publisher as job_publisher
 from app.modules.jobs import repo as jobs_repo
@@ -24,7 +24,10 @@ from app.modules.search.sessions import repo as repo_search
 from app.modules.search.sessions.dto import CreateSearchSessionInput
 from app.modules.search.sessions.error_utils import sanitize_search_error_message
 from app.modules.search.sessions.models import SearchSession
+from app.modules.search.sessions.quality import score_search_results
 from app.modules.search.sessions.view_builder import build_search_response, build_search_session_view
+from app.modules.tracker import SearchTracker
+from app.modules.tracker.stage_timer import elapsed_ms
 
 logger = structlog.get_logger(__name__)
 
@@ -163,6 +166,7 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
         )
         provider_name = search_session.provider_name
         mode_name = search_session.mode
+        execution_mode = search_session.execution_mode
         status_for_metrics = search_session.status
 
         await repo_search.touch_search_session(
@@ -202,8 +206,11 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
             status_for_metrics = "failed"
             raise AppError(422, "请先在设置里配置 Exa API Key", code="search_api_key_required")
 
+        tracker = SearchTracker(mode=mode_name, execution=execution_mode, provider=provider_name)
         client = ExaSearchClient()
         started_at = perf_counter()
+        current_stage = "provider_search"
+        current_stage_started = started_at
         try:
             request = ExaSearchRequest(
                 query=search_session.query,
@@ -211,45 +218,71 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
                 max_results=int(search_session.provider_request_json.get("maxResults", 10)),
                 freshness_hours=search_session.provider_request_json.get("freshnessHours"),
             )
-            if timeout_seconds is not None:
-                import asyncio
+            with tracker.stage("provider_search"):
+                if timeout_seconds is not None:
+                    import asyncio
 
-                payload = await asyncio.wait_for(
-                    client.search(request, api_key=exa_api_key),
-                    timeout=timeout_seconds,
-                )
-            else:
-                payload = await client.search(request, api_key=exa_api_key)
-            candidates = ExaResultMapper.map_search_results(payload)
+                    payload = await asyncio.wait_for(
+                        client.search(request, api_key=exa_api_key),
+                        timeout=timeout_seconds,
+                    )
+                else:
+                    payload = await client.search(request, api_key=exa_api_key)
+
+            current_stage = "result_map"
+            current_stage_started = perf_counter()
+            with tracker.stage("result_map"):
+                candidates = ExaResultMapper.map_search_results(payload)
+
             completed_at = datetime.now(UTC)
-            await repo_search.replace_search_results(
-                session,
-                search_session_id=search_session.id,
-                candidates=candidates,
-                created_at=completed_at,
-            )
-            await repo_search.touch_search_session(
-                session,
-                search_session=search_session,
-                status="completed",
-                result_count=len(candidates),
-                completed_at=completed_at,
-                error_code=None,
-                error_message=None,
-            )
-            await session.commit()
+            current_stage = "result_persist"
+            current_stage_started = perf_counter()
+            with tracker.stage("result_persist", span_attrs={"search.result_count": len(candidates)}):
+                await repo_search.replace_search_results(
+                    session,
+                    search_session_id=search_session.id,
+                    candidates=candidates,
+                    created_at=completed_at,
+                )
+                await repo_search.touch_search_session(
+                    session,
+                    search_session=search_session,
+                    status="completed",
+                    result_count=len(candidates),
+                    completed_at=completed_at,
+                    error_code=None,
+                    error_message=None,
+                )
+                await session.commit()
+
             await invalidate_search_session_cache(
                 user_id=search_session.user_id,
                 notebook_id=search_session.notebook_id,
                 search_session_id=search_session.id,
             )
             status_for_metrics = "completed"
+            tracker.report_result_count(len(candidates))
+            quality_snapshot = score_search_results(
+                candidates,
+                freshness_hours=search_session.provider_request_json.get("freshnessHours"),
+            )
+            tracker.report_quality(quality_snapshot)
+            await tracker.capture_review_sample(
+                user=user,
+                search_session_id=search_session.id,
+                notebook_id=search_session.notebook_id,
+                query=search_session.query,
+                freshness_hours=search_session.provider_request_json.get("freshnessHours"),
+                candidates=candidates,
+                quality_snapshot=quality_snapshot,
+            )
         except TimeoutError:
             await session.rollback()
             search_session = await repo_search.get_search_session_by_id(
                 session,
                 search_session_id=search_session_id,
             ) or search_session
+            tracker.report_stage_manual(current_stage, "timeout", elapsed_ms(current_stage_started))
             await repo_search.touch_search_session(
                 session,
                 search_session=search_session,
@@ -270,6 +303,7 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
             completed_at = datetime.now(UTC)
             error_message = sanitize_search_error_message(exc)
             await session.rollback()
+            tracker.report_stage_manual(current_stage, "error", elapsed_ms(current_stage_started))
             search_session = await repo_search.get_search_session_by_id(
                 session,
                 search_session_id=search_session_id,
@@ -296,30 +330,27 @@ async def execute_search(search_session_id: str, *, timeout_seconds: float | Non
             )
             raise AppError(502, "来源搜索失败", code="provider_search_failed")
         finally:
-            observe_search_provider(
-                provider=provider_name,
-                mode=mode_name,
-                status=status_for_metrics,
-                duration_ms=round((perf_counter() - started_at) * 1000, 2),
-            )
+            tracker.report_provider(status_for_metrics, elapsed_ms(started_at))
             await client.close()
 
-        results = await repo_search.list_search_results(session, search_session_id=search_session.id)
-        response = build_search_response(
-            search_session,
-            results,
-            meta={
-                "provider": search_session.provider_name,
-                "elapsedMs": round((perf_counter() - started_at) * 1000, 2),
-            },
-        )
-        await _cache_search_response(
-            user_id=search_session.user_id,
-            notebook_id=search_session.notebook_id,
-            search_session_id=search_session.id,
-            response=response,
-            status=search_session.status,
-        )
+        with tracker.stage("response_build", span_attrs={"provider": search_session.provider_name}):
+            results = await repo_search.list_search_results(session, search_session_id=search_session.id)
+            response = build_search_response(
+                search_session,
+                results,
+                meta={
+                    "provider": search_session.provider_name,
+                    "elapsedMs": elapsed_ms(started_at),
+                },
+            )
+            await _cache_search_response(
+                user_id=search_session.user_id,
+                notebook_id=search_session.notebook_id,
+                search_session_id=search_session.id,
+                response=response,
+                status=search_session.status,
+            )
+
         return response
 
     raise AppError(500, "search execution unavailable", code="search_execution_unavailable")

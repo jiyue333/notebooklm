@@ -7,11 +7,12 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parents[2]
+ROOT_DIR = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=BASE_DIR / ".env",
+        env_file=ROOT_DIR / ".env",
         env_file_encoding="utf-8",
         env_prefix="",
         case_sensitive=False,
@@ -40,10 +41,26 @@ class Settings(BaseSettings):
     cache_ttl_search_session_completed_seconds: int = 300
     cache_ttl_search_session_pending_seconds: int = 2
     cache_ttl_settings_seconds: int = 900
+    redis_inspection_enabled: bool = True
+    redis_inspection_interval_seconds: int = 900
+    redis_inspection_sample_limit: int = 200
+    redis_inspection_scan_count: int = 50
+    redis_bigkey_threshold_bytes: int = 262144
+    redis_hotkey_frequency_threshold: int = 32
+    redis_inspection_top_n: int = 10
 
     exa_base_url: str = "https://api.exa.ai"
     exa_default_api_key: str | None = None
     search_inline_deadline_ms: int = 4500
+    search_review_sampling_enabled: bool = True
+    search_review_sampling_rate: float = 0.02
+    search_review_sampling_mode: str = "rule_llm"
+    search_review_bad_case_threshold: float = 0.55
+
+    ai_review_sampling_enabled: bool = True
+    ai_review_sampling_rate: float = 0.02
+    ai_review_sampling_mode: str = "llm"
+    ai_review_bad_case_threshold: float = 0.6
 
     llm_default_api_key: str | None = None
     embedding_default_api_key: str | None = None
@@ -117,6 +134,26 @@ class Settings(BaseSettings):
         if "+asyncpg" in self.database_url:
             return self.database_url.replace("+asyncpg", "+psycopg", 1)
         return self.database_url
+
+    @property
+    def search_review_output_dir(self) -> Path:
+        return BASE_DIR / "evals" / "reports" / "search_samples"
+
+    @property
+    def search_review_bad_case_output_dir(self) -> Path:
+        return BASE_DIR / "evals" / "reports" / "search_bad_cases"
+
+    @property
+    def ai_review_output_dir(self) -> Path:
+        return BASE_DIR / "evals" / "reports" / "ai_reviews"
+
+    @property
+    def ai_review_bad_case_output_dir(self) -> Path:
+        return BASE_DIR / "evals" / "reports" / "ai_bad_cases"
+
+    @property
+    def redis_inspection_output_dir(self) -> Path:
+        return BASE_DIR / "evals" / "reports" / "redis"
 
 
 @lru_cache

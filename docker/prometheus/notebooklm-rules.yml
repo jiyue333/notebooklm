@@ -1,0 +1,277 @@
+groups:
+  - name: notebooklm-search
+    interval: 30s
+    rules:
+      - record: notebooklm:search_requests_total:rate5m
+        expr: sum by (mode, execution, status) (rate(notebooklm_search_requests_total[5m]))
+      - record: notebooklm:search_provider_duration_ms:p95_rate5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, provider, mode, status) (
+              rate(notebooklm_search_provider_duration_ms_bucket[5m])
+            )
+          )
+      - record: notebooklm:search_stage_duration_ms:p95_rate5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, stage, mode, execution, status) (
+              rate(notebooklm_search_stage_duration_ms_bucket[5m])
+            )
+          )
+      - record: notebooklm:search_result_count:p95_rate5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, mode, execution) (
+              rate(notebooklm_search_result_count_bucket[5m])
+            )
+          )
+      - record: notebooklm:search_result_score:avg_rate5m
+        expr: |
+          sum by (score_type, mode, execution, provider) (rate(notebooklm_search_result_score_sum[5m]))
+          /
+          clamp_min(
+            sum by (score_type, mode, execution, provider) (rate(notebooklm_search_result_score_count[5m])),
+            1
+          )
+      - record: notebooklm:search_result_signal:ratio1h
+        expr: |
+          sum by (signal, mode, execution, provider) (increase(notebooklm_search_result_signal_total{result="yes"}[1h]))
+          /
+          clamp_min(
+            sum by (signal, mode, execution, provider) (increase(notebooklm_search_result_signal_total[1h])),
+            1
+          )
+      - record: notebooklm:search_review_samples_total:increase1h
+        expr: |
+          sum by (mode, execution, provider, review_mode, result) (
+            increase(notebooklm_search_review_samples_total[1h])
+          )
+      - record: notebooklm:search_review_score:avg_rate5m
+        expr: |
+          sum by (score_type, mode, execution, provider, reviewer) (
+            rate(notebooklm_search_review_score_sum[5m])
+          )
+          /
+          clamp_min(
+            sum by (score_type, mode, execution, provider, reviewer) (
+              rate(notebooklm_search_review_score_count[5m])
+            ),
+            1
+          )
+      - record: notebooklm:search_review_bad_cases_total:increase1h
+        expr: |
+          sum by (mode, execution, provider, reviewer, reason) (
+            increase(notebooklm_search_review_bad_cases_total[1h])
+          )
+
+  - name: notebooklm-ingest
+    interval: 30s
+    rules:
+      - record: notebooklm:ingest_parse_total:increase1h
+        expr: sum by (input_type, status, parser, error_tag) (increase(notebooklm_ingest_parse_total[1h]))
+      - record: notebooklm:ingest_fallback_total:increase1h
+        expr: sum by (fallback_type) (increase(notebooklm_ingest_fallback_total[1h]))
+      - record: notebooklm:ingest_stage_duration_ms:p95_rate5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, stage, input_type, status) (
+              rate(notebooklm_ingest_stage_duration_ms_bucket[5m])
+            )
+          )
+      - record: notebooklm:ingest_ready_duration_ms:p95_rate5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, input_type) (
+              rate(notebooklm_ingest_ready_duration_ms_bucket[5m])
+            )
+          )
+      - record: notebooklm:ingest_chunk_count:p95_rate5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, input_type) (
+              rate(notebooklm_ingest_chunk_count_bucket[5m])
+            )
+          )
+      - record: notebooklm:ingest_markdown_quality_score:avg_rate5m
+        expr: |
+          sum by (input_type) (rate(notebooklm_ingest_markdown_quality_score_sum[5m]))
+          /
+          clamp_min(sum by (input_type) (rate(notebooklm_ingest_markdown_quality_score_count[5m])), 1)
+      - record: notebooklm:ingest_structure_score:avg_rate5m
+        expr: |
+          sum by (input_type, structure_type) (rate(notebooklm_ingest_structure_score_sum[5m]))
+          /
+          clamp_min(
+            sum by (input_type, structure_type) (rate(notebooklm_ingest_structure_score_count[5m])),
+            1
+          )
+      - record: notebooklm:ingest_doc_type_total:increase1h
+        expr: sum by (doc_type, status) (increase(notebooklm_ingest_doc_type_total[1h]))
+      - record: notebooklm:ingest_doc_type_quality_score:avg_rate5m
+        expr: |
+          sum by (doc_type) (rate(notebooklm_ingest_doc_type_quality_score_sum[5m]))
+          /
+          clamp_min(
+            sum by (doc_type) (rate(notebooklm_ingest_doc_type_quality_score_count[5m])),
+            1
+          )
+      - record: notebooklm:ingest_doc_type_structure_score:avg_rate5m
+        expr: |
+          sum by (doc_type, structure_type) (rate(notebooklm_ingest_doc_type_structure_score_sum[5m]))
+          /
+          clamp_min(
+            sum by (doc_type, structure_type) (rate(notebooklm_ingest_doc_type_structure_score_count[5m])),
+            1
+          )
+
+  - name: notebooklm-ai
+    interval: 30s
+    rules:
+      - record: notebooklm:ai_requests_total:rate5m
+        expr: sum by (operation, mode, status) (rate(notebooklm_ai_requests_total[5m]))
+      - record: notebooklm:ai_request_duration_ms:p95_rate5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, operation, mode, status) (
+              rate(notebooklm_ai_request_duration_ms_bucket[5m])
+            )
+          )
+      - record: notebooklm:ai_first_token_ms:p95_rate5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, operation, provider, model) (
+              rate(notebooklm_ai_first_token_ms_bucket[5m])
+            )
+          )
+      - record: notebooklm:ai_token_stream_duration_ms:p95_rate5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, operation, provider, model, status) (
+              rate(notebooklm_ai_token_stream_duration_ms_bucket[5m])
+            )
+          )
+      - record: notebooklm:ai_route_total:increase1h
+        expr: sum by (operation, route) (increase(notebooklm_ai_route_total[1h]))
+      - record: notebooklm:ai_retrieval_context_count:p95_rate5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, operation, route, context_type) (
+              rate(notebooklm_ai_retrieval_context_count_bucket[5m])
+            )
+          )
+      - record: notebooklm:ai_cache_lookup_total:increase1h
+        expr: sum by (operation, cache_layer, result) (increase(notebooklm_ai_cache_lookup_total[1h]))
+      - record: notebooklm:ai_answer_length_chars:p95_rate5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, operation) (
+              rate(notebooklm_ai_answer_length_chars_bucket[5m])
+            )
+          )
+      - record: notebooklm:ai_user_actions_total:increase1h
+        expr: sum by (operation, action, route) (increase(notebooklm_ai_user_actions_total[1h]))
+      - record: notebooklm:ai_chat_success_total:increase1h
+        expr: sum(increase(notebooklm_ai_requests_total{operation="chat",status="success"}[1h]))
+      - record: notebooklm:ai_summary_success_total:increase1h
+        expr: sum(increase(notebooklm_ai_requests_total{operation="summary",status=~"success|cache_hit"}[1h]))
+      - record: notebooklm:ai_follow_up_rate:ratio1h
+        expr: |
+          sum(increase(notebooklm_ai_user_actions_total{operation="chat",action="follow_up"}[1h]))
+          /
+          clamp_min(sum(increase(notebooklm_ai_requests_total{operation="chat",status="success"}[1h])), 1)
+      - record: notebooklm:ai_answer_copy_rate:ratio1h
+        expr: |
+          sum(increase(notebooklm_ai_user_actions_total{operation="chat",action="answer_copy"}[1h]))
+          /
+          clamp_min(sum(increase(notebooklm_ai_requests_total{operation="chat",status="success"}[1h])), 1)
+      - record: notebooklm:ai_citation_open_rate:ratio1h
+        expr: |
+          sum(increase(notebooklm_ai_user_actions_total{operation="chat",action="citation_open"}[1h]))
+          /
+          clamp_min(sum(increase(notebooklm_ai_requests_total{operation="chat",status="success"}[1h])), 1)
+      - record: notebooklm:ai_summary_copy_rate:ratio1h
+        expr: |
+          sum(increase(notebooklm_ai_user_actions_total{operation="summary",action="summary_copy"}[1h]))
+          /
+          clamp_min(sum(increase(notebooklm_ai_requests_total{operation="summary",status=~"success|cache_hit"}[1h])), 1)
+      - record: notebooklm:ai_online_review_total:increase1h
+        expr: |
+          sum by (operation, route, reviewer, result) (
+            increase(notebooklm_ai_online_review_total[1h])
+          )
+      - record: notebooklm:ai_online_review_score:avg_rate5m
+        expr: |
+          sum by (operation, route, reviewer, score_type) (
+            rate(notebooklm_ai_online_review_score_sum[5m])
+          )
+          /
+          clamp_min(
+            sum by (operation, route, reviewer, score_type) (
+              rate(notebooklm_ai_online_review_score_count[5m])
+            ),
+            1
+          )
+      - record: notebooklm:ai_online_review_bad_cases_total:increase1h
+        expr: |
+          sum by (operation, route, reviewer, reason) (
+            increase(notebooklm_ai_online_review_bad_cases_total[1h])
+          )
+
+  - name: notebooklm-infra
+    interval: 30s
+    rules:
+      - record: notebooklm:node_cpu_utilization:ratio5m
+        expr: 1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))
+      - record: notebooklm:node_memory_utilization:ratio
+        expr: 1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)
+      - record: notebooklm:node_disk_io_bytes:rate5m
+        expr: |
+          sum by (instance) (
+            rate(node_disk_read_bytes_total[5m]) + rate(node_disk_written_bytes_total[5m])
+          )
+      - record: notebooklm:node_network_io_bytes:rate5m
+        expr: |
+          sum by (instance) (
+            rate(node_network_receive_bytes_total[5m]) + rate(node_network_transmit_bytes_total[5m])
+          )
+      - record: notebooklm:redis_ops_total:rate5m
+        expr: sum by (instance) (rate(redis_commands_processed_total[5m]))
+      - record: notebooklm:redis_hit_rate:ratio5m
+        expr: |
+          sum(rate(redis_keyspace_hits_total[5m]))
+          /
+          clamp_min(
+            sum(rate(redis_keyspace_hits_total[5m])) + sum(rate(redis_keyspace_misses_total[5m])),
+            1
+          )
+      - record: notebooklm:redis_evicted_keys_total:increase1h
+        expr: sum(increase(redis_evicted_keys_total[1h]))
+      - record: notebooklm:postgres_connections:sum
+        expr: sum(pg_stat_database_numbackends)
+      - record: notebooklm:postgres_deadlocks:increase1h
+        expr: sum(increase(pg_stat_database_deadlocks[1h]))
+      - record: notebooklm:postgres_tps:rate5m
+        expr: sum(rate(pg_stat_database_xact_commit[5m]) + rate(pg_stat_database_xact_rollback[5m]))
+      - record: notebooklm:postgres_lock_waits:sum
+        expr: sum(pg_locks_count{granted="false"})
+      - record: notebooklm:postgres_cache_hit_ratio:ratio5m
+        expr: |
+          sum(rate(pg_stat_database_blks_hit[5m]))
+          /
+          clamp_min(
+            sum(rate(pg_stat_database_blks_hit[5m])) + sum(rate(pg_stat_database_blks_read[5m])),
+            1
+          )
+      - record: notebooklm:redis_inspection_runs_total:increase1h
+        expr: sum by (result) (increase(notebooklm_redis_inspection_runs_total[1h]))

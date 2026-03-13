@@ -1,0 +1,6 @@
+{"case_id":"search-head-001","ranked_doc_ids":["otel-best-practices-2026","grafana-tempo-tracing-guide","otel-semconv-2026","random-blog-post","tempo-span-latency"],"freshness_satisfied":true,"authority_hit":true}
+{"case_id":"search-authority-001","ranked_doc_ids":["redis-bigkeys-doc","redis-latency-doc","redis-memory-optimization","seo-aggregator-redis","redis-cluster-faq"],"freshness_satisfied":true,"authority_hit":true}
+{"case_id":"search-longtail-001","ranked_doc_ids":["grafana-kafka-observability","kafka-lag-observability","summary-pipeline-delay-guide","generic-kafka-intro","consumer-lag-faq"],"freshness_satisfied":true,"authority_hit":false}
+{"case_id":"search-fresh-002","ranked_doc_ids":["openai-pricing-update","pricing-roundup-blog","openai-responses-api-docs","openai-changelog","community-pricing-thread"],"freshness_satisfied":true,"authority_hit":true}
+{"case_id":"search-domain-002","ranked_doc_ids":["google-sre-error-budgets","generic-monitoring-tips","sre-workbook-alerting","google-cloud-slo-guide","random-ops-blog"],"freshness_satisfied":true,"authority_hit":true}
+{"case_id":"search-adversarial-001","ranked_doc_ids":["tempo-metrics-generator","otel-genai-semconv","ttft-observability-guide","open-telemtry-typo-blog","otel-traces-overview"],"freshness_satisfied":false,"authority_hit":true}

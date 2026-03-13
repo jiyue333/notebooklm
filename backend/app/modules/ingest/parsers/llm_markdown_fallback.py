@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from time import perf_counter
-
 from app.infra.ai.chat_models import build_user_chat_model, get_user_generation_settings
 from app.infra.telemetry.llm import extract_llm_text_and_usage
-from app.infra.telemetry.metrics import observe_ingest_fallback, observe_llm_call
+from app.infra.telemetry.metrics import observe_ingest_fallback
+from app.modules.tracker import LlmTracker
 
 
 async def fallback_to_markdown(*, user, title: str, raw_text: str) -> tuple[str | None, str]:
@@ -31,28 +30,16 @@ async def fallback_to_markdown(*, user, title: str, raw_text: str) -> tuple[str 
         ),
         HumanMessage(content=f"Title: {title}\n\nRaw text:\n{raw_text}"),
     ]
-    started_at = perf_counter()
+    tracker = LlmTracker.from_model_settings("markdown_fallback", settings)
+    tracker.mark_llm_start()
     try:
         result = await model.ainvoke(
             messages,
             config={"run_name": "markdown_fallback_model", "metadata": trace_metadata},
         )
     except Exception:
-        observe_llm_call(
-            operation="markdown_fallback",
-            provider=settings["modelProvider"],
-            model=settings["modelName"],
-            status="error",
-            duration_ms=round((perf_counter() - started_at) * 1000, 2),
-        )
+        tracker.report_llm("error")
         raise
     content, usage = extract_llm_text_and_usage(result)
-    observe_llm_call(
-        operation="markdown_fallback",
-        provider=settings["modelProvider"],
-        model=settings["modelName"],
-        status="success",
-        duration_ms=round((perf_counter() - started_at) * 1000, 2),
-        usage=usage,
-    )
+    tracker.report_llm("success", usage=usage)
     return (content if content else None), "llm_markdown_fallback"

@@ -49,6 +49,18 @@ services:
       timeout: 5s
       retries: 5
 
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.67.0
+    container_name: notebooklm-redis-exporter
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    ports:
+      - "9121:9121"
+
   minio:
     image: minio/minio:RELEASE.2025-02-28T09-55-16Z
     container_name: notebooklm-minio
@@ -135,6 +147,38 @@ services:
     ports:
       - "9308:9308"
 
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    container_name: notebooklm-postgres-exporter
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATA_SOURCE_URI: postgres:5432/postgres?sslmode=disable
+      DATA_SOURCE_USER: postgres
+      DATA_SOURCE_PASS: postgres
+    ports:
+      - "9187:9187"
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: notebooklm-node-exporter
+    restart: unless-stopped
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+      - "--collector.textfile.directory=/textfile_collector"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($|/)"
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+      - ./backend/evals/reports/prometheus:/textfile_collector
+
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.122.1
     container_name: notebooklm-otel-collector
@@ -194,6 +238,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/prometheus/notebooklm-rules.yml:/etc/prometheus/notebooklm-rules.yml:ro
       - prometheus_data:/prometheus
 
   grafana:

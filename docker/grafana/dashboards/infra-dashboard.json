@@ -1,0 +1,413 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "options": {
+        "content": "### How To Read\n- **Host**: 先看 CPU、内存、load、磁盘 IO、网络 IO，判断是不是机器层资源问题。\n- **Redis**: 重点看 ops、hit rate、evictions、fragmentation、slowlog、clients，确认缓存是否在拖慢 Search / AI。\n- **PostgreSQL**: 重点看连接数、TPS、lock waits、deadlocks、cache hit ratio，确认是不是 DB 在拖慢 Search / Import。\n- **Use Together**: 业务链路抖动时，先回到这里看底层资源是否同步异常。",
+        "mode": "markdown"
+      },
+      "title": "How To Read",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "主机 CPU 利用率，范围 0-1。",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "max": 1,
+          "min": 0,
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 4 },
+      "id": 1,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm:node_cpu_utilization:ratio5m",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Host CPU Utilization (5m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "主机内存利用率，范围 0-1。",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "max": 1,
+          "min": 0,
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 4 },
+      "id": 2,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm:node_memory_utilization:ratio",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Host Memory Utilization",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "主机 load average。",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 4 },
+      "id": 3,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "node_load1",
+          "legendFormat": "load1 / {{instance}}",
+          "refId": "A"
+        },
+        {
+          "expr": "node_load5",
+          "legendFormat": "load5 / {{instance}}",
+          "refId": "B"
+        },
+        {
+          "expr": "node_load15",
+          "legendFormat": "load15 / {{instance}}",
+          "refId": "C"
+        }
+      ],
+      "title": "Host Load Average",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "主机磁盘 IO 吞吐。",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 1,
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "id": 4,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm:node_disk_io_bytes:rate5m",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Disk IO Throughput (5m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "主机网络 IO 吞吐。",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 1,
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "id": 5,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm:node_network_io_bytes:rate5m",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Network IO Throughput (5m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Redis ops/s 与 hit rate。",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 20 },
+      "id": 6,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm:redis_ops_total:rate5m",
+          "legendFormat": "ops / {{instance}}",
+          "refId": "A"
+        },
+        {
+          "expr": "notebooklm:redis_hit_rate:ratio5m",
+          "legendFormat": "hit_rate",
+          "refId": "B"
+        }
+      ],
+      "title": "Redis Ops and Hit Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Redis 内存、碎片率、已连接客户端、slowlog 长度。",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 20 },
+      "id": 7,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "redis_memory_used_bytes",
+          "legendFormat": "memory_used / {{instance}}",
+          "refId": "A"
+        },
+        {
+          "expr": "redis_memory_fragmentation_ratio",
+          "legendFormat": "fragmentation / {{instance}}",
+          "refId": "B"
+        },
+        {
+          "expr": "redis_connected_clients",
+          "legendFormat": "clients / {{instance}}",
+          "refId": "C"
+        },
+        {
+          "expr": "redis_slowlog_length",
+          "legendFormat": "slowlog / {{instance}}",
+          "refId": "D"
+        }
+      ],
+      "title": "Redis Memory, Fragmentation, Clients, Slowlog",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Redis 逐出键数量。",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 20 },
+      "id": 8,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm:redis_evicted_keys_total:increase1h",
+          "legendFormat": "evicted_keys",
+          "refId": "A"
+        }
+      ],
+      "title": "Redis Evicted Keys (Last 1h)",
+      "type": "barchart"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "PostgreSQL 连接数、TPS、cache hit ratio。",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "id": 9,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm:postgres_connections:sum",
+          "legendFormat": "connections",
+          "refId": "A"
+        },
+        {
+          "expr": "notebooklm:postgres_tps:rate5m",
+          "legendFormat": "tps",
+          "refId": "B"
+        },
+        {
+          "expr": "notebooklm:postgres_cache_hit_ratio:ratio5m",
+          "legendFormat": "cache_hit_ratio",
+          "refId": "C"
+        }
+      ],
+      "title": "PostgreSQL Connections, TPS, Cache Hit",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "PostgreSQL 锁等待和 deadlock。",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "id": 10,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm:postgres_lock_waits:sum",
+          "legendFormat": "lock_waits",
+          "refId": "A"
+        },
+        {
+          "expr": "notebooklm:postgres_deadlocks:increase1h",
+          "legendFormat": "deadlocks_last_1h",
+          "refId": "B"
+        }
+      ],
+      "title": "PostgreSQL Lock Waits and Deadlocks",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Scheduler 的 Redis 巡检结果摘要，聚焦 keys scanned / bigkeys / hotkeys。",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "id": 11,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm_redis_inspection_keys_scanned",
+          "legendFormat": "keys_scanned",
+          "refId": "A"
+        },
+        {
+          "expr": "notebooklm_redis_bigkey_count",
+          "legendFormat": "bigkeys",
+          "refId": "B"
+        },
+        {
+          "expr": "notebooklm_redis_hotkey_count",
+          "legendFormat": "hotkeys",
+          "refId": "C"
+        }
+      ],
+      "title": "Redis Inspection Summary",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Redis 巡检最近 1 小时执行结果，以及最近一次巡检发现的最大 key 和 hottest freq。",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "id": 12,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "notebooklm:redis_inspection_runs_total:increase1h",
+          "legendFormat": "runs / {{result}}",
+          "refId": "A"
+        },
+        {
+          "expr": "notebooklm_redis_biggest_key_bytes",
+          "legendFormat": "biggest_key_bytes",
+          "refId": "B"
+        },
+        {
+          "expr": "notebooklm_redis_hottest_key_frequency",
+          "legendFormat": "hottest_key_frequency",
+          "refId": "C"
+        }
+      ],
+      "title": "Redis Inspection Runs and Extremes",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["notebooklm", "infra"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "browser",
+  "title": "NotebookLM Infra",
+  "uid": "notebooklm-infra",
+  "version": 2,
+  "weekStart": ""
+}

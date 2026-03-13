@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import asyncio
+import functools
+import json
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.trace import TracerProvider as _TracerProvider
+    from opentelemetry.trace import Span as _Span
 
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -19,6 +24,7 @@ try:
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.trace import Status, StatusCode
 except ModuleNotFoundError:  # pragma: no cover - optional dependency fallback
     trace = None
     OTLPSpanExporter = None
@@ -27,6 +33,8 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency fallback
     Resource = None
     TracerProvider = None
     BatchSpanProcessor = None
+    Status = None
+    StatusCode = None
 
 from app.core.config import Settings, get_settings
 
@@ -50,7 +58,7 @@ def resolve_otlp_trace_endpoint(settings: Settings | None = None) -> str | None:
     return urlunsplit((parts.scheme, parts.netloc, normalized_path, parts.query, parts.fragment))
 
 
-def _build_trace_exporter(endpoint: str) -> OTLPSpanExporter | None:
+def _build_trace_exporter(endpoint: str) -> Any:
     if OTLPSpanExporter is None:
         return None
 
@@ -113,3 +121,98 @@ def shutdown_tracing() -> None:
     shutdown = getattr(provider, "shutdown", None)
     if callable(shutdown):
         shutdown()
+
+
+def get_tracer(name: str = "notebooklm.business"):
+    if trace is None:
+        return None
+    return trace.get_tracer(name)
+
+
+@contextmanager
+def start_span(name: str, *, attributes: dict | None = None):
+    tracer = get_tracer()
+    if tracer is None:
+        yield None
+        return
+
+    with tracer.start_as_current_span(name) as span:
+        _apply_span_attributes(span, attributes or {})
+        try:
+            yield span
+        except Exception as exc:
+            _record_span_exception(span, exc)
+            raise
+
+
+def traced(span_name: str, *, attrs: dict | None = None) -> Callable:
+    """装饰器：自动为函数创建 tracing span。
+
+    用法::
+
+        @traced("chat.route")
+        async def route_chat_message(...):
+            ...
+
+        @traced("summary.finalize", attrs={"step": "finalize"})
+        async def finalize_summary(...):
+            ...
+    """
+
+    def decorator(fn: Callable) -> Callable:
+        if asyncio.iscoroutinefunction(fn):
+            @functools.wraps(fn)
+            async def async_wrapper(*args, **kwargs):
+                with start_span(span_name, attributes=attrs):
+                    return await fn(*args, **kwargs)
+
+            return async_wrapper
+
+        @functools.wraps(fn)
+        def sync_wrapper(*args, **kwargs):
+            with start_span(span_name, attributes=attrs):
+                return fn(*args, **kwargs)
+
+        return sync_wrapper
+
+    return decorator
+
+
+def start_span_now(name: str, *, attributes: dict | None = None) -> "_Span | None":
+    tracer = get_tracer()
+    if tracer is None:
+        return None
+    span = tracer.start_span(name)
+    _apply_span_attributes(span, attributes or {})
+    return span
+
+
+def finish_span(span: "_Span | None", *, attributes: dict | None = None, error: Exception | None = None) -> None:
+    if span is None:
+        return
+    _apply_span_attributes(span, attributes or {})
+    if error is not None:
+        _record_span_exception(span, error)
+    span.end()
+
+
+def _apply_span_attributes(span: "_Span | None", attributes: dict) -> None:
+    if span is None or not attributes:
+        return
+    for key, value in attributes.items():
+        if value in (None, ""):
+            continue
+        if isinstance(value, (bool, int, float, str)):
+            span.set_attribute(key, value)
+        else:
+            span.set_attribute(key, json.dumps(value, ensure_ascii=False))
+
+
+def _record_span_exception(span: "_Span | None", exc: Exception) -> None:
+    if span is None:
+        return
+    record_exception = getattr(span, "record_exception", None)
+    if callable(record_exception):
+        record_exception(exc)
+    if Status is not None and StatusCode is not None:
+        span.set_status(Status(StatusCode.ERROR, str(exc)))
