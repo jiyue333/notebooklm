@@ -120,7 +120,7 @@ def _schedule_summary_review(*, prepared: PreparedSummary, summary: str) -> None
         },
         review_payload={
             "title": prepared.article.title,
-            "source_excerpt": prepared.article.clean_markdown[:4000],
+            "source_excerpt": (prepared.article.clean_markdown or "")[:4000],
             "summary": summary,
         },
     )

@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 
+import structlog
+from cryptography.fernet import InvalidToken
+
 from app.core.config import Settings, get_settings
 from app.infra.security.credential_crypto import get_credential_crypto
 from app.modules.settings.defaults import get_default_user_settings
@@ -18,6 +21,8 @@ OPENAI_COMPATIBLE_PROVIDERS = {
     "google",
 }
 OLLAMA_PROVIDERS = {"ollama"}
+
+logger = structlog.get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -80,7 +85,12 @@ def normalize_embedding_provider(value: str | None) -> str:
 def resolve_search_api_key(user, settings: Settings | None = None) -> tuple[str | None, str]:
     runtime_settings = settings or get_settings()
     if user.exa_api_key_ciphertext:
-        return get_credential_crypto().decrypt(user.exa_api_key_ciphertext), "user"
+        decrypted = _decrypt_user_key(
+            user.exa_api_key_ciphertext,
+            credential_name="search_api_key",
+        )
+        if decrypted:
+            return decrypted, "user"
     if runtime_settings.exa_default_api_key:
         return runtime_settings.exa_default_api_key, "default"
     return None, "missing"
@@ -192,10 +202,26 @@ def _mask_last4(last4: str | None) -> str:
 
 def _resolve_key(*, ciphertext: str | None, default_key: str | None) -> tuple[str | None, str]:
     if ciphertext:
-        return get_credential_crypto().decrypt(ciphertext), "user"
+        decrypted = _decrypt_user_key(
+            ciphertext,
+            credential_name="user_api_key",
+        )
+        if decrypted:
+            return decrypted, "user"
     if default_key:
         return default_key, "default"
     return None, "missing"
+
+
+def _decrypt_user_key(ciphertext: str, *, credential_name: str) -> str | None:
+    try:
+        return get_credential_crypto().decrypt(ciphertext)
+    except InvalidToken:
+        logger.warning(
+            "settings.invalid_encrypted_credential",
+            credential_name=credential_name,
+        )
+        return None
 
 
 def _resolve_provider_api_key(

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.responses import RedirectResponse
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import AppError
@@ -10,10 +11,12 @@ from app.api.deps import current_user_dep, db_session_dep
 from app.api.response import success_response
 from app.infra.storage.file_store import (
     build_presigned_get_url,
+    load_file_bytes,
     resolve_storage_path,
     stored_file_exists,
 )
 from app.modules.search.articles import repo as repo_article
+from app.modules.search.articles.service import remove_article, rename_article
 from app.modules.search.sessions.service import get_search_session, start_search
 from app.modules.search.sessions.schemas import (
     ImportSearchResultsRequest,
@@ -22,7 +25,7 @@ from app.modules.search.sessions.schemas import (
 from app.modules.search.sources.drafts import UploadedSourceFile
 from app.modules.search.sources.import_service import import_results
 from app.modules.search.sources.manual_service import create_source, upload_files
-from app.modules.search.sources.schemas import ManualSourceRequest
+from app.modules.search.sources.schemas import ArticleSourceUpdateRequest, ManualSourceRequest
 from app.modules.notebooks.service import get_notebook_detail
 
 router = APIRouter(tags=["search"])
@@ -119,6 +122,7 @@ async def upload_sources_endpoint(
 async def get_article_file_endpoint(
     notebook_id: str,
     article_id: str,
+    proxy: bool = Query(default=False),
     current_user=Depends(current_user_dep),
     session: AsyncSession = Depends(db_session_dep),
 ):
@@ -134,6 +138,16 @@ async def get_article_file_endpoint(
         raise AppError(404, "文章没有原始文件", code="article_file_not_found")
     if not stored_file_exists(article.file_storage_key):
         raise AppError(404, "原始文件不存在", code="article_file_not_found")
+    if proxy:
+        file_bytes = load_file_bytes(article.file_storage_key)
+        headers = {}
+        if article.file_name:
+            headers["Content-Disposition"] = f'inline; filename="{article.file_name}"'
+        return Response(
+            content=file_bytes,
+            media_type=article.file_mime or "application/octet-stream",
+            headers=headers,
+        )
     presigned_url = build_presigned_get_url(article.file_storage_key)
     if presigned_url:
         return RedirectResponse(url=presigned_url, status_code=307)
@@ -143,6 +157,40 @@ async def get_article_file_endpoint(
         media_type=article.file_mime or "application/octet-stream",
         filename=article.file_name or file_path.name,
     )
+
+
+@router.patch("/notebooks/{notebook_id}/articles/{article_id}")
+async def update_article_source_endpoint(
+    notebook_id: str,
+    article_id: str,
+    payload: ArticleSourceUpdateRequest,
+    current_user=Depends(current_user_dep),
+    session: AsyncSession = Depends(db_session_dep),
+):
+    item = await rename_article(
+        session,
+        user_id=current_user.id,
+        notebook_id=notebook_id,
+        article_id=article_id,
+        title=payload.title,
+    )
+    return success_response(item=item)
+
+
+@router.delete("/notebooks/{notebook_id}/articles/{article_id}")
+async def delete_article_source_endpoint(
+    notebook_id: str,
+    article_id: str,
+    current_user=Depends(current_user_dep),
+    session: AsyncSession = Depends(db_session_dep),
+):
+    item = await remove_article(
+        session,
+        user_id=current_user.id,
+        notebook_id=notebook_id,
+        article_id=article_id,
+    )
+    return success_response(item=item)
 
 
 @router.get("/notebooks/{notebook_id}/search-sessions/{search_session_id}")

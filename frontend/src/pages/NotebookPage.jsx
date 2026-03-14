@@ -1,16 +1,25 @@
 import { memo, startTransition, useState, useCallback, useRef, useEffect, useMemo, useDeferredValue } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTheme } from '../contexts/useTheme';
-import { appApi, clearStoredSession, isAuthError } from '../services/appApi';
+import { appApi, clearStoredSession, getStoredSession, isAuthError } from '../services/appApi';
 import ReactMarkdown from 'react-markdown';
+import { Document, Page, pdfjs } from 'react-pdf';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import rehypeSlug from 'rehype-slug';
+import 'react-pdf/dist/Page/AnnotationLayer.css';
+import 'react-pdf/dist/Page/TextLayer.css';
 import SettingsModal from '../components/SettingsModal';
 import AddSourceModal from '../components/AddSourceModal';
 import SourcePanel from '../components/SourcePanel';
 import NoteModal from '../components/NoteModal';
+import SourceActionModal from '../components/SourceActionModal';
 import './NotebookPage.css';
+
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    'pdfjs-dist/build/pdf.worker.min.mjs',
+    import.meta.url,
+).toString();
 
 /* ============================================
    Resizer Hook
@@ -49,30 +58,6 @@ function useResizer(direction, initialSize, minSize, maxSize, inverted = false) 
 }
 
 /* ============================================
-   Extract TOC from markdown
-   ============================================ */
-function extractToc(markdown) {
-    if (!markdown) return [];
-    const lines = markdown.split('\n');
-    const toc = [];
-    let inCode = false;
-    let skippedFirst = false;
-    lines.forEach(line => {
-        if (line.trim().startsWith('```')) { inCode = !inCode; return; }
-        if (inCode) return;
-        const m = line.match(/^(#{1,4})\s+(.+)$/);
-        if (m) {
-            const level = m[1].length;
-            const title = m[2].trim();
-            if (level === 1 && !skippedFirst) { skippedFirst = true; return; }
-            const id = title.toLowerCase().replace(/[^\w\u4e00-\u9fff]+/g, '-').replace(/(^-|-$)/g, '');
-            toc.push({ id, title, level });
-        }
-    });
-    return toc;
-}
-
-/* ============================================
    Strip first h1 from markdown
    ============================================ */
 function stripFirstH1(markdown) {
@@ -96,7 +81,148 @@ function areTocEntriesEqual(left = [], right = []) {
         entry?.id === right[index]?.id
         && entry?.title === right[index]?.title
         && entry?.level === right[index]?.level
+        && (entry?.matchIndex || 0) === (right[index]?.matchIndex || 0)
     ));
+}
+
+function normalizeHeadingText(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizePdfLookupText(value) {
+    return normalizeHeadingText(value)
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\u4e00-\u9fff]+/gu, '');
+}
+
+function formatArticleDate(value) {
+    if (!value) return '';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+        return String(value);
+    }
+    const year = String(parsed.getFullYear()).slice(-2);
+    const month = String(parsed.getMonth() + 1).padStart(2, '0');
+    const day = String(parsed.getDate()).padStart(2, '0');
+    const hours = String(parsed.getHours()).padStart(2, '0');
+    const minutes = String(parsed.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}-${minutes}`;
+}
+
+function getArticleBodyElement(container) {
+    return container?.querySelector('[data-role="article-body"]') || null;
+}
+
+function collectRenderedToc(container) {
+    if (!container) return [];
+    return Array.from(container.querySelectorAll('h1, h2, h3, h4'))
+        .map((heading, index) => {
+            const title = normalizeHeadingText(heading.textContent);
+            if (!title) return null;
+            return {
+                id: heading.id || '',
+                title,
+                level: Number(heading.tagName.slice(1)) || 2,
+                matchIndex: index,
+            };
+        })
+        .filter(Boolean);
+}
+
+async function resolvePdfDestinationPage(pdf, destination) {
+    const dest = Array.isArray(destination)
+        ? destination
+        : (destination ? await pdf.getDestination(destination) : null);
+    const ref = dest?.[0];
+    if (!ref) return null;
+    const pageIndex = await pdf.getPageIndex(ref);
+    return pageIndex + 1;
+}
+
+async function buildPdfOutlineItems(pdf, items, depth = 1, fallbackOrder = { current: 1 }) {
+    if (!Array.isArray(items) || items.length === 0) return [];
+    const result = [];
+    for (const item of items) {
+        const pageNumber = await resolvePdfDestinationPage(pdf, item.dest).catch(() => null);
+        const currentIndex = fallbackOrder.current++;
+        result.push({
+            id: `pdf-outline-${currentIndex}`,
+            title: normalizeHeadingText(item.title),
+            level: Math.min(depth, 4),
+            pageNumber,
+            children: await buildPdfOutlineItems(pdf, item.items, depth + 1, fallbackOrder),
+        });
+    }
+    return result;
+}
+
+function flattenPdfOutline(items) {
+    const flat = [];
+    const walk = (nodes) => {
+        for (const node of nodes || []) {
+            flat.push({
+                id: node.id,
+                title: node.title,
+                level: node.level,
+                pageNumber: node.pageNumber,
+            });
+            if (Array.isArray(node.children) && node.children.length > 0) {
+                walk(node.children);
+            }
+        }
+    };
+    walk(items);
+    return flat;
+}
+
+async function buildPdfPageTextIndex(pdf) {
+    const pages = [];
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+        const page = await pdf.getPage(pageNumber);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items
+            .map((item) => (typeof item?.str === 'string' ? item.str : ''))
+            .join(' ');
+        pages.push({
+            pageNumber,
+            normalizedText: normalizePdfLookupText(pageText),
+        });
+    }
+    return pages;
+}
+
+async function buildGeneratedPdfToc(pdf, fallbackToc) {
+    if (!Array.isArray(fallbackToc) || fallbackToc.length === 0) return [];
+    const pageTextIndex = await buildPdfPageTextIndex(pdf);
+    return fallbackToc.map((item, index) => {
+        const title = normalizeHeadingText(item.title);
+        const normalizedTitle = normalizePdfLookupText(title);
+        const matchedPage = pageTextIndex.find((page) => normalizedTitle && page.normalizedText.includes(normalizedTitle));
+        return {
+            id: item.id || `pdf-generated-${index + 1}`,
+            title,
+            level: item.level || 2,
+            pageNumber: matchedPage?.pageNumber || null,
+        };
+    });
+}
+
+function resolveHeadingTarget(container, tocItem) {
+    if (!container || !tocItem) return null;
+    if (tocItem.id) {
+        const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+            ? CSS.escape(tocItem.id)
+            : tocItem.id.replace(/"/g, '\\"');
+        const byId = container.querySelector(`#${escapedId}`);
+        if (byId) {
+            return byId;
+        }
+    }
+
+    const expectedTitle = normalizeHeadingText(tocItem.title);
+    const matches = Array.from(container.querySelectorAll('h1, h2, h3, h4, h5, h6'))
+        .filter((heading) => normalizeHeadingText(heading.textContent) === expectedTitle);
+    return matches[tocItem.matchIndex || 0] || matches[0] || null;
 }
 
 function isSameArticleSnapshot(current, next) {
@@ -142,16 +268,183 @@ const MarkdownDocument = memo(function MarkdownDocument({ content, className }) 
     );
 });
 
+const PdfDocumentPane = memo(function PdfDocumentPane({
+    fileUrl,
+    fallbackToc,
+    pageWidth,
+    onOutlineChange,
+    requestedPageNumber,
+    onPageJumpHandled,
+}) {
+    const [numPages, setNumPages] = useState(0);
+    const [loadError, setLoadError] = useState('');
+    const [pdfData, setPdfData] = useState(null);
+    const [resolvedPageWidth, setResolvedPageWidth] = useState(pageWidth);
+    const viewportRef = useRef(null);
+    const pageRefs = useRef(new Map());
+    const session = getStoredSession();
+    const pdfFile = useMemo(() => (
+        pdfData ? { data: pdfData } : null
+    ), [pdfData]);
+
+    useEffect(() => {
+        setNumPages(0);
+        setLoadError('');
+        setPdfData(null);
+        onOutlineChange([]);
+        pageRefs.current = new Map();
+    }, [fileUrl, onOutlineChange]);
+
+    useEffect(() => {
+        if (!fileUrl) {
+            return undefined;
+        }
+        const controller = new AbortController();
+        let cancelled = false;
+        const loadPdfBytes = async () => {
+            try {
+                setLoadError('');
+                const absoluteUrl = /^https?:\/\//.test(fileUrl)
+                    ? fileUrl
+                    : new URL(fileUrl, window.location.origin).toString();
+                const response = await fetch(absoluteUrl, {
+                    headers: {
+                        ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
+                    },
+                    signal: controller.signal,
+                });
+                if (!response.ok) {
+                    throw new Error(`PDF 请求失败 (${response.status})`);
+                }
+                const data = new Uint8Array(await response.arrayBuffer());
+                if (!data.byteLength) {
+                    throw new Error('PDF 文件为空');
+                }
+                if (!cancelled) {
+                    setPdfData(data);
+                }
+            } catch (error) {
+                if (controller.signal.aborted || cancelled) {
+                    return;
+                }
+                const message = error instanceof Error ? error.message : 'PDF 加载失败';
+                console.error('pdf.fetch_failed', { fileUrl, message });
+                setLoadError(message);
+            }
+        };
+        loadPdfBytes();
+        return () => {
+            cancelled = true;
+            controller.abort();
+        };
+    }, [fileUrl, session?.token]);
+
+    useEffect(() => {
+        const element = viewportRef.current;
+        if (!element) return undefined;
+        const updateWidth = () => {
+            const nextWidth = Math.max(320, Math.min(pageWidth, element.clientWidth - 48));
+            setResolvedPageWidth(nextWidth);
+        };
+        updateWidth();
+        const observer = new ResizeObserver(updateWidth);
+        observer.observe(element);
+        return () => observer.disconnect();
+    }, [pageWidth]);
+
+    useEffect(() => {
+        if (!requestedPageNumber) return;
+        const target = pageRefs.current.get(requestedPageNumber);
+        if (target) {
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        onPageJumpHandled();
+    }, [onPageJumpHandled, requestedPageNumber]);
+
+    const handleLoadSuccess = useCallback(async (pdf) => {
+        setNumPages(pdf.numPages);
+        setLoadError('');
+        try {
+            const outline = await pdf.getOutline();
+            if (Array.isArray(outline) && outline.length > 0) {
+                const normalizedOutline = await buildPdfOutlineItems(pdf, outline);
+                onOutlineChange(flattenPdfOutline(normalizedOutline));
+                return;
+            }
+            const generatedOutline = await buildGeneratedPdfToc(pdf, fallbackToc);
+            onOutlineChange(generatedOutline);
+        } catch {
+            onOutlineChange([]);
+        }
+    }, [fallbackToc, onOutlineChange]);
+
+    if (!fileUrl) {
+        return <div className="nb-empty-hint"><p>PDF 文件暂不可访问</p></div>;
+    }
+
+    if (loadError) {
+        return (
+            <div className="nb-pdf-body" data-role="article-body" ref={viewportRef}>
+                <div className="nb-empty-hint"><p>{loadError}</p></div>
+            </div>
+        );
+    }
+
+    if (!pdfFile) {
+        return (
+            <div className="nb-pdf-body" data-role="article-body" ref={viewportRef}>
+                <div className="nb-pdf-loading">正在加载 PDF...</div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="nb-pdf-body" data-role="article-body" ref={viewportRef}>
+            <Document
+                file={pdfFile}
+                loading={<div className="nb-pdf-loading">正在加载 PDF...</div>}
+                onLoadError={(error) => setLoadError(error?.message || 'PDF 加载失败')}
+                onLoadSuccess={handleLoadSuccess}
+            >
+                {Array.from({ length: numPages }, (_, index) => {
+                    const pageNumber = index + 1;
+                    return (
+                        <div
+                            key={`pdf-page-${pageNumber}`}
+                            className="nb-pdf-page"
+                            ref={(node) => {
+                                if (node) {
+                                    pageRefs.current.set(pageNumber, node);
+                                } else {
+                                    pageRefs.current.delete(pageNumber);
+                                }
+                            }}
+                        >
+                            <Page
+                                pageNumber={pageNumber}
+                                renderAnnotationLayer
+                                renderTextLayer
+                                width={resolvedPageWidth}
+                            />
+                        </div>
+                    );
+                })}
+            </Document>
+        </div>
+    );
+});
+
 const ArticleContentPane = memo(function ArticleContentPane({
     articleId,
-    articleTitle,
     articleFileUrl,
     articleProcessingHint,
     articleDisplayBlocked,
     articleRenderMode,
     renderedArticleContent,
+    fallbackToc,
     fontSize,
     pageWidth,
+    pdfRequestedPageNumber,
     showSummary,
     summaryLoading,
     summaryText,
@@ -162,6 +455,8 @@ const ArticleContentPane = memo(function ArticleContentPane({
     translationError,
     setShowSummary,
     setShowTranslation,
+    setPdfOutline,
+    setPdfRequestedPageNumber,
     onCopySummary,
 }) {
     const deferredArticleContent = useDeferredValue(renderedArticleContent);
@@ -219,26 +514,23 @@ const ArticleContentPane = memo(function ArticleContentPane({
                     <h3>正文准备中</h3>
                     <p>{articleProcessingHint || '来源已导入，正在处理正文，请稍后刷新。'}</p>
                 </div>
+            ) : articleRenderMode === 'pdf' && !showTranslation ? (
+                <PdfDocumentPane
+                    fileUrl={articleFileUrl}
+                    fallbackToc={fallbackToc}
+                    pageWidth={pageWidth}
+                    requestedPageNumber={pdfRequestedPageNumber}
+                    onOutlineChange={setPdfOutline}
+                    onPageJumpHandled={() => setPdfRequestedPageNumber(null)}
+                />
             ) : showTranslation && translationText ? (
-                <MarkdownDocument content={deferredArticleContent} />
-            ) : articleRenderMode === 'pdf' ? (
-                articleFileUrl ? (
-                    <iframe
-                        title={articleTitle}
-                        src={articleFileUrl}
-                        style={{
-                            width: '100%',
-                            minHeight: '72vh',
-                            border: '1px solid rgba(148, 163, 184, 0.28)',
-                            borderRadius: '18px',
-                            background: '#fff',
-                        }}
-                    />
-                ) : (
-                    <div className="nb-empty-hint"><p>PDF 文件暂不可访问</p></div>
-                )
+                <div className="nb-article-markdown" data-role="article-body">
+                    <MarkdownDocument content={deferredArticleContent} />
+                </div>
             ) : (
-                <MarkdownDocument content={deferredArticleContent} />
+                <div className="nb-article-markdown" data-role="article-body">
+                    <MarkdownDocument content={deferredArticleContent} />
+                </div>
             )}
         </div>
     );
@@ -301,9 +593,17 @@ export default function NotebookPage() {
     const [showAddSource, setShowAddSource] = useState(false);
     const [sourceExpanded, setSourceExpanded] = useState(false);
     const [showArticleMenu, setShowArticleMenu] = useState(false);
+    const [articleContextMenu, setArticleContextMenu] = useState(null);
+    const [articleActionPendingId, setArticleActionPendingId] = useState(null);
+    const [sourceActionModal, setSourceActionModal] = useState(null);
+    const [renderedToc, setRenderedToc] = useState([]);
+    const [pdfOutline, setPdfOutline] = useState([]);
+    const [pdfRequestedPageNumber, setPdfRequestedPageNumber] = useState(null);
     const [isPageLoading, setIsPageLoading] = useState(true);
     const [pageError, setPageError] = useState('');
     const menuRef = useRef(null);
+    const articleContextMenuRef = useRef(null);
+    const centerBodyRef = useRef(null);
 
     // AI features
     const [showSummary, setShowSummary] = useState(false);
@@ -353,9 +653,22 @@ export default function NotebookPage() {
             if (menuRef.current && !menuRef.current.contains(e.target)) {
                 setShowArticleMenu(false);
             }
+            if (articleContextMenuRef.current && !articleContextMenuRef.current.contains(e.target)) {
+                setArticleContextMenu(null);
+            }
+        };
+        const handleEscape = (event) => {
+            if (event.key === 'Escape') {
+                setShowArticleMenu(false);
+                setArticleContextMenu(null);
+            }
         };
         document.addEventListener('mousedown', handler);
-        return () => document.removeEventListener('mousedown', handler);
+        document.addEventListener('keydown', handleEscape);
+        return () => {
+            document.removeEventListener('mousedown', handler);
+            document.removeEventListener('keydown', handleEscape);
+        };
     }, []);
 
     const syncNotebookState = useCallback((detail) => {
@@ -419,6 +732,8 @@ export default function NotebookPage() {
         setTranslationLoading(false);
         setTranslationLanguage('');
         setTranslationError('');
+        setPdfOutline([]);
+        setPdfRequestedPageNumber(null);
     }, [selectedArticle?.id]);
 
     useEffect(() => {
@@ -464,29 +779,24 @@ export default function NotebookPage() {
     ]);
 
     const articleRenderMode = selectedArticle?.renderMode || 'markdown';
+    const articleCanDisplayPdf = articleRenderMode === 'pdf' && Boolean(selectedArticle?.fileUrl);
     const articleContentReady = selectedArticle?.contentReady ?? Boolean(selectedArticle?.content?.trim());
-    const articleDisplayBlocked = Boolean(selectedArticle)
-        && articleRenderMode === 'markdown'
-        && !articleContentReady;
+    const articleDisplayBlocked = Boolean(selectedArticle) && !articleCanDisplayPdf && !articleContentReady;
+    const articleAiBlocked = !articleContentReady;
+    const fallbackPdfToc = useMemo(() => (
+        Array.isArray(selectedArticle?.toc) ? selectedArticle.toc : []
+    ), [selectedArticle?.toc]);
     const toc = useMemo(() => {
-        if (showTranslation && translationText) {
-            return extractToc(translationText);
-        }
-        if (!selectedArticle) return [];
-        if (articleDisplayBlocked) return [];
-        if (Array.isArray(selectedArticle.toc) && selectedArticle.toc.length > 0) {
-            return selectedArticle.toc;
-        }
         if (articleRenderMode === 'pdf') {
-            return [];
+            return pdfOutline.length > 0 ? pdfOutline : fallbackPdfToc;
         }
-        return extractToc(selectedArticle.content);
-    }, [selectedArticle, showTranslation, translationText, articleRenderMode, articleDisplayBlocked]);
+        return renderedToc;
+    }, [articleRenderMode, fallbackPdfToc, pdfOutline, renderedToc]);
     const strippedContent = useMemo(() => (
-        selectedArticle && articleRenderMode === 'markdown' && !articleDisplayBlocked
+        selectedArticle && articleRenderMode !== 'pdf' && !articleDisplayBlocked
             ? stripFirstH1(selectedArticle.content)
             : ''
-    ), [selectedArticle, articleRenderMode, articleDisplayBlocked]);
+    ), [selectedArticle, articleDisplayBlocked, articleRenderMode]);
     const renderedArticleContent = useMemo(() => (
         showTranslation && translationText ? stripFirstH1(translationText) : strippedContent
     ), [showTranslation, translationText, strippedContent]);
@@ -629,6 +939,7 @@ export default function NotebookPage() {
             return;
         }
 
+        setArticleContextMenu(null);
         startTransition(() => {
             setSelectedArticle(article);
             setSearchParams((prev) => {
@@ -638,6 +949,142 @@ export default function NotebookPage() {
             }, { replace: true });
         });
     }, [selectedArticle?.id, setSearchParams]);
+
+    const handleTocClick = useCallback((event, tocItem) => {
+        event.preventDefault();
+        if (articleRenderMode === 'pdf') {
+            if (tocItem?.pageNumber) {
+                setPdfRequestedPageNumber(tocItem.pageNumber);
+            }
+            return;
+        }
+        const container = centerBodyRef.current;
+        if (!container) return;
+
+        const articleBody = getArticleBodyElement(container);
+        const target = resolveHeadingTarget(articleBody, tocItem);
+        if (!target) return;
+
+        const containerRect = container.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        const nextScrollTop = container.scrollTop + (targetRect.top - containerRect.top) - 12;
+        container.scrollTo({
+            top: Math.max(nextScrollTop, 0),
+            behavior: 'smooth',
+        });
+    }, [articleRenderMode]);
+
+    useEffect(() => {
+        if (!selectedArticle || articleDisplayBlocked || articleRenderMode === 'pdf') {
+            setRenderedToc([]);
+            return undefined;
+        }
+
+        const frameId = window.requestAnimationFrame(() => {
+            const articleBody = getArticleBodyElement(centerBodyRef.current);
+            setRenderedToc(collectRenderedToc(articleBody));
+        });
+
+        return () => window.cancelAnimationFrame(frameId);
+    }, [
+        articleDisplayBlocked,
+        articleRenderMode,
+        renderedArticleContent,
+        selectedArticle?.id,
+        showTranslation,
+        translationText,
+    ]);
+
+    const handleOpenArticleContextMenu = useCallback((event, article) => {
+        event.preventDefault();
+        const menuWidth = 196;
+        const menuHeight = 120;
+        const x = Math.min(event.clientX, window.innerWidth - menuWidth - 16);
+        const y = Math.min(event.clientY, window.innerHeight - menuHeight - 16);
+        setArticleContextMenu({
+            articleId: article.id,
+            articleTitle: article.title,
+            x: Math.max(x, 12),
+            y: Math.max(y, 12),
+        });
+    }, []);
+
+    const openRenameArticleModal = useCallback((articleId, currentTitle) => {
+        setArticleContextMenu(null);
+        setSourceActionModal({
+            mode: 'rename',
+            articleId,
+            articleTitle: currentTitle || '',
+            nextTitle: currentTitle || '',
+            error: '',
+        });
+    }, []);
+
+    const openDeleteArticleModal = useCallback((articleId, articleTitle) => {
+        setArticleContextMenu(null);
+        setSourceActionModal({
+            mode: 'delete',
+            articleId,
+            articleTitle: articleTitle || '',
+            nextTitle: articleTitle || '',
+            error: '',
+        });
+    }, []);
+
+    const handleConfirmSourceAction = useCallback(async () => {
+        if (!notebook?.id || !sourceActionModal?.articleId) return;
+        try {
+            setArticleActionPendingId(sourceActionModal.articleId);
+            if (sourceActionModal.mode === 'rename') {
+                const trimmedTitle = sourceActionModal.nextTitle.trim();
+                if (!trimmedTitle || trimmedTitle === sourceActionModal.articleTitle) {
+                    setSourceActionModal(null);
+                    return;
+                }
+                const detail = await appApi.sources.updateArticle({
+                    notebookId: notebook.id,
+                    articleId: sourceActionModal.articleId,
+                    title: trimmedTitle,
+                });
+                syncNotebookState(detail);
+                setSourceActionModal(null);
+                return;
+            }
+
+            const detail = await appApi.sources.deleteArticle({
+                notebookId: notebook.id,
+                articleId: sourceActionModal.articleId,
+            });
+            syncNotebookState(detail);
+            setSourceActionModal(null);
+            if (selectedArticle?.id === sourceActionModal.articleId) {
+                startTransition(() => {
+                    setSearchParams((prev) => {
+                        const next = new URLSearchParams(prev);
+                        const nextSelectedId = detail.articles?.[0]?.id;
+                        if (nextSelectedId) {
+                            next.set('articleId', nextSelectedId);
+                        } else {
+                            next.delete('articleId');
+                        }
+                        return next;
+                    }, { replace: true });
+                });
+            }
+        } catch (err) {
+            if (isAuthError(err)) {
+                redirectToLogin();
+                return;
+            }
+            setSourceActionModal((prev) => (
+                prev
+                    ? { ...prev, error: err.message || (prev.mode === 'rename' ? '重命名来源失败' : '删除来源失败') }
+                    : prev
+            ));
+        } finally {
+            setArticleActionPendingId(null);
+        }
+    }, [notebook?.id, redirectToLogin, selectedArticle?.id, setSearchParams, sourceActionModal, syncNotebookState]);
 
     const buildCitationMeta = useCallback((citation) => {
         const parts = [];
@@ -784,8 +1231,8 @@ export default function NotebookPage() {
                             {toc.length > 0 ? (
                                 <ul className="nb-toc-list nb-list-scroll">
                                     {toc.map((item, idx) => (
-                                        <li key={idx} className={`nb-toc-item nb-toc-level-${item.level}`}>
-                                            <a href={`#${item.id}`}>{item.title}</a>
+                                        <li key={`${item.id || item.title}-${item.matchIndex || 0}-${idx}`} className={`nb-toc-item nb-toc-level-${item.level}`}>
+                                            <a href={`#${item.id}`} onClick={(event) => handleTocClick(event, item)}>{item.title}</a>
                                         </li>
                                     ))}
                                 </ul>
@@ -811,15 +1258,42 @@ export default function NotebookPage() {
                                             key={article.id}
                                             className={`nb-article-item ${selectedArticle?.id === article.id ? 'active' : ''}`}
                                             onClick={() => handleSelectArticle(article)}
+                                            onContextMenu={(event) => handleOpenArticleContextMenu(event, article)}
+                                            title="右键可编辑或删除来源"
                                         >
                                             <span className="nb-article-icon">{getArticleIcon(article.type)}</span>
                                             <span className="nb-article-title-text">{article.title}</span>
+                                            {articleActionPendingId === article.id ? (
+                                                <span className="nb-article-action-state">处理中</span>
+                                            ) : null}
                                         </li>
                                     ))}
                                 </ul>
                             ) : (
                                 <div className="nb-empty-hint"><p>暂无来源文章</p></div>
                             )}
+                            {articleContextMenu ? (
+                                <div
+                                    ref={articleContextMenuRef}
+                                    className="nb-context-menu"
+                                    style={{ top: articleContextMenu.y, left: articleContextMenu.x }}
+                                >
+                                    <button
+                                        type="button"
+                                        className="nb-context-menu-item"
+                                        onClick={() => openRenameArticleModal(articleContextMenu.articleId, articleContextMenu.articleTitle)}
+                                    >
+                                        编辑标题
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="nb-context-menu-item danger"
+                                        onClick={() => openDeleteArticleModal(articleContextMenu.articleId, articleContextMenu.articleTitle)}
+                                    >
+                                        删除来源
+                                    </button>
+                                </div>
+                            ) : null}
                         </div>
                     </div>
                 </div>
@@ -836,31 +1310,31 @@ export default function NotebookPage() {
                                     <div className="nb-toolbar-meta">
                                         <span>{selectedArticle.author || '未知来源'}</span>
                                         <span>·</span>
-                                        <span>{selectedArticle.date || ''}</span>
+                                        <span>{formatArticleDate(selectedArticle.date)}</span>
                                     </div>
                                 </div>
                                 <div className="nb-toolbar-right">
                                     <button
                                         className={`nb-icon-btn ${showTranslation ? 'active' : ''}`}
-                                        title={articleDisplayBlocked ? '正文准备完成后才可翻译' : '翻译'}
+                                        title={articleAiBlocked ? '正文准备完成后才可翻译' : '翻译'}
                                         onClick={handleTranslate}
-                                        disabled={articleDisplayBlocked}
+                                        disabled={articleAiBlocked}
                                     >
                                         {I.translate}
                                     </button>
                                     <button
                                         className={`nb-icon-btn ${showSummary ? 'active' : ''}`}
-                                        title={articleDisplayBlocked ? '正文准备完成后才可生成摘要' : 'AI 摘要'}
+                                        title={articleAiBlocked ? '正文准备完成后才可生成摘要' : 'AI 摘要'}
                                         onClick={handleSummary}
-                                        disabled={articleDisplayBlocked}
+                                        disabled={articleAiBlocked}
                                     >
                                         {I.summary}
                                     </button>
                                     <button
                                         className={`nb-icon-btn ${showAiChat ? 'active' : ''}`}
-                                        title={articleDisplayBlocked ? '正文准备完成后才可针对文章问答' : 'AI 助手'}
+                                        title={articleAiBlocked ? '正文准备完成后才可针对文章问答' : 'AI 助手'}
                                         onClick={handleToggleChat}
-                                        disabled={articleDisplayBlocked}
+                                        disabled={articleAiBlocked}
                                     >
                                         {I.chat}
                                     </button>
@@ -892,17 +1366,18 @@ export default function NotebookPage() {
                                 </div>
                             </div>
 
-                            <div className="nb-center-body">
+                            <div className="nb-center-body" ref={centerBodyRef}>
                                 <ArticleContentPane
                                     articleId={selectedArticle.id}
-                                    articleTitle={selectedArticle.title}
                                     articleFileUrl={selectedArticle.fileUrl}
                                     articleProcessingHint={selectedArticle.processingHint}
                                     articleDisplayBlocked={articleDisplayBlocked}
                                     articleRenderMode={articleRenderMode}
                                     renderedArticleContent={renderedArticleContent}
+                                    fallbackToc={fallbackPdfToc}
                                     fontSize={fontSize}
                                     pageWidth={pageWidth}
+                                    pdfRequestedPageNumber={pdfRequestedPageNumber}
                                     showSummary={showSummary}
                                     summaryLoading={summaryLoading}
                                     summaryText={summaryText}
@@ -913,6 +1388,8 @@ export default function NotebookPage() {
                                     translationError={translationError}
                                     setShowSummary={setShowSummary}
                                     setShowTranslation={setShowTranslation}
+                                    setPdfOutline={setPdfOutline}
+                                    setPdfRequestedPageNumber={setPdfRequestedPageNumber}
                                     onCopySummary={handleCopySummary}
                                 />
                             </div>
@@ -1075,6 +1552,26 @@ export default function NotebookPage() {
                     onClose={() => setNoteModalData(null)}
                     onSave={handleSaveNote}
                     onDelete={handleDeleteNote}
+                />
+            )}
+            {sourceActionModal && (
+                <SourceActionModal
+                    mode={sourceActionModal.mode}
+                    articleTitle={sourceActionModal.articleTitle}
+                    nextTitle={sourceActionModal.nextTitle}
+                    error={sourceActionModal.error}
+                    isSubmitting={articleActionPendingId === sourceActionModal.articleId}
+                    onClose={() => {
+                        if (articleActionPendingId !== sourceActionModal.articleId) {
+                            setSourceActionModal(null);
+                        }
+                    }}
+                    onTitleChange={(value) => {
+                        setSourceActionModal((prev) => (
+                            prev ? { ...prev, nextTitle: value, error: '' } : prev
+                        ));
+                    }}
+                    onConfirm={handleConfirmSourceAction}
                 />
             )}
         </div>

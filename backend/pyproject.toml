@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "notebooklm-backend"
 version = "0.1.0"
 description = "Backend scaffold for the NotebookLM research workspace"
-readme = "README.md"
+readme = "../README.md"
 requires-python = ">=3.11"
 dependencies = [
   "aiokafka>=0.12.0",

@@ -213,7 +213,16 @@ benchmark runner 现在不只是生成报告，还支持 baseline 门禁：
 
 ## 在线入口
 
-统一通过：
+`online.sh` 的定位是“触发真实在线链路并查看产物”，不是单独再实现一套 Search / AI / Import 评审器。
+
+也就是说：
+
+- Search 在线评审是在 `sources/search` 主链路结束后由 tracker 自动采样
+- AI 在线评审是在 chat / summary 主链路结束后由 tracker 自动采样
+- Import / Ingest 在线观测是在导入、解析、索引主链路里自动记录
+- `online.sh` 只是用来批量触发这些链路，方便快速产出在线观测样本
+
+统一入口是：
 
 ```bash
 ./scripts/online.sh seed notebooks --count 3
@@ -229,8 +238,14 @@ benchmark runner 现在不只是生成报告，还支持 baseline 门禁：
 
 说明：
 
-- `search/import/chat/summary` 都支持不传 `--input` 的 one-click 模式
-- 也支持通过 `--input` 传自定义 JSONL
+- `seed notebooks`：只创建测试笔记本
+- `seed search`：真实调用 `/sources/search`，从而触发 Search 在线采样评审
+- `seed import`：真实调用 `/sources/search + /sources/import`，从而触发导入和 ingest 在线观测
+- `seed chat`：真实调用 `/chat`，从而触发 AI chat 在线评审
+- `seed summary`：真实调用 `/articles/{id}/summary`，从而触发 AI summary 在线评审
+- `inspect redis`：手动执行 Redis 巡检
+- `show search-samples` / `show redis-report`：只查看已有产物，不会主动发请求
+- `search/import/chat/summary` 都支持不传 `--input` 的 one-click 模式，也支持通过 `--input` 传自定义 JSONL
 
 ## 离线入口
 

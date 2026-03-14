@@ -28,3 +28,44 @@ datasources:
         spanStartTimeShift: "-30m"
         spanEndTimeShift: "30m"
         filterByTraceID: true
+
+  - name: PostgreSQL
+    uid: postgres
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    user: postgres
+    editable: true
+    jsonData:
+      database: notebooklm
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+      maxOpenConns: 20
+      maxIdleConns: 5
+      connMaxLifetime: 14400
+    secureJsonData:
+      password: postgres
+
+  - name: Redis
+    uid: redis
+    type: redis-datasource
+    access: proxy
+    url: redis://redis:6379
+    editable: true
+    jsonData:
+      client: standalone
+      poolSize: 5
+      timeout: 10
+      pingInterval: 0
+      pipelineWindow: 0
+
+  - name: Kafka
+    uid: kafka
+    type: hamedkarbasi93-kafka-datasource
+    access: proxy
+    url: kafka:9092
+    editable: true
+    jsonData:
+      servers: kafka:9092
+      timeout: 2000

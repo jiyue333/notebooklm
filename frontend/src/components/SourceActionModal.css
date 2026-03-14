@@ -1,0 +1,221 @@
+/* ============================================
+   SourceActionModal – Source rename/delete
+   ============================================ */
+
+.source-action-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.42);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1100;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    animation: fadeIn 0.18s ease-out;
+}
+
+.source-action-modal {
+    width: min(92vw, 520px);
+    background: var(--card-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border-radius: var(--radius-lg, 18px);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.28), 0 0 0 1px var(--border-color);
+    overflow: hidden;
+    animation: modalSlideUp 0.22s ease-out;
+}
+
+[data-theme="dark"] .source-action-modal {
+    background: color-mix(in srgb, var(--bg-color), #fff 7%);
+}
+
+.source-action-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 20px 22px 14px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.source-action-title-wrap {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    min-width: 0;
+}
+
+.source-action-icon {
+    width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    flex-shrink: 0;
+}
+
+.source-action-icon.rename {
+    background: color-mix(in srgb, var(--accent-color), transparent 90%);
+    color: var(--accent-color);
+}
+
+.source-action-icon.danger {
+    background: color-mix(in srgb, #e57373, transparent 88%);
+    color: #e57373;
+}
+
+.source-action-icon svg {
+    width: 18px;
+    height: 18px;
+}
+
+.source-action-title {
+    margin: 0 0 4px;
+    font-size: 1.02rem;
+    font-weight: 700;
+    color: var(--title-color);
+}
+
+.source-action-subtitle {
+    margin: 0;
+    font-size: 0.82rem;
+    line-height: 1.55;
+    color: var(--meta-color);
+}
+
+.source-action-close {
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--meta-color);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.source-action-close:hover {
+    background: var(--hover-bg);
+    color: var(--title-color);
+}
+
+.source-action-close svg {
+    width: 16px;
+    height: 16px;
+}
+
+.source-action-body {
+    padding: 18px 22px 12px;
+}
+
+.source-action-field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.source-action-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--title-color);
+}
+
+.source-action-input {
+    width: 100%;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--card-bg);
+    color: var(--text-color);
+    font: inherit;
+    padding: 12px 14px;
+    outline: none;
+}
+
+.source-action-input:focus {
+    border-color: color-mix(in srgb, var(--accent-color), transparent 24%);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color), transparent 88%);
+}
+
+.source-action-danger-card {
+    padding: 14px 16px;
+    border-radius: 14px;
+    background: color-mix(in srgb, #e57373, transparent 94%);
+    color: var(--text-color);
+    border: 1px solid color-mix(in srgb, #e57373, transparent 75%);
+}
+
+.source-action-danger-card p {
+    margin: 0;
+    line-height: 1.6;
+    font-size: 0.84rem;
+}
+
+.source-action-danger-card p + p {
+    margin-top: 8px;
+}
+
+.source-action-error {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: color-mix(in srgb, #e57373, transparent 92%);
+    color: #d64545;
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+.source-action-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 0 22px 20px;
+}
+
+.source-action-cancel,
+.source-action-confirm {
+    border: none;
+    border-radius: 12px;
+    padding: 10px 16px;
+    font: inherit;
+    cursor: pointer;
+    transition: all 0.16s ease;
+}
+
+.source-action-cancel {
+    background: var(--hover-bg);
+    color: var(--text-color);
+}
+
+.source-action-cancel:hover {
+    background: color-mix(in srgb, var(--hover-bg), #fff 8%);
+}
+
+.source-action-confirm {
+    background: var(--accent-color);
+    color: #fff;
+}
+
+.source-action-confirm:hover {
+    background: color-mix(in srgb, var(--accent-color), black 10%);
+}
+
+.source-action-confirm.danger {
+    background: #d64545;
+}
+
+.source-action-confirm.danger:hover {
+    background: #bf3737;
+}
+
+.source-action-cancel:disabled,
+.source-action-confirm:disabled,
+.source-action-close:disabled,
+.source-action-input:disabled {
+    opacity: 0.6;
+    cursor: default;
+}

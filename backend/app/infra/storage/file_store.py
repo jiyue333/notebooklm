@@ -56,6 +56,13 @@ def stored_file_exists(storage_key: str) -> bool:
     return resolve_storage_path(storage_key).exists()
 
 
+def delete_stored_file(storage_key: str) -> None:
+    if is_object_storage_enabled():
+        get_object_store().delete(storage_key)
+        return
+    resolve_storage_path(storage_key).unlink(missing_ok=True)
+
+
 def build_presigned_get_url(storage_key: str, *, expires_seconds: int = 3600) -> str | None:
     if not is_object_storage_enabled():
         return None

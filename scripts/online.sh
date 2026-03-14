@@ -113,20 +113,20 @@ show_redis_report() {
 usage() {
   cat <<'EOF'
 =============== online.sh ===============
-Usage:
-  ./scripts/online.sh seed notebooks [extra args...]
-  ./scripts/online.sh seed search [extra args...]
-  ./scripts/online.sh seed import [extra args...]
-  ./scripts/online.sh seed chat [extra args...]
-  ./scripts/online.sh seed summary [extra args...]
-  ./scripts/online.sh seed all [notebook seed args...]
-  ./scripts/online.sh inspect redis
-  ./scripts/online.sh show search-samples
-  ./scripts/online.sh show redis-report
+用法:
+  ./scripts/online.sh seed notebooks [附加参数...]  - 创建测试用笔记本 (Notebooks)
+  ./scripts/online.sh seed search [附加参数...]     - 创建搜索会话 (Search)
+  ./scripts/online.sh seed import [附加参数...]     - 创建导入任务 (Import)
+  ./scripts/online.sh seed chat [附加参数...]       - 创建聊天对话 (Chat)
+  ./scripts/online.sh seed summary [附加参数...]    - 创建摘要任务 (Summary)
+  ./scripts/online.sh seed all [附加参数...]        - 一键执行所有上述数据填充操作
+  ./scripts/online.sh inspect redis                 - 检查 Redis 状态和使用情况
+  ./scripts/online.sh show search-samples           - 显示最新的搜索采样报告
+  ./scripts/online.sh show redis-report             - 显示最新的 Redis 检查报告
 
-Notes:
-  - search/import/chat/summary 都支持不传 --input 的 one-click 模式
-  - seed all 会先造 notebook，再串行触发 search/import/chat/summary
+注意事项:
+  - search/import/chat/summary 都支持不传 --input 的一键触发模式
+  - seed all 会先创建 notebook，然后再串行触发 search/import/chat/summary 的创建
 EOF
 }
 

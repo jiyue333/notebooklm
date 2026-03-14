@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.errors import AppError
 from app.core.config import get_settings
 from app.infra.cache import delete_keys, get_json, notebook_detail_key, set_json
+from app.infra.storage.file_store import is_object_storage_enabled
 from app.modules.notes import repo as notes_repo
 from app.modules.notebooks import assembler, repo
 from app.modules.search.articles import repo as repo_article
@@ -52,7 +53,7 @@ async def create_notebook(
 async def get_notebook_detail(session: AsyncSession, *, user_id: str, notebook_id: str) -> dict:
     cache_key = notebook_detail_key(user_id=user_id, notebook_id=notebook_id)
     cached = await get_json(cache_key)
-    if isinstance(cached, dict):
+    if isinstance(cached, dict) and not _should_refresh_cached_notebook_detail(cached):
         return cached
 
     notebook = await repo.get_notebook(session, user_id=user_id, notebook_id=notebook_id)
@@ -118,3 +119,19 @@ def _resolve_notebook_detail_ttl(detail: dict) -> int:
     if has_pending_articles:
         return settings.cache_ttl_notebook_detail_pending_seconds
     return settings.cache_ttl_notebook_detail_seconds
+
+
+def _should_refresh_cached_notebook_detail(detail: dict) -> bool:
+    if not is_object_storage_enabled():
+        return False
+    articles = detail.get("articles", [])
+    return any(
+        isinstance(article, dict)
+        and isinstance(article.get("fileUrl"), str)
+        and article["fileUrl"].startswith("/api/notebooks/")
+        and not (
+            article.get("renderMode") == "pdf"
+            or article.get("fileMime") == "application/pdf"
+        )
+        for article in articles
+    )

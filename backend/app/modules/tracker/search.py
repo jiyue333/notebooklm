@@ -135,6 +135,7 @@ class SearchTracker(StageTimer):
     async def capture_review_sample(
         self,
         *,
+        user=None,
         search_session_id: str,
         notebook_id: str,
         query: str,
@@ -148,6 +149,7 @@ class SearchTracker(StageTimer):
             provider=self.provider,
         )
         return await tracker.capture(
+            user=user,
             search_session_id=search_session_id,
             notebook_id=notebook_id,
             query=query,

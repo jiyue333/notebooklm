@@ -123,3 +123,8 @@ async def create_article(session: AsyncSession, article: Article) -> Article:
     session.add(article)
     await session.flush()
     return article
+
+
+async def delete_article(session: AsyncSession, article: Article) -> None:
+    await session.delete(article)
+    await session.flush()

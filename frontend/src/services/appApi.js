@@ -535,6 +535,25 @@ const mockProvider = {
         return buildNotebookDetail(notebookId);
     },
 
+    async updateArticleSource({ notebookId, articleId, title }) {
+        await wait(180);
+        const notebook = getNotebookRecord(notebookId);
+        const article = (notebook.articles || []).find((item) => item.id === articleId);
+        if (!article) {
+            throw new Error('未找到对应来源文章');
+        }
+        article.title = title.trim() || article.title;
+        return buildNotebookDetail(notebookId);
+    },
+
+    async deleteArticleSource({ notebookId, articleId }) {
+        await wait(180);
+        const notebook = getNotebookRecord(notebookId);
+        notebook.articles = (notebook.articles || []).filter((item) => item.id !== articleId);
+        notebook.sourceCount = notebook.articles.length;
+        return buildNotebookDetail(notebookId);
+    },
+
     async getSettings() {
         await wait(120);
         return buildSettingsView(mockState.user, mockState.settings);
@@ -1027,6 +1046,21 @@ const backendProvider = {
         return payload.item;
     },
 
+    async updateArticleSource({ notebookId, articleId, title }) {
+        const payload = await request(`/notebooks/${notebookId}/articles/${articleId}`, {
+            method: 'PATCH',
+            body: { title },
+        });
+        return payload.item;
+    },
+
+    async deleteArticleSource({ notebookId, articleId }) {
+        const payload = await request(`/notebooks/${notebookId}/articles/${articleId}`, {
+            method: 'DELETE',
+        });
+        return payload.item;
+    },
+
     async getSettings() {
         const payload = await request('/settings');
         return payload.item;
@@ -1166,6 +1200,8 @@ export const appApi = {
         importSelected: provider.importSources,
         create: provider.createSource,
         uploadFiles: provider.uploadFiles,
+        updateArticle: provider.updateArticleSource,
+        deleteArticle: provider.deleteArticleSource,
     },
     settings: {
         get: provider.getSettings,

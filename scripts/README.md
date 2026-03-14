@@ -145,6 +145,12 @@ env 关系：
 - 统一查看 Search 采样评审产物
 - 手动触发或查看 Redis 巡检结果
 
+说明：
+
+- `online.sh` 不是压测脚本
+- 它的作用是触发真实在线链路，产出 Search / Import / AI 的在线观测样本
+- 真正的接口压测入口是 `./scripts/benchmark.sh load-test ...`
+
 前置依赖：
 
 - 根目录 `.env`

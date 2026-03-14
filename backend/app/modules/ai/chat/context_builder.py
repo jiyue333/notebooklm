@@ -16,6 +16,7 @@ from app.modules.ai.chat.conversation import (
     load_or_create_conversation,
 )
 from app.modules.ai.chat.result_serializer import serialize_chunk_match, serialize_related_match
+from app.modules.ai.chat.utils import _build_trace_metadata
 from app.modules.ai.prompts.chat_prompt import build_chat_prompt
 from app.modules.notebooks import repo as notebooks_repo
 from app.modules.retrieval.article_retriever import retrieve_related_articles
@@ -440,29 +441,4 @@ def _format_article_sections(matches: list, *, notebook_title: str) -> str:
     return "\n\n---\n\n".join(sections)
 
 
-def _build_trace_metadata(
-    *,
-    user: User,
-    notebook_id: str,
-    article_id: str | None = None,
-    conversation_id: str | None = None,
-    model_settings: dict,
-    route: str | None = None,
-    route_reason: str | None = None,
-) -> dict:
-    """构建通用的 trace_metadata 字典，消除各处重复。"""
-    meta: dict = {
-        "user_id": user.id,
-        "notebook_id": notebook_id,
-        "provider": model_settings["modelProvider"],
-        "model_name": model_settings["modelName"],
-    }
-    if article_id is not None:
-        meta["article_id"] = article_id
-    if conversation_id is not None:
-        meta["conversation_id"] = conversation_id
-    if route is not None:
-        meta["route"] = route
-    if route_reason is not None:
-        meta["route_reason"] = route_reason
-    return meta
+
