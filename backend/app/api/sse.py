@@ -32,11 +32,14 @@ def build_sse_error_payload(
         })
     if logger and log_event:
         logger.exception(log_event, **log_kwargs)
+    detail = str(exc).strip()
     return encode_sse_event("error", {
         "message": fallback_message,
         "code": fallback_code,
         "status": 502,
-        "meta": {},
+        "meta": {
+            "detail": detail[:500] if detail else "",
+        },
     })
 
 
@@ -53,4 +56,3 @@ def extract_stream_text(chunk) -> str:
                 parts.append(item.get("text", ""))
         return "".join(parts)
     return str(content or "")
-

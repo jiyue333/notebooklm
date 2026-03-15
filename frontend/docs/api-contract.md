@@ -881,29 +881,34 @@ VITE_API_TIMEOUT_MS=15000
 
 ## 5.6 AI
 
-### POST `/api/notebooks/:notebookId/articles/:articleId/summary`
+### POST `/api/notebooks/:notebookId/articles/:articleId/summary/stream`
 
 用途：
 
 - 笔记本页点击“AI 摘要”
 
-可选请求：
+请求体：
+
+- 无
+
+响应类型：
+
+`text/event-stream`
+
+事件约定：
+
+- `start`
+- `token`
+- `done`
+- `error`
+
+`done` 事件 payload：
 
 ```json
 {
-  "outputLanguage": "中文",
-  "forceRefresh": false
-}
-```
-
-响应：
-
-```json
-{
-  "success": true,
-  "item": {
-    "summary": "本文介绍了基于 YOLO 的人群密度估计方法..."
-  }
+  "summary": "本文介绍了基于 YOLO 的人群密度估计方法...",
+  "cacheHit": false,
+  "promptVersion": "v1"
 }
 ```
 
@@ -911,7 +916,7 @@ VITE_API_TIMEOUT_MS=15000
 
 - 如果 article 还没有可用正文，返回 `409`
 
-### POST `/api/notebooks/:notebookId/chat`
+### POST `/api/notebooks/:notebookId/chat/stream`
 
 用途：
 
@@ -927,17 +932,26 @@ VITE_API_TIMEOUT_MS=15000
 }
 ```
 
-响应：
+响应类型：
+
+`text/event-stream`
+
+事件约定：
+
+- `start`
+- `token`
+- `done`
+- `error`
+
+`done` 事件 payload：
 
 ```json
 {
-  "success": true,
-  "item": {
-    "conversationId": "conv-001",
-    "messageId": "msg-001",
-    "reply": "基于文章内容，核心结论是...",
-    "citations": []
-  }
+  "conversationId": "conv-001",
+  "messageId": "msg-001",
+  "route": "CURRENT_ARTICLE",
+  "reply": "基于文章内容，核心结论是...",
+  "citations": []
 }
 ```
 
@@ -1003,8 +1017,8 @@ VITE_API_TIMEOUT_MS=15000
 
 ### P2：AI 能力
 
-1. `POST /api/notebooks/:notebookId/articles/:articleId/summary`
-2. `POST /api/notebooks/:notebookId/chat`
+1. `POST /api/notebooks/:notebookId/articles/:articleId/summary/stream`
+2. `POST /api/notebooks/:notebookId/chat/stream`
 3. `POST /api/notebooks/:notebookId/articles/:articleId/translate`
 
 ## 7. 前端已对齐的改造点
@@ -1017,7 +1031,7 @@ VITE_API_TIMEOUT_MS=15000
 - 设置页新增了搜索引擎设置，当前只提供 `exa`，并支持配置 Exa API Key
 - “添加来源”补齐了网站和粘贴文字入口
 - 首页“新建笔记本”改为弹窗表单，并支持编辑/删除笔记本
-- AI 摘要响应改为 `item.summary`
+- AI 摘要与 AI 问答都改为 SSE 流式接口，最终结果取 `done` 事件 payload
 - AI 翻译入口已切成真实 API 调用流
 
 相关文件：

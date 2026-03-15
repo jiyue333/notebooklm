@@ -23,8 +23,8 @@ def main() -> None:
             rows.append({"notebook_id": notebook["id"], "article_id": article["id"]})
 
     for row in rows:
-        payload = client.post(
-            f"/notebooks/{row['notebook_id']}/articles/{row['article_id']}/summary"
+        payload = client.post_stream(
+            f"/notebooks/{row['notebook_id']}/articles/{row['article_id']}/summary/stream"
         )
         print(payload.get("item", payload))
 

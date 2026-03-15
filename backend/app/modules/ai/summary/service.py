@@ -36,6 +36,7 @@ async def stream_summary(
 
     async def event_stream():
         nonlocal tracker
+        stream_article_id = prepared.article.id
 
         if prepared.cached_item is not None:
             tracker.report_request("stream", "cache_hit")
@@ -99,7 +100,7 @@ async def stream_summary(
                 fallback_code="summary_generation_failed",
                 logger=logger,
                 log_event="summary.stream_failed",
-                article_id=prepared.article.id,
+                article_id=stream_article_id,
                 error=str(exc),
             )
 

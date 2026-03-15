@@ -33,8 +33,8 @@ def main() -> None:
             )
 
     for row in rows:
-        payload = client.post(
-            f"/notebooks/{row['notebook_id']}/chat",
+        payload = client.post_stream(
+            f"/notebooks/{row['notebook_id']}/chat/stream",
             {
                 "articleId": row.get("article_id"),
                 "conversationId": row.get("conversation_id"),

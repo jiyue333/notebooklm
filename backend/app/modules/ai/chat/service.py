@@ -49,6 +49,7 @@ async def stream_reply(
     tracker = LlmTracker.from_model_settings("chat", prepared.model_settings)
 
     async def event_stream():
+        stream_conversation_id = prepared.conversation.id
         tracker.mark_llm_start()
         first_token_span = start_span_now(
             "chat.model_first_token",
@@ -64,7 +65,7 @@ async def stream_reply(
             yield encode_sse_event(
                 "start",
                 {
-                    "conversationId": prepared.conversation.id,
+                    "conversationId": stream_conversation_id,
                     "route": prepared.route,
                 },
             )
@@ -110,7 +111,7 @@ async def stream_reply(
                 fallback_code="chat_generation_failed",
                 logger=logger,
                 log_event="chat.stream_failed",
-                conversation_id=prepared.conversation.id,
+                conversation_id=stream_conversation_id,
                 error=str(exc),
             )
 

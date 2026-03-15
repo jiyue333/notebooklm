@@ -834,6 +834,53 @@ const consumeSseStream = async (response, { onToken } = {}) => {
     return finalPayload;
 };
 
+const requestStream = async (
+    path,
+    {
+        method = 'POST',
+        body,
+        headers = {},
+        onToken,
+        timeoutMs = runtimeConfig.requestTimeoutMs,
+    } = {},
+) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort('request_timeout'), timeoutMs);
+    const session = getStoredSession();
+
+    try {
+        const response = await fetch(buildUrl(path), {
+            method,
+            headers: {
+                ...(body ? { 'Content-Type': 'application/json' } : {}),
+                ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
+                ...headers,
+            },
+            body: body ? JSON.stringify(body) : undefined,
+            signal: controller.signal,
+        });
+        if (!response.ok) {
+            const payload = await parseResponse(response);
+            throw buildRequestError(response, payload);
+        }
+        return consumeSseStream(response, { onToken });
+    } catch (error) {
+        const isAbortError = error?.name === 'AbortError'
+            || error?.code === 20
+            || controller.signal.aborted;
+        if (isAbortError) {
+            const timeoutError = new Error(`请求超时（>${timeoutMs}ms），请稍后重试`);
+            timeoutError.status = 408;
+            timeoutError.code = 'request_timeout';
+            timeoutError.meta = { path, method, timeoutMs };
+            throw timeoutError;
+        }
+        throw error;
+    } finally {
+        clearTimeout(timeout);
+    }
+};
+
 const request = async (path, { method = 'GET', body, headers = {}, timeoutMs = runtimeConfig.requestTimeoutMs } = {}) => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort('request_timeout'), timeoutMs);
@@ -1100,52 +1147,26 @@ const backendProvider = {
     },
 
     async generateSummary({ notebookId, articleId }) {
-        const payload = await request(`/notebooks/${notebookId}/articles/${articleId}/summary`, {
-            method: 'POST',
-            timeoutMs: 60_000,
-        });
-        return payload.item || payload;
+        return backendProvider.streamSummary({ notebookId, articleId });
     },
 
     async streamSummary({ notebookId, articleId, onToken }) {
-        const session = getStoredSession();
-        const response = await fetch(buildUrl(`/notebooks/${notebookId}/articles/${articleId}/summary/stream`), {
-            method: 'POST',
-            headers: {
-                ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
-            },
-        });
-        if (!response.ok) {
-            const payload = await parseResponse(response);
-            throw buildRequestError(response, payload);
-        }
-        return consumeSseStream(response, { onToken });
+        return requestStream(
+            `/notebooks/${notebookId}/articles/${articleId}/summary/stream`,
+            { onToken, timeoutMs: 60_000 },
+        );
     },
 
     async askAssistant({ notebookId, articleId, conversationId, message }) {
-        const payload = await request(`/notebooks/${notebookId}/chat`, {
-            method: 'POST',
-            body: { articleId, conversationId, message },
-            timeoutMs: 60_000,
-        });
-        return payload.item || payload;
+        return backendProvider.streamAssistant({ notebookId, articleId, conversationId, message });
     },
 
     async streamAssistant({ notebookId, articleId, conversationId, message, onToken }) {
-        const session = getStoredSession();
-        const response = await fetch(buildUrl(`/notebooks/${notebookId}/chat/stream`), {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
-            },
-            body: JSON.stringify({ articleId, conversationId, message }),
+        return requestStream(`/notebooks/${notebookId}/chat/stream`, {
+            body: { articleId, conversationId, message },
+            onToken,
+            timeoutMs: 60_000,
         });
-        if (!response.ok) {
-            const payload = await parseResponse(response);
-            throw buildRequestError(response, payload);
-        }
-        return consumeSseStream(response, { onToken });
     },
 
     async trackAiEvent({ notebookId, operation, action, route, articleId, conversationId }) {
