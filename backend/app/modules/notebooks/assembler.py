@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from pathlib import Path
+
 from app.infra.storage.file_store import build_presigned_get_url
-from app.modules.search.markdown_utils import guess_render_mode
 from app.modules.notebooks.models import Article
 from app.modules.notes.models import Note
 from app.modules.notebooks.models import Notebook
@@ -43,7 +44,7 @@ def build_note_view(note: Note) -> dict:
 def build_article_view(article: Article) -> dict:
     published_or_created = article.published_at or article.created_at
     render_mode = guess_render_mode(file_mime=article.file_mime, file_name=article.file_name)
-    content_ready = article.parse_status == "ready" and bool((article.clean_markdown or "").strip())
+    content_ready = article.parse_status in {"ready", "completed"} and bool((article.clean_markdown or "").strip())
     file_url = None
     if article.file_storage_key:
         if render_mode == "pdf":
@@ -64,6 +65,7 @@ def build_article_view(article: Article) -> dict:
         "type": "article",
         "author": article.author,
         "date": published_or_created.isoformat(),
+        "sourceUrl": article.source_url,
         "selected": False,
         "renderMode": render_mode,
         "fileUrl": file_url,
@@ -87,6 +89,14 @@ def build_notebook_summary(notebook: Notebook, *, source_count: int = 0) -> dict
         "date": format_notebook_date(notebook.created_at),
         "sourceCount": source_count,
     }
+
+
+def guess_render_mode(*, file_mime: str | None, file_name: str | None) -> str:
+    if file_mime == "application/pdf":
+        return "pdf"
+    if file_name and Path(file_name).suffix.lower() == ".pdf":
+        return "pdf"
+    return "markdown"
 
 
 def build_notebook_detail(

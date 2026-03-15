@@ -141,14 +141,22 @@ VITE_API_TIMEOUT_MS=15000
     {
       "id": "art-001",
       "title": "Deep Research 报告：基于 YOLO 的人群密度估计",
-      "type": "research",
+      "type": "article",
       "author": "Deep Research",
       "date": "2026-02-08T14:30:00+08:00",
-      "selected": true,
-      "content": "# Markdown 或 preview markdown...",
+      "selected": false,
+      "renderMode": "markdown",
+      "fileUrl": null,
+      "fileMime": null,
+      "content": "# Markdown 正文...",
       "toc": [
         { "id": "intro", "title": "1. 引言", "level": 1 }
-      ]
+      ],
+      "contentReady": true,
+      "parseStatus": "ready",
+      "chunkStatus": "completed",
+      "indexStatus": "completed",
+      "processingHint": ""
     }
   ],
   "notes": [
@@ -166,8 +174,9 @@ VITE_API_TIMEOUT_MS=15000
 
 说明：
 
-- `articles[].content` 当前阶段允许返回 `clean_markdown` 或 `preview_markdown`
-- 前端暂时不感知异步解析状态变化，所以不要求在 `NotebookDetail` 中暴露 processing 状态
+- `articles[].content` 仅在 `contentReady=true` 时返回可读正文
+- 前端会消费 `renderMode / fileUrl / contentReady / parseStatus / processingHint`
+- `parseStatus` 反映正文解析状态，`chunkStatus / indexStatus` 反映下游索引进度
 
 ### 4.5 SearchSession
 
@@ -188,9 +197,19 @@ VITE_API_TIMEOUT_MS=15000
   "id": "srr_01JXYZ",
   "title": "谷歌搜索技巧大全",
   "description": "系统总结了常用的高级搜索指令",
-  "icon": "🔴",
   "url": "https://example.com/1",
-  "selected": true
+  "sourceName": "developers.google.com",
+  "sourceTypeBadge": "official",
+  "publishedAt": "2026-03-15T08:30:00+00:00",
+  "authorityBadge": "高权威",
+  "whySelected": "这条结果补齐了官方实现视角，适合作为 primary source 导入。",
+  "highlights": [
+    "介绍了高级搜索操作符和组合方式",
+    "包含官方示例与边界说明"
+  ],
+  "importSuggestion": "recommended",
+  "author": "Google Search Central",
+  "displayRank": 1
 }
 ```
 
@@ -198,6 +217,7 @@ VITE_API_TIMEOUT_MS=15000
 
 - `id` 是后端生成的 `searchResultId`
 - 不再把 provider 原始 `sourceId` 直接暴露给前端
+- `selected` 由前端本地维护，不再作为后端必返字段
 
 ## 5. API 目录
 
@@ -525,9 +545,13 @@ VITE_API_TIMEOUT_MS=15000
       "id": "srr_01JXYZ",
       "title": "Deep Research 报告：基于 YOLO 的人群密度估计",
       "description": "......",
-      "icon": "🔴",
       "url": "https://example.com/1",
-      "selected": true
+      "sourceName": "example.com",
+      "sourceTypeBadge": "report",
+      "authorityBadge": "高权威",
+      "whySelected": "这篇结果覆盖了当前 notebook 缺失的 implementation 视角。",
+      "highlights": ["提供了部署案例与实验结果"],
+      "importSuggestion": "recommended"
     }
   ],
   "meta": {
@@ -576,9 +600,13 @@ VITE_API_TIMEOUT_MS=15000
       "id": "srr_01JXYZ",
       "title": "......",
       "description": "......",
-      "icon": "🔴",
       "url": "https://example.com/1",
-      "selected": true
+      "sourceName": "example.com",
+      "sourceTypeBadge": "paper",
+      "authorityBadge": "高权威",
+      "whySelected": "这篇结果补齐了 critique / limitation 视角。",
+      "highlights": ["包含失败案例与风险讨论"],
+      "importSuggestion": "optional"
     }
   ]
 }
@@ -906,15 +934,31 @@ VITE_API_TIMEOUT_MS=15000
 
 ```json
 {
+  "articleId": "art-001",
+  "summaryText": "本文介绍了基于 YOLO 的人群密度估计方法...",
   "summary": "本文介绍了基于 YOLO 的人群密度估计方法...",
+  "route": "M",
+  "confidence": 0.84,
+  "promptVersion": "v1",
   "cacheHit": false,
-  "promptVersion": "v1"
+  "evidenceSpans": [
+    {
+      "bulletText": "作者通过实验比较了不同 YOLO 变体。",
+      "blockIds": ["blk_01"],
+      "role": "result"
+    }
+  ],
+  "profileTags": {
+    "article_type": "paper",
+    "structure_quality": "high"
+  }
 }
 ```
 
 失败约定：
 
-- 如果 article 还没有可用正文，返回 `409`
+- 如果 article 还没有可用正文，SSE `error` 事件返回 `422`
+- `token` 事件 payload 同时包含 `content` 与 `text`，前端按 `content` 消费
 
 ### POST `/api/notebooks/:notebookId/chat/stream`
 
@@ -949,9 +993,23 @@ VITE_API_TIMEOUT_MS=15000
 {
   "conversationId": "conv-001",
   "messageId": "msg-001",
-  "route": "CURRENT_ARTICLE",
+  "route": "article_grounded",
+  "routeBadge": "From this article",
+  "answer": "基于文章内容，核心结论是...",
   "reply": "基于文章内容，核心结论是...",
-  "citations": []
+  "evidenceSpans": [
+    {
+      "articleId": "art-001",
+      "chunkId": "chk_001",
+      "sectionId": "sec_intro",
+      "text": "作者在引言中说明了方法适用边界。"
+    }
+  ],
+  "relatedArticles": [],
+  "citations": [],
+  "confidence": 0.78,
+  "fallbackUsed": false,
+  "fallbackReason": ""
 }
 ```
 
@@ -959,7 +1017,9 @@ VITE_API_TIMEOUT_MS=15000
 
 - 前端只发最新一条 `message`
 - 后端负责会话持久化、窗口裁剪、检索和 prompt 组装
-- `citations` 第一版可以为空数组
+- `route` 使用新枚举：`article_grounded / general / recommendation / notebook_research / ambiguous`
+- `relatedArticles` 是 recommendation lane 的主结果字段；`citations` 仅保留兼容别名
+- `token` 事件 payload 同时包含 `content` 与 `text`
 
 ### POST `/api/notebooks/:notebookId/articles/:articleId/translate`
 

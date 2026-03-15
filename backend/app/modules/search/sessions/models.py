@@ -1,3 +1,9 @@
+"""ORM models for search_sessions and search_results tables.
+
+Table structure is kept identical to the existing Alembic migrations
+so no new migration is needed.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -15,7 +21,7 @@ if TYPE_CHECKING:
 
 
 class SearchSession(UUIDPrimaryKeyMixin, Base):
-    __tablename__ = "search_sessions" # type: ignore[assignment]
+    __tablename__ = "search_sessions"  # type: ignore[assignment]
 
     user_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -51,7 +57,7 @@ class SearchSession(UUIDPrimaryKeyMixin, Base):
 
 
 class SearchResult(UUIDPrimaryKeyMixin, Base):
-    __tablename__ = "search_results" # type: ignore[assignment]
+    __tablename__ = "search_results"  # type: ignore[assignment]
 
     search_session_id: Mapped[str] = mapped_column(
         ForeignKey("search_sessions.id", ondelete="CASCADE"),

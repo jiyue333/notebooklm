@@ -21,6 +21,10 @@ WORKER_MATCH="app.workers.run_worker"
 SCHEDULER_MATCH="app.workers.run_scheduler"
 FRONTEND_MATCH_VITE_BIN="frontend/node_modules/vite/bin/vite.js"
 FRONTEND_MATCH_VITE_SHIM="frontend/node_modules/.bin/vite"
+BACKEND_PORT=8080
+WORKER_METRICS_PORT=9101
+SCHEDULER_METRICS_PORT=9102
+FRONTEND_PORT=5173
 
 mkdir -p "$LOG_DIR"
 
@@ -124,6 +128,47 @@ resolve_existing_pid() {
   fi
 
   first_matching_pid "$@" || return 1
+}
+
+kill_port_holders() {
+  local port="$1"
+  local label="$2"
+  shift 2
+  local patterns=("$@")
+  local pids
+  pids="$(lsof -ti ":$port" 2>/dev/null || true)"
+  [[ -z "$pids" ]] && return
+  local pid cmd pattern
+  for pid in $pids; do
+    [[ "$pid" == "$$" || "$pid" == "$PPID" ]] && continue
+    cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    [[ -z "$cmd" ]] && continue
+    for pattern in "${patterns[@]}"; do
+      if [[ "$cmd" == *"$pattern"* ]]; then
+        kill -9 "$pid" 2>/dev/null || true
+        echo "  killed orphan $pid on port $port ($label)"
+        break
+      fi
+    done
+  done
+}
+
+release_all_ports() {
+  kill_port_holders "$BACKEND_PORT" "backend" "$BACKEND_MATCH"
+  kill_port_holders "$WORKER_METRICS_PORT" "worker-metrics" "$WORKER_MATCH"
+  kill_port_holders "$SCHEDULER_METRICS_PORT" "scheduler-metrics" "$SCHEDULER_MATCH"
+  kill_port_holders "$FRONTEND_PORT" "frontend" "$FRONTEND_MATCH_VITE_BIN" "$FRONTEND_MATCH_VITE_SHIM"
+}
+
+clean_logs() {
+  for f in "$BACKEND_LOG" "$WORKER_LOG" "$SCHEDULER_LOG" "$FRONTEND_LOG"; do
+    : > "$f" 2>/dev/null || true
+  done
+  echo "log files cleared"
+}
+
+clean_pid_files() {
+  rm -f "$BACKEND_PID_FILE" "$WORKER_PID_FILE" "$SCHEDULER_PID_FILE" "$FRONTEND_PID_FILE"
 }
 
 kill_pid_tree() {
@@ -383,6 +428,9 @@ case "$COMMAND" in
     kill_process "worker" "$WORKER_PID_FILE" "$WORKER_MATCH"
     kill_process "scheduler" "$SCHEDULER_PID_FILE" "$SCHEDULER_MATCH"
     kill_process "frontend" "$FRONTEND_PID_FILE" "$FRONTEND_MATCH_VITE_BIN" "$FRONTEND_MATCH_VITE_SHIM"
+    release_all_ports
+    clean_pid_files
+    clean_logs
     ;;
   status)
     show_status

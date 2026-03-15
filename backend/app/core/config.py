@@ -81,6 +81,8 @@ class Settings(BaseSettings):
     kafka_topic: str = "notebook_async"
     kafka_consumer_poll_timeout_ms: int = 1000
     kafka_request_timeout_ms: int = 10000
+    kafka_session_timeout_ms: int = 30_000  # 30s, heartbeat; handler 的 sync 会阻塞 event loop
+    kafka_max_poll_interval_ms: int = 600_000  # 10 min, allow long ingest/embed
     kafka_auto_offset_reset: str = "earliest"
 
     object_storage_endpoint: str = "127.0.0.1:9000"

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 
 from app.modules.settings.runtime import EmbeddingRuntimeConfig, resolve_embedding_runtime_config
+
+_EMBED_TIMEOUT_SECONDS = 120
 
 
 class Embedder:
@@ -64,8 +68,12 @@ class Embedder:
             model=self._runtime_config.model_name,
             api_key=api_key_secret,
             base_url=self._runtime_config.api_url,
+            request_timeout=_EMBED_TIMEOUT_SECONDS,
         )
-        response = await embeddings.aembed_documents(texts)
+        response = await asyncio.wait_for(
+            embeddings.aembed_documents(texts),
+            timeout=_EMBED_TIMEOUT_SECONDS,
+        )
         return _validate_embedding_dimensions(
             response,
             expected_dimensions=self._runtime_config.output_dimensions,

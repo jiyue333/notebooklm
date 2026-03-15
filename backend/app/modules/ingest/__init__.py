@@ -1,1 +1,1 @@
-"""Content ingestion module placeholders."""
+"""Ingest module – ADR-002 multi-stage parse pipeline."""

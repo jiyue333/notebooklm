@@ -1,127 +1,144 @@
+"""Summary service – the single entry point for article summarisation.
+
+Checks cache, runs the ADR-003 pipeline, persists results.
+"""
+
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import hashlib
+import json
 
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.errors import AppError
-from app.api.sse import build_sse_error_payload, encode_sse_event, extract_stream_text
-from app.infra.telemetry.tracing import finish_span, start_span, start_span_now
-from app.modules.ai.summary.workflow import PreparedSummary, finalize_summary, prepare_summary
-from app.modules.tracker import AiReviewTracker, LlmTracker
-
-if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
-
-    from app.modules.auth.models import User
+from app.modules.ai.summary.pipeline import run_pipeline
+from app.modules.ai.summary.pipeline.observer import SummaryPipelineObserver
+from app.modules.ai.summary.pipeline.types import SummaryContext, SummaryInput, SummaryResult
+from app.modules.ai.summary.prompts import PROMPT_VERSION
+from app.modules.ai.summary import repo
 
 logger = structlog.get_logger(__name__)
 
 
-async def stream_summary(
-    session: AsyncSession,
+async def generate_summary(
+    db: AsyncSession,
     *,
-    user: User,
-    notebook_id: str,
     article_id: str,
-):
-    tracker = LlmTracker(operation="summary")
-    try:
-        prepared = await prepare_summary(
-            session, user=user, notebook_id=notebook_id, article_id=article_id,
-        )
-    except Exception:
-        tracker.report_request("stream", "error")
-        raise
+    notebook_id: str,
+    user_id: str,
+    title: str,
+    clean_markdown: str,
+    toc_json: list[dict] | None = None,
+    block_graph_json: dict | None = None,
+    quality_profile_json: dict | None = None,
+    quality_score: float = 0.0,
+    language: str = "auto",
+) -> SummaryResult:
+    """Generate or retrieve a cached summary for an article."""
 
-    async def event_stream():
-        nonlocal tracker
-        stream_article_id = prepared.article.id
+    content_hash = hashlib.sha256(clean_markdown.encode()).hexdigest()
 
-        if prepared.cached_item is not None:
-            tracker.report_request("stream", "cache_hit")
-            tracker.report_response_length(len(prepared.cached_item.get("summary", "")))
-            yield encode_sse_event("start", {"cacheHit": True})
-            yield encode_sse_event("done", prepared.cached_item)
-            return
+    # Check DB cache
+    cached = await repo.get_cached_summary(
+        db,
+        article_id=article_id,
+        content_hash=content_hash,
+        prompt_version=PROMPT_VERSION,
+    )
+    if cached:
+        logger.info("summary.cache_hit", article_id=article_id)
+        from app.modules.ai.summary.pipeline.types import ArticleSummary, EvidenceSpan, SummaryRoute
 
-        tracker = LlmTracker.from_model_settings("summary", prepared.model_settings)
-        tracker.mark_llm_start()
-        assert prepared.model is not None
-        first_token_span = start_span_now(
-            "summary.model_first_token",
-            attributes={
-                "provider": tracker.provider,
-                "model_name": tracker.model,
-            },
-        )
-        first_token_recorded = False
-        summary_parts: list[str] = []
         try:
-            yield encode_sse_event("start", {"cacheHit": False})
-            with start_span(
-                "summary.model_stream",
-                attributes={
-                    "provider": tracker.provider,
-                    "model_name": tracker.model,
-                },
-            ):
-                async for chunk in prepared.model.astream(
-                    prepared.messages,
-                    config={"run_name": "summary_model", "metadata": prepared.trace_metadata},
-                ):
-                    text = extract_stream_text(chunk)
-                    if not text:
-                        continue
-                    if not first_token_recorded:
-                        ttft_ms = tracker.llm_ms
-                        tracker.report_first_token(ttft_ms)
-                        finish_span(first_token_span, attributes={"duration_ms": ttft_ms})
-                        first_token_span = None
-                        first_token_recorded = True
-                    summary_parts.append(text)
-                    yield encode_sse_event("token", {"content": text})
+            payload = json.loads(cached.summary_text)
+        except (TypeError, json.JSONDecodeError):
+            payload = None
 
-            summary = "".join(summary_parts).strip()
-            if not summary:
-                raise AppError(502, "摘要生成失败", code="summary_generation_failed")
-
-            result = await finalize_summary(session, prepared=prepared, summary=summary)
-            _schedule_summary_review(prepared=prepared, summary=summary)
-            tracker.report_stream_success(response_length=len(summary))
-            yield encode_sse_event("done", result)
-        except Exception as exc:
-            await session.rollback()
-            tracker.report_stream_error()
-            finish_span(first_token_span, error=exc)
-            yield build_sse_error_payload(
-                exc,
-                fallback_message="摘要生成失败，请稍后重试",
-                fallback_code="summary_generation_failed",
-                logger=logger,
-                log_event="summary.stream_failed",
-                article_id=stream_article_id,
-                error=str(exc),
+        if isinstance(payload, dict):
+            route_value = payload.get("route") or SummaryRoute.S.value
+            try:
+                route = SummaryRoute(route_value)
+            except ValueError:
+                route = SummaryRoute.S
+            evidence_spans = [
+                EvidenceSpan(
+                    bullet_text=span.get("bulletText") or span.get("bullet_text") or "",
+                    block_ids=span.get("blockIds") or span.get("block_ids") or [],
+                    role=span.get("role") or "",
+                )
+                for span in (payload.get("evidenceSpans") or [])
+                if isinstance(span, dict)
+            ]
+            summary = ArticleSummary(
+                summary_text=payload.get("summaryText") or "",
+                evidence_spans=evidence_spans,
+                profile_tags=payload.get("profileTags") or {},
+                confidence=float(payload.get("confidence") or 0),
+                prompt_version=payload.get("promptVersion") or cached.prompt_version,
+                route=route,
+            )
+            return SummaryResult(
+                summary=summary,
+                route=route,
+                cache_hit=True,
             )
 
-    return event_stream()
+        return SummaryResult(
+            summary=ArticleSummary(
+                summary_text=cached.summary_text,
+                prompt_version=cached.prompt_version,
+                route=SummaryRoute.S,
+            ),
+            route=SummaryRoute.S,
+            cache_hit=True,
+        )
 
-
-def _schedule_summary_review(*, prepared: PreparedSummary, summary: str) -> None:
-    if prepared.model is None:
-        return
-    tracker = AiReviewTracker(operation="summary", route="summary")
-    tracker.schedule(
-        sample_key=prepared.article.id,
-        model=prepared.model,
-        metadata={
-            **prepared.trace_metadata,
-            "operation": "summary",
-            "article_id": prepared.article.id,
-        },
-        review_payload={
-            "title": prepared.article.title,
-            "source_excerpt": (prepared.article.clean_markdown or "")[:4000],
-            "summary": summary,
-        },
+    # Run pipeline
+    observer = SummaryPipelineObserver()
+    ctx = SummaryContext(
+        summary_input=SummaryInput(
+            article_id=article_id,
+            notebook_id=notebook_id,
+            user_id=user_id,
+            title=title,
+            clean_markdown=clean_markdown,
+            toc_json=toc_json or [],
+            block_graph_json=block_graph_json,
+            quality_profile_json=quality_profile_json,
+            quality_score=quality_score,
+            content_hash=content_hash,
+            language=language,
+        ),
     )
+
+    result = await run_pipeline(ctx, observer=observer)
+
+    # Persist to cache
+    if result.summary and result.summary.summary_text:
+        await repo.save_summary_cache(
+            db,
+            article_id=article_id,
+            content_hash=content_hash,
+            prompt_version=PROMPT_VERSION,
+            model_provider="heuristic",
+            model_name="rule_v1",
+            output_language=language,
+            summary_text=json.dumps({
+                "summaryText": result.summary.summary_text,
+                "evidenceSpans": [
+                    {
+                        "bulletText": span.bullet_text,
+                        "blockIds": span.block_ids,
+                        "role": span.role,
+                    }
+                    for span in result.summary.evidence_spans
+                ],
+                "profileTags": result.summary.profile_tags,
+                "confidence": result.summary.confidence,
+                "promptVersion": result.summary.prompt_version,
+                "route": result.summary.route.value,
+            }, ensure_ascii=False),
+        )
+        await db.commit()
+
+    return result

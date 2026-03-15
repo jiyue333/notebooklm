@@ -145,6 +145,17 @@ export default function SourcePanel({
         { id: 'deep', label: 'Deep Research', icon: Ic.deepResearch, desc: '更慢但更深入的来源发现' },
     ];
     const currentMode = modeOptions.find((item) => item.id === mode) || modeOptions[1];
+    const buildSourceBadge = (source) => source.sourceTypeBadge || source.sourceName || '来源';
+    const buildSourceSummary = (source) => source.whySelected || source.description || '已按当前研究任务筛选';
+    const buildHighlight = (source) => (Array.isArray(source.highlights) && source.highlights[0]) || '';
+    const buildImportLabel = (source) => {
+        const mapping = {
+            recommended: '推荐导入',
+            optional: '可选',
+            duplicate_risk: '重复风险',
+        };
+        return mapping[source.importSuggestion] || source.importSuggestion || '可选';
+    };
 
     const renderSearchBar = () => (
         <div className="sp-search-area">
@@ -253,10 +264,18 @@ export default function SourcePanel({
                         <div className="sp-results-list">
                             {previewSources.length > 0 ? previewSources.map((source) => (
                                 <div key={source.id} className="sp-result-item">
-                                    <span className="sp-result-icon">{source.icon}</span>
+                                    <span className="sp-result-badge">{buildSourceBadge(source)}</span>
                                     <div className="sp-result-info">
-                                        <span className="sp-result-title">{source.title}</span>
-                                        <span className="sp-result-desc">{source.description}</span>
+                                        <div className="sp-result-title-row">
+                                            <span className="sp-result-title">{source.title}</span>
+                                            {source.authorityBadge && (
+                                                <span className="sp-result-chip">{source.authorityBadge}</span>
+                                            )}
+                                        </div>
+                                        <span className="sp-result-desc">{buildSourceSummary(source)}</span>
+                                        {buildHighlight(source) && (
+                                            <span className="sp-result-highlight">{buildHighlight(source)}</span>
+                                        )}
                                     </div>
                                 </div>
                             )) : (
@@ -294,7 +313,7 @@ export default function SourcePanel({
             </div>
             <div className="nb-panel-body sp-discover-body">
                 <p className="sp-discover-summary">
-                    这组资源涵盖了高级搜索指令、学术文献检索工具以及相似网站发现技术，旨在提升获取深层信息的效率。
+                    这组候选已按当前研究任务做过覆盖式筛选，优先展示值得导入的来源、视角补位和解析可用性信号。
                 </p>
                 <div className="sp-discover-list">
                     <div className="sp-discover-header">
@@ -306,10 +325,22 @@ export default function SourcePanel({
                     <div className="sp-discover-list-scroll">
                         {sources.map((source) => (
                             <div key={source.id} className="sp-discover-item">
-                                <span className="sp-discover-item-icon">{source.icon}</span>
+                                <span className="sp-discover-item-icon">{buildSourceBadge(source)}</span>
                                 <div className="sp-discover-item-info">
-                                    <span className="sp-discover-item-title">{source.title}</span>
-                                    <span className="sp-discover-item-desc">{source.description}</span>
+                                    <div className="sp-discover-item-title-row">
+                                        <span className="sp-discover-item-title">{source.title}</span>
+                                        {source.authorityBadge && (
+                                            <span className="sp-result-chip">{source.authorityBadge}</span>
+                                        )}
+                                    </div>
+                                    <div className="sp-discover-item-meta">
+                                        {source.sourceName && <span>{source.sourceName}</span>}
+                                        <span>{buildImportLabel(source)}</span>
+                                    </div>
+                                    <span className="sp-discover-item-desc">{buildSourceSummary(source)}</span>
+                                    {buildHighlight(source) && (
+                                        <span className="sp-discover-item-highlight">{buildHighlight(source)}</span>
+                                    )}
                                 </div>
                                 <button className="sp-discover-link" title="打开链接" onClick={() => window.open(source.url, '_blank', 'noopener,noreferrer')} disabled={isImporting}>{Ic.openLink}</button>
                                 <button className={`sp-checkbox ${source.selected ? 'checked' : ''}`} onClick={() => toggleSource(source.id)} disabled={isImporting}>

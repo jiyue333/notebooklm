@@ -8,12 +8,11 @@ from app.infra.cache import delete_keys, get_json, notebook_detail_key, set_json
 from app.infra.storage.file_store import is_object_storage_enabled
 from app.modules.notes import repo as notes_repo
 from app.modules.notebooks import assembler, repo
-from app.modules.search.articles import repo as repo_article
 
 
 async def list_notebooks(session: AsyncSession, *, user_id: str, query: str | None = None) -> list[dict]:
     notebooks = await repo.list_notebooks(session, user_id=user_id, query=query)
-    counts = await repo_article.count_articles_by_notebook_ids(
+    counts = await repo.count_articles_by_notebook_ids(
         session,
         user_id=user_id,
         notebook_ids=[notebook.id for notebook in notebooks],
@@ -61,7 +60,7 @@ async def get_notebook_detail(session: AsyncSession, *, user_id: str, notebook_i
         raise AppError(404, "未找到对应的笔记本", code="notebook_not_found")
 
     notes = await notes_repo.list_notes(session, user_id=user_id, notebook_id=notebook_id)
-    articles = await repo_article.list_articles_by_notebook(
+    articles = await repo.list_articles_by_notebook(
         session,
         user_id=user_id,
         notebook_id=notebook_id,

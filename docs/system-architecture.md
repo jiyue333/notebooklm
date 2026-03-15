@@ -1,282 +1,256 @@
-# =============== 系统总览 ===============
-
-NotebookLM 当前是一个单仓库、单前端、三运行单元的系统：
-
-- `frontend/`：React + Vite 单页应用
-- `backend/app/main.py`：FastAPI API
-- `backend/app/workers/run_worker.py`：异步 worker
-- `backend/app/workers/run_scheduler.py`：周期调度器
-
-系统围绕三条核心业务链路组织：
-
-1. 搜索：发现候选来源并生成搜索会话
-2. 导入：把来源变成 notebook 内可读、可检索的 article
-3. AI：基于 article 和 notebook 内容完成 summary 与 chat
-
-当前所有正式结构文档以本文件为准。这里不描述未来规划，只描述当前仓库已经存在的系统结构。
-
-# =============== 运行时组件 ===============
-
-## 客户端
-
-- `frontend/src/`
-- 负责登录、notebook 工作台、搜索与导入、文章阅读、摘要、对话、设置
-- 通过 `frontend/src/services/appApi.js` 调用 `/api/*`
-- `chat` 和 `summary` 的流式接口通过 SSE 使用
-
-## API
-
-- 入口：`backend/app/main.py`
-- 路由：
-  - `auth`
-  - `notebooks`
-  - `notes`
-  - `search`
-  - `ai`
-  - `settings`
-  - `health`
-- 负责同步请求编排、DB 读写、短链路搜索、inline ingest、SSE 输出、缓存读取、异步任务发布
-
-## Worker
-
-- 入口：`backend/app/workers/run_worker.py`
-- 当前消费的 job 类型：
-  - `search_deep`
-  - `article_ingest`
-  - `article_reindex`
-- 负责深度搜索、网页抓取、解析清洗、chunking、embedding、索引重建
-
-## Scheduler
-
-- 入口：`backend/app/workers/run_scheduler.py`
-- 负责：
-  - 重发未发布或待补偿 job
-  - 过期 search session 清理
-  - summary cache 清理
-  - 历史失败 job 清理
-  - Redis bigkey / hotkey 巡检触发
-
-## 数据与基础设施
-
-- PostgreSQL + pgvector：主数据、全文检索、向量检索
-- Redis：读缓存与巡检对象
-- MinIO：文件与图片对象存储
-- Kafka：异步任务传输
-- Exa：搜索与网页正文抓取
-- Ollama / OpenAI-compatible：chat、summary、embedding
-
-## 观测组件
-
-- Prometheus
-- Grafana
-- Loki
-- Tempo
-- OTel Collector
-- `kafka-exporter`
-- `redis-exporter`
-- `postgres-exporter`
-- `node-exporter`
-
-# =============== 核心业务链路 ===============
-
-## Search
-
-关键代码：
-
-- `backend/app/modules/search/router.py`
-- `backend/app/modules/search/sessions/service.py`
-- `backend/app/modules/search/sources/manual_service.py`
-- `backend/app/modules/search/sources/import_service.py`
-
-当前结构：
-
-1. 前端发起 `sources/search`
-2. API 创建 `search_session`
-3. 快速模式尝试 inline 搜索，超时或 deep 模式则创建 `search_deep` job
-4. 搜索结果写入 `search_results`
-5. 前端用 `searchSessionId + searchResultIds` 发起 `sources/import`
-
-Search 只负责发现候选来源，不负责 chunking 和 embedding。
-
-## Import / Ingest
-
-关键代码：
-
-- `backend/app/modules/ingest/articles/service.py`
-- `backend/app/modules/ingest/articles/worker.py`
-- `backend/app/modules/ingest/indexing/pipeline.py`
-- `backend/app/modules/ingest/quality/quality_scorer.py`
-
-来源入口：
-
-- 搜索结果导入
-- 手动 text
-- 手动 url
-- 文件上传
-- 剪贴板图片
-
-当前结构：
-
-1. 所有来源先统一成 `IngestDraft`
-2. 若能 inline 解析，则直接生成 `clean_markdown`
-3. 若需要异步抓取或解析，则创建 `article_ingest` job
-4. `parse_status=ready` 代表正文可读
-5. chunking、embedding、索引状态与正文 ready 解耦
-
-## AI
-
-关键代码：
-
-- `backend/app/modules/ai/chat/*`
-- `backend/app/modules/ai/summary/*`
-- `backend/app/modules/retrieval/*`
-
-当前结构：
-
-- Summary：
-  - 输入是 article 的 `clean_markdown`
-  - 命中 `summary_cache` 时直接返回
-  - 未命中时调用模型生成并写回缓存
-- Chat：
-  - 会话和消息保存在数据库
-  - 路由器先判断是否需要当前文章、相关资料或证据检索
-  - 检索分 article 级和 chunk 级
-  - 支持普通返回与 SSE 流式返回
-
-# =============== 数据与状态 ===============
-
-## 主要业务实体
-
-- `User`
-- `Notebook`
-- `Article`
-- `ArticleChunk`
-- `Note`
-- `SearchSession`
-- `SearchResult`
-- `Job`
-- `Conversation`
-- `ConversationMessage`
-- `SummaryCache`
-
-## 关键状态字段
-
-### Article
-
-- `parse_status`
-  - `pending`：正文还未准备好
-  - `ready`：正文可读
-  - `failed`：解析失败
-- `chunk_status`
-  - 反映 chunk 是否已完成
-- `index_status`
-  - 反映全文 / 向量索引是否就绪
-- `embedding_status`
-  - 反映 embedding 计算是否成功
-
-### SearchSession
-
-- `queued`
-- `running`
-- `completed`
-- `failed`
-- `expired`
-
-### Job
-
-- `pending`
-- `published`
-- `running`
-- `succeeded`
-- `failed`
-- `dead`
-
-## 当前代码组织
-
-### 业务模块
-
-- `backend/app/modules/auth`
-- `backend/app/modules/settings`
-- `backend/app/modules/notebooks`
-- `backend/app/modules/notes`
-- `backend/app/modules/search`
-- `backend/app/modules/ingest`
-- `backend/app/modules/retrieval`
-- `backend/app/modules/ai`
-- `backend/app/modules/jobs`
-- `backend/app/modules/tracker`
-
-### 基础设施模块
-
-- `backend/app/infra/db`
-- `backend/app/infra/cache`
-- `backend/app/infra/storage`
-- `backend/app/infra/mq`
-- `backend/app/infra/ai`
-- `backend/app/infra/providers`
-- `backend/app/infra/telemetry`
-
-当前代码已经把基础设施能力尽量下沉到 `infra/`，并把观测与质量评审收口到 `tracker/`。
-
-# =============== 异步与观测 ===============
-
-## 异步结构
-
-API 不直接以 Kafka 为真相源，异步任务遵循两层结构：
-
-1. `jobs` 表记录状态真相
-2. Kafka 负责运输 job payload
-
-当前异步职责：
-
-- API：写 `jobs` 行并发布消息
-- Worker：消费消息并推进 `jobs` 与业务状态
-- Scheduler：补偿、重发、清理
-
-## 在线观测结构
-
-### Logs
-
-- API / worker / scheduler 输出结构化日志
-- 本地日志文件位于 `logs/`
-- Promtail 采集到 Loki
-
-### Metrics
-
-- 应用自定义指标在 `backend/app/infra/telemetry/metrics.py`
-- Search / Ingest / AI 的业务埋点集中由 `backend/app/modules/tracker/*` 驱动
-- Prometheus 抓取：
-  - API / worker / scheduler
-  - Kafka exporter
-  - Redis exporter
-  - PostgreSQL exporter
-  - Node exporter
-
-### Tracing
-
-- OpenTelemetry 自动接入 FastAPI 和 SQLAlchemy
-- 核心业务阶段额外补了手动 span
-- trace 通过 OTel Collector 进入 Tempo
-
-## 当前观测看板
-
-- `docker/grafana/dashboards/search-dashboard.json`
-- `docker/grafana/dashboards/ingest-dashboard.json`
-- `docker/grafana/dashboards/llm-dashboard.json`
-- `docker/grafana/dashboards/kafka-dashboard.json`
-- `docker/grafana/dashboards/infra-dashboard.json`
-- `docker/grafana/dashboards/benchmark-dashboard.json`
-
-## 离线评测资产
-
-离线评测代码保留在 `backend/evals/`：
-
-- `cases/`
-- `datasets/`
-- `reports/`
-- `dataset_builders/`
-- `runners/`
-- `online_seed/`
-- `k6/`
-
-这里负责 demo 数据、基线报告、离线 benchmark、在线造数与压测脚本，不承担主文档入口职责。
+# NotebookLM 系统架构
+
+## 项目定位
+
+NotebookLM 是一个 AI 研究助手，帮助用户搜索、导入、阅读、摘要和讨论文档。核心链路四条：Search → Ingest → Summary → Chat。
+
+## 技术栈
+
+| 层 | 技术 |
+|---|------|
+| 前端 | React 19 + Vite 7 + react-router-dom 7 |
+| 后端 | FastAPI + Python 3.12 |
+| 数据库 | PostgreSQL 16 + pgvector |
+| 缓存 | Redis |
+| 消息队列 | Kafka（通过 aiokafka） |
+| 对象存储 | MinIO（S3 兼容） |
+| AI / LLM | LangChain + OpenAI / Ollama |
+| 向量化 | OpenAI Embeddings / Ollama |
+| 搜索 API | Exa |
+| 可观测性 | Prometheus + Grafana + Loki + Tempo + OpenTelemetry |
+
+## 整体架构
+
+```
+┌──────────────┐       ┌────────────────────────────────────────┐
+│   Frontend   │──────▶│              FastAPI (API)              │
+│  React SPA   │◀──SSE─│  main.py → routers → services          │
+└──────────────┘       └──────────┬─────────────────────────────┘
+                                  │
+                    ┌─────────────┼─────────────┐
+                    ▼             ▼             ▼
+             ┌───────────┐ ┌───────────┐ ┌───────────┐
+             │ PostgreSQL │ │   Redis   │ │   MinIO   │
+             │ + pgvector │ │  (cache)  │ │  (files)  │
+             └───────────┘ └───────────┘ └───────────┘
+                    ▲
+                    │
+              ┌─────┴──────┐
+              │   Worker    │◀── Kafka ◀── Job Publisher
+              │ (article    │
+              │  ingest)    │
+              └─────────────┘
+```
+
+## 后端模块结构
+
+```
+backend/app/
+├── api/                  # HTTP 层：中间件、依赖注入、错误处理、SSE
+├── core/                 # 配置（pydantic-settings）
+├── infra/                # 基础设施（不含业务逻辑）
+│   ├── ai/               #   LLM chat_models + Embedder
+│   ├── cache/            #   Redis 客户端 + cache service
+│   ├── db/               #   SQLAlchemy base + session + model registry
+│   ├── mq/               #   Kafka producer / consumer
+│   ├── providers/exa/    #   Exa Search + Contents 客户端
+│   ├── security/         #   加密、密码、session token
+│   ├── storage/          #   文件存储（本地 / MinIO）
+│   └── telemetry/        #   logging, metrics, tracing, context
+├── modules/              # 业务模块
+│   ├── search/           #   搜索链路（ADR-001）
+│   ├── ingest/           #   解析链路（ADR-002）
+│   ├── ai/summary/       #   摘要链路（ADR-003）
+│   ├── ai/chat/          #   聊天链路（ADR-004）
+│   ├── auth/             #   用户认证
+│   ├── notebooks/        #   笔记本 + 文章 CRUD
+│   ├── notes/            #   笔记 CRUD
+│   ├── jobs/             #   异步任务（Job 表 + Kafka 发布）
+│   └── settings/         #   用户设置 + 运行时配置
+└── workers/              # 后台进程
+    ├── run_worker.py     #   Kafka 消费者（处理 article_ingest）
+    └── run_scheduler.py  #   定时任务（缓存清理、Job 重发）
+```
+
+## 四条核心链路
+
+### 1. Search（ADR-001）
+
+用户输入查询 → 多阶段流水线 → 返回候选文章列表。
+
+```
+用户 query + notebook context
+    → A: Task Parsing（规则化理解意图）
+    → B: Query Lattice（生成 2-7 个查询家族）
+    → C: Multi-Source Recall（并发调用 Exa API）
+    → D: Canonicalize（URL/DOI 去重）
+    → E: Enrichment（推断 doc_type / authority）
+    → F: Multi-Objective Scoring（8 维加权打分）
+    → G: Slate Building（按 bucket 覆盖式选取 + why_selected）
+    → 持久化 SearchSession + SearchResult
+```
+
+路径：`modules/search/pipeline/`，对外入口 `sessions/service.py`。
+同步执行，p95 约 3-4 秒。
+
+### 2. Ingest（ADR-002）
+
+用户导入文章 → 立即创建 Article（queued）→ 异步 Job 执行解析。
+
+```
+Article 创建（router）
+    → Job 发布到 Kafka（或 inline fallback）
+    → Worker 消费 Job：
+        → A: Fetch（下载 URL / 读取文件）
+        → B: Canonicalize（去重）
+        → C: Doc Router（分类：html/pdf/office/text）
+        → D: Multi-Parser（Trafilatura + Exa + MarkItDown）
+        → E: Quality Judge（8 维解析质量打分）
+        → F: Fusion（合并最优候选 + markdown 清理）
+        → G: TOC Builder（heading 提取 / synthetic TOC）
+        → H: BlockGraph（结构化 block AST）
+        → I: Indexer（分块 + 向量化）
+    → 更新 Article（clean_markdown, toc, block_graph, chunks）
+```
+
+路径：`modules/ingest/pipeline/`，Worker 入口 `workers/handlers/__init__.py`。
+Article 的 `block_graph_json` 和 `quality_profile_json` 持久化到 DB，供 Summary / Chat 跨请求消费。
+
+### 3. Summary（ADR-003）
+
+用户点击文章摘要按钮 → SSE 流式返回。
+
+```
+Article 内容（从 DB 读取）
+    → A: Article Profiling（识别类型/证据风格/结构质量）
+    → B: Evidence Extraction（按 section role 权重提取 8-12 个 bullets）
+    → C: Route Selection（S/M/L/X 四档，低质量走保守路由）
+    → D: Candidate Generation + Judge（3 种风格候选 + 四维评审）
+    → E: Final Output（ArticleSummary + evidence_spans）
+    → 缓存到 SummaryCache 表
+```
+
+路径：`modules/ai/summary/pipeline/`，SSE 入口 `ai/router.py`。
+缓存命中时直接返回；首次生成走完整 pipeline。
+
+### 4. Chat（ADR-004）
+
+用户在文章内提问 → SSE 流式返回。
+
+```
+用户问题 + article_id + notebook_id
+    → A: Scope Router（四路由分类）
+        article_grounded / general / recommendation / notebook_research
+    → B: Route-Specific Retrieval
+        - article_grounded: 当前文章 chunk 检索
+        - general: 不检索
+        - recommendation: article-level 检索
+        - notebook_research: 两阶段（article shortlist → section evidence）
+    → C: Answer Composer（按路由协议生成回答）
+    → D: Verifier（证据覆盖率 + scope 一致性 + fallback）
+    → 持久化 Conversation + ConversationMessage
+```
+
+路径：`modules/ai/chat/pipeline/`，SSE 入口 `ai/router.py`。
+每条 lane 有独立回答协议和 route badge（`From this article` / `General answer` / `From your notebooks` / `Research in this notebook`）。
+
+## 数据模型
+
+```
+users ──< notebooks ──< articles ──< article_chunks
+                    ──< notes
+                    ──< search_sessions ──< search_results
+          conversations ──< conversation_messages
+          summary_caches
+          jobs
+```
+
+核心表：
+
+| 表 | 作用 | 关键字段 |
+|----|------|---------|
+| `articles` | 文章（ingest 产物） | clean_markdown, toc_json, block_graph_json, quality_profile_json, parse_status |
+| `article_chunks` | 文章分块（向量检索用） | chunk_text, chunk_vector (pgvector) |
+| `search_sessions` | 搜索会话 | query, mode, status, result_count |
+| `search_results` | 搜索结果卡片 | title, url, why_selected, display_rank |
+| `summary_caches` | 摘要缓存 | article_id, content_hash, prompt_version, summary_text |
+| `conversations` | 聊天会话 | notebook_id, current_article_id |
+| `conversation_messages` | 聊天消息 | role, route, content, retrieval_snapshot_json |
+| `jobs` | 异步任务 | job_type, article_id, status, payload_json |
+
+## 可观测性
+
+### 三支柱
+
+| 支柱 | 工具 | 数据源 |
+|------|------|--------|
+| Metrics | Prometheus → Grafana | FastAPI metrics server（:8081 / :9101 / :9102） |
+| Logs | structlog → Promtail → Loki → Grafana | JSON 单行日志，exception 扁平化 |
+| Traces | OpenTelemetry → Tempo → Grafana | 分布式追踪，trace_id / span_id 注入日志 |
+
+### Prometheus 指标体系
+
+每条链路有独立的 Observer（`pipeline/observer.py`），通过注入模式与业务代码解耦：
+
+- **Search**: e2e 延迟、阶段延迟、去重命中率、空 slate 率、authority/diversity/novelty@10
+- **Ingest**: e2e 延迟、fetch 延迟、parser 路由分布、解析成功率、fallback 率、TOC 合成率、block 完整度
+- **Summary**: e2e 延迟、阶段延迟、路由分布(S/M/L/X)、judge 拒绝率、fallback 率、缓存命中率
+- **Infra**: HTTP 请求延迟、scheduler 动作计数、MQ 发布/消费
+
+### Grafana Dashboard
+
+| Dashboard | 覆盖 |
+|-----------|------|
+| search-dashboard.json | Search 链路指标 |
+| ingest-dashboard.json | Ingest 链路指标 |
+| summary-dashboard.json | Summary 链路指标 |
+| chat-dashboard.json | Chat 链路指标 |
+| infra-dashboard.json | HTTP / Redis / Postgres / MQ |
+| kafka-dashboard.json | Kafka broker 指标 |
+
+## 异步任务
+
+当前仅 `article_ingest` 一种 Job 类型走异步：
+
+```
+Router 创建 Article(queued) + Job
+    → publisher.publish_jobs → Kafka
+    → Worker 消费 → process_article_ingest → ingest pipeline
+    → 更新 Article 状态
+```
+
+Kafka 不可用时自动走 inline fallback（在 API 进程内同步执行）。
+Scheduler 每 15 秒执行一次，负责重发 pending Job、清理过期缓存和失败 Job。
+
+## 进程模型
+
+| 进程 | 入口 | 职责 |
+|------|------|------|
+| API | `uvicorn app.main:app` | HTTP 请求处理 |
+| Worker | `python -m app.workers.run_worker` | Kafka 消费，执行 ingest Job |
+| Scheduler | `python -m app.workers.run_scheduler` | 定时清理任务 |
+
+`scripts/dev.sh` 负责启动/停止/重启这三个进程。
+
+## 前端架构
+
+React SPA，核心页面：
+
+| 页面 | 文件 | 功能 |
+|------|------|------|
+| 首页 | `HomePage.jsx` | 笔记本列表 |
+| 笔记本 | `NotebookPage.jsx` | 文章列表、搜索、阅读、摘要、聊天 |
+| 登录 | `LoginPage.jsx` | 用户认证 |
+
+API 通信通过 `services/appApi.js`，SSE 流式接口用于摘要和聊天。
+
+## ADR 索引
+
+| ADR | 链路 | 状态 |
+|-----|------|------|
+| [ADR-001](adr/ADR-001-search-retrieval-quality-pipeline.md) | Search | 已实现 |
+| [ADR-002](adr/ADR-002-parse-pipeline-and-quality-evaluation.md) | Ingest | 已实现 |
+| [ADR-003](adr/ADR-003-summary-pipeline-and-quality-evaluation.md) | Summary | 已实现 |
+| [ADR-004](adr/ADR-004-chat-pipeline.md) | Chat | 已实现 |
+| [ADR-005](adr/ADR-005-mainline-performance-optimization.md) | 性能优化 | Proposal |
+| [ADR-006](adr/ADR-006-stability-security-hardening.md) | 稳定性/安全 | Proposal |

@@ -477,12 +477,46 @@
     min-width: 0;
 }
 
+.nb-toolbar-title-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+}
+
 .nb-toolbar-title {
     font-size: 1.05rem;
     font-weight: 700;
     color: var(--title-color);
     margin: 0 0 2px;
     line-height: 1.4;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nb-toolbar-source-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    color: var(--meta-color);
+    text-decoration: none;
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: color 0.15s, background 0.15s;
+}
+.nb-toolbar-source-link svg {
+    width: 14px;
+    height: 14px;
+}
+.nb-toolbar-source-link:hover {
+    color: var(--accent-color);
+    background: var(--hover-bg);
 }
 
 .nb-toolbar-meta {
@@ -1442,6 +1476,35 @@
     flex-direction: column;
     gap: 8px;
     margin-top: 12px;
+}
+
+.nb-chat-evidence-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.nb-chat-evidence-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--hover-bg), var(--accent-color) 4%);
+    border: 1px solid color-mix(in srgb, var(--border-color), var(--accent-color) 18%);
+}
+
+.nb-chat-evidence-label {
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: var(--accent-color);
+}
+
+.nb-chat-evidence-text {
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: var(--text-secondary);
 }
 
 .nb-chat-citation-card {

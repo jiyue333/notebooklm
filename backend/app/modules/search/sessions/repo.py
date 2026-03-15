@@ -1,18 +1,19 @@
+"""Repository layer for SearchSession / SearchResult persistence."""
+
 from __future__ import annotations
 
-from dataclasses import asdict
-from datetime import datetime
+from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any
-
-from datetime import UTC, datetime
 
 from sqlalchemy import delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.search.sessions.dto import CreateSearchSessionInput, SearchCandidateDTO
+from app.modules.search.pipeline.types import SearchCard
 from app.modules.search.sessions.models import SearchResult, SearchSession
 
+
+# ── sanitisation helpers ───────────────────────────────────────────────────
 
 def _sanitize_text(value: str | None) -> str | None:
     if value is None:
@@ -27,20 +28,42 @@ def _sanitize_json(value: Any) -> Any:
         return [_sanitize_json(item) for item in value]
     if isinstance(value, dict):
         return {
-            (_sanitize_text(key) if isinstance(key, str) else key): _sanitize_json(item)
-            for key, item in value.items()
+            (_sanitize_text(k) if isinstance(k, str) else k): _sanitize_json(v)
+            for k, v in value.items()
         }
     return value
 
 
+# ── SearchSession CRUD ─────────────────────────────────────────────────────
+
 async def create_search_session(
     session: AsyncSession,
     *,
-    input: CreateSearchSessionInput,
+    user_id: str,
+    notebook_id: str,
+    query: str,
+    mode: str,
+    execution_mode: str,
+    provider_request_json: dict,
+    provider_name: str = "hybrid",
+    now: datetime | None = None,
 ) -> SearchSession:
+    ts = now or datetime.now(UTC)
+    mode_labels = {"fast": "Fast Research", "auto": "Auto Research", "deep": "Deep Research"}
     search_session = SearchSession(
-        **asdict(input),
+        user_id=user_id,
+        notebook_id=notebook_id,
+        query=query,
+        normalized_query=query.strip().lower(),
+        mode=mode,
+        execution_mode=execution_mode,
+        provider_name=provider_name,
+        provider_request_json=provider_request_json,
+        status="running" if execution_mode == "sync" else "queued",
+        mode_label=mode_labels.get(mode, "Research"),
         result_count=0,
+        created_at=ts,
+        expires_at=ts.replace(day=ts.day + 1) if ts.day < 28 else ts,
     )
     session.add(search_session)
     await session.flush()
@@ -64,87 +87,28 @@ async def get_search_session(
     return result.scalar_one_or_none()
 
 
-async def get_search_session_by_id(session: AsyncSession, *, search_session_id: str) -> SearchSession | None:
+async def get_search_session_by_id(
+    session: AsyncSession,
+    *,
+    search_session_id: str,
+) -> SearchSession | None:
     result = await session.execute(
         select(SearchSession).where(SearchSession.id == search_session_id)
     )
     return result.scalar_one_or_none()
 
 
-async def list_search_results(session: AsyncSession, *, search_session_id: str) -> list[SearchResult]:
-    result = await session.execute(
-        select(SearchResult)
-        .where(SearchResult.search_session_id == search_session_id)
-        .order_by(SearchResult.display_rank.asc(), desc(SearchResult.created_at))
-    )
-    return list(result.scalars().all())
-
-
-async def list_search_results_by_ids(
-    session: AsyncSession,
-    *,
-    search_session_id: str,
-    result_ids: list[str],
-) -> list[SearchResult]:
-    if not result_ids:
-        return []
-    result = await session.execute(
-        select(SearchResult)
-        .where(
-            SearchResult.search_session_id == search_session_id,
-            SearchResult.id.in_(result_ids),
-        )
-        .order_by(SearchResult.display_rank.asc())
-    )
-    return list(result.scalars().all())
-
-
-async def replace_search_results(
-    session: AsyncSession,
-    *,
-    search_session_id: str,
-    candidates: list[SearchCandidateDTO],
-    created_at: datetime,
-) -> None:
-    await session.execute(delete(SearchResult).where(SearchResult.search_session_id == search_session_id))
-    for candidate in candidates:
-        canonical_url = _sanitize_text(candidate.canonical_url) or ""
-        session.add(
-            SearchResult(
-                search_session_id=search_session_id,
-                provider_result_id=_sanitize_text(candidate.provider_result_id),
-                raw_url=_sanitize_text(candidate.raw_url) or "",
-                canonical_url=canonical_url,
-                url_hash=sha256(canonical_url.encode("utf-8")).hexdigest(),
-                title=_sanitize_text(candidate.title) or "Untitled result",
-                description=_sanitize_text(candidate.description),
-                author=_sanitize_text(candidate.author),
-                published_at=candidate.published_at,
-                domain=_sanitize_text(candidate.domain),
-                favicon_url=_sanitize_text(candidate.favicon_url),
-                display_rank=candidate.display_rank,
-                preview_markdown=_sanitize_text(candidate.preview_markdown),
-                raw_payload_json=_sanitize_json(candidate.raw_payload),
-                created_at=created_at,
-            )
-        )
-
-
-async def touch_search_session(
+async def update_session_status(
     session: AsyncSession,
     *,
     search_session: SearchSession,
-    status: str | None = None,
-    execution_mode: str | None = None,
+    status: str,
     result_count: int | None = None,
     error_code: str | None = None,
     error_message: str | None = None,
     completed_at: datetime | None = None,
 ) -> SearchSession:
-    if status is not None:
-        search_session.status = status
-    if execution_mode is not None:
-        search_session.execution_mode = execution_mode
+    search_session.status = status
     if result_count is not None:
         search_session.result_count = result_count
     search_session.error_code = error_code
@@ -155,17 +119,60 @@ async def touch_search_session(
     return search_session
 
 
-async def expire_stale_search_sessions(session: AsyncSession) -> int:
-    result = await session.execute(
-        select(SearchSession).where(
-            SearchSession.expires_at.is_not(None),
-            SearchSession.expires_at < datetime.now(UTC),
-            SearchSession.status.in_(["queued", "running"]),
-        )
+
+# ── SearchResult CRUD ──────────────────────────────────────────────────────
+
+async def save_search_results(
+    session: AsyncSession,
+    *,
+    search_session_id: str,
+    cards: list[SearchCard],
+    created_at: datetime | None = None,
+) -> None:
+    """Persist pipeline SearchCards as SearchResult rows."""
+
+    ts = created_at or datetime.now(UTC)
+    await session.execute(
+        delete(SearchResult).where(SearchResult.search_session_id == search_session_id)
     )
-    sessions = list(result.scalars().all())
-    for search_session in sessions:
-        search_session.status = "expired"
-        search_session.completed_at = datetime.now(UTC)
-    await session.flush()
-    return len(sessions)
+    for card in cards:
+        session.add(
+            SearchResult(
+                search_session_id=search_session_id,
+                provider_result_id=_sanitize_text(card.provider_result_id),
+                raw_url=_sanitize_text(card.url) or "",
+                canonical_url=_sanitize_text(card.canonical_url) or "",
+                url_hash=card.url_hash or sha256((card.canonical_url or "").encode()).hexdigest(),
+                title=_sanitize_text(card.title) or "Untitled",
+                description=_sanitize_text(card.description),
+                author=_sanitize_text(card.author),
+                published_at=card.published_at,
+                domain=_sanitize_text(card.domain),
+                favicon_url=_sanitize_text(card.favicon_url),
+                display_rank=card.display_rank,
+                preview_markdown=_sanitize_text(card.preview_markdown),
+                raw_payload_json=_sanitize_json({
+                    "why_selected": card.why_selected,
+                    "source_type_badge": card.source_type_badge,
+                    "authority_badge": card.authority_badge,
+                    "import_suggestion": card.import_suggestion.value,
+                    "highlights": card.highlights,
+                    "final_score": card.final_score,
+                    "doc_type": card.doc_type.value,
+                }),
+                created_at=ts,
+            )
+        )
+
+
+async def list_search_results(
+    session: AsyncSession,
+    *,
+    search_session_id: str,
+) -> list[SearchResult]:
+    result = await session.execute(
+        select(SearchResult)
+        .where(SearchResult.search_session_id == search_session_id)
+        .order_by(SearchResult.display_rank.asc(), desc(SearchResult.created_at))
+    )
+    return list(result.scalars().all())

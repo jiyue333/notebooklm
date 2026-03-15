@@ -10,7 +10,7 @@
       "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
       "id": 100,
       "options": {
-        "content": "### How To Read\n- **Search Throughput (5m Rate)**: 每秒搜索请求数，按模式、执行路径和状态拆分。\n- **Provider Latency P95**: provider 搜索阶段的 P95 耗时，优先看 `completed` 曲线。\n- **Stage Latency P95**: `provider_search / result_map / result_persist / response_build` 四段耗时。\n- **Result Count P95**: 单次搜索返回结果数量的 P95，可用于观察结果规模是否异常缩小。\n- **Quality Scores / Signal Ratios**: 用启发式分数和新鲜度/权威命中率评估搜索结果是否还在满足业务目标。\n- **Review Scores / Bad Cases**: 采样后的规则和 LLM 评审，用来识别线上结果质量漂移。\n- **Source Imports / Async Job Outcomes**: 看搜索结果是否真的被导入，以及异步链路是否在失败或积压。",
+        "content": "### Search Pipeline (ADR-001)\n基于 `notebooklm_search_*` 指标。Histogram 用 P50/P95 看延迟，Counter 用 rate 看 QPS。",
         "mode": "markdown"
       },
       "title": "How To Read",
@@ -19,327 +19,135 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "每秒搜索请求数，按搜索模式、执行路径和状态拆分。",
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "decimals": 2,
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
+      "fieldConfig": { "defaults": { "decimals": 0, "unit": "ms" }, "overrides": [] },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
       "id": 1,
-      "options": {
-        "legend": { "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi" }
-      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
         {
-          "expr": "notebooklm:search_requests_total:rate5m",
-          "legendFormat": "{{mode}} / {{execution}} / {{status}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Search Throughput (5m Rate)",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "搜索 provider 的 P95 耗时，单位毫秒。",
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 0,
-          "unit": "ms"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
-      "id": 2,
-      "options": {
-        "legend": { "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi" }
-      },
-      "targets": [
-        {
-          "expr": "notebooklm:search_provider_duration_ms:p95_rate5m",
-          "legendFormat": "{{provider}} / {{mode}} / {{status}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Provider Latency P95",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "搜索各阶段的 P95 耗时，优先看 success 曲线。",
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 0,
-          "unit": "ms"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 12 },
-      "id": 3,
-      "options": {
-        "legend": { "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi" }
-      },
-      "targets": [
-        {
-          "expr": "notebooklm:search_stage_duration_ms:p95_rate5m{status=\"success\"}",
-          "legendFormat": "{{stage}} / {{mode}} / {{execution}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Stage Latency P95",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "单次完成搜索返回结果数量的 P95。",
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 0,
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 12 },
-      "id": 4,
-      "options": {
-        "legend": { "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi" }
-      },
-      "targets": [
-        {
-          "expr": "notebooklm:search_result_count:p95_rate5m",
-          "legendFormat": "{{mode}} / {{execution}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Result Count P95",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "最近 1 小时来源导入结果。`imported` 表示真正创建了文章，`skipped` 通常表示去重命中。",
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 0,
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
-      "id": 5,
-      "options": {
-        "legend": { "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "single" }
-      },
-      "targets": [
-        {
-          "expr": "sum by (source_type, result) (increase(notebooklm_source_import_total[1h]))",
-          "legendFormat": "{{source_type}} / {{result}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Source Imports (Last 1h)",
-      "type": "barchart"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "搜索结果质量启发式分数均值，范围 0-1。用于观察结果质量是否整体漂移。",
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 2,
-          "max": 1,
-          "min": 0,
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
-      "id": 6,
-      "options": {
-        "legend": { "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi" }
-      },
-      "targets": [
-        {
-          "expr": "notebooklm:search_result_score:avg_rate5m",
-          "legendFormat": "{{score_type}} / {{mode}} / {{execution}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Search Quality Scores Avg (5m)",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "新鲜度满足率和权威来源命中率，范围 0-1。",
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 2,
-          "max": 1,
-          "min": 0,
-          "unit": "percentunit"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
-      "id": 7,
-      "options": {
-        "legend": { "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi" }
-      },
-      "targets": [
-        {
-          "expr": "notebooklm:search_result_signal:ratio1h",
-          "legendFormat": "{{signal}} / {{mode}} / {{execution}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Freshness and Authority Signal Ratios (1h)",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "最近 1 小时异步任务结果。重点关注 `search_deep` 与 `article_ingest` 的 failed 抬头。",
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 0,
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
-      "id": 8,
-      "options": {
-        "legend": { "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi" }
-      },
-      "targets": [
-        {
-          "expr": "sum by (job_type, status) (increase(notebooklm_jobs_total{job_type=~\"search_deep|article_ingest|article_reindex\"}[1h]))",
-          "legendFormat": "{{job_type}} / {{status}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Async Job Outcomes (Last 1h)",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "搜索采样评审命中情况，观察 1%-5% 采样是否真的在稳定产出样本。",
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 0,
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
-      "id": 9,
-      "options": {
-        "legend": { "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "single" }
-      },
-      "targets": [
-        {
-          "expr": "notebooklm:search_review_samples_total:increase1h",
-          "legendFormat": "{{review_mode}} / {{result}} / {{mode}} / {{execution}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Sampled Search Reviews (Last 1h)",
-      "type": "barchart"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "采样评审落盘数量与主搜索吞吐并排看，判断采样是否过少或过多。",
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 2,
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
-      "id": 10,
-      "options": {
-        "legend": { "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi" }
-      },
-      "targets": [
-        {
-          "expr": "sum by (review_mode, mode) (increase(notebooklm_search_review_samples_total{result=\"written\"}[1h]))",
-          "legendFormat": "written / {{review_mode}} / {{mode}}",
+          "expr": "histogram_quantile(0.95, sum(rate(notebooklm_search_e2e_duration_ms_bucket[5m])) by (le, mode))",
+          "legendFormat": "P95 {{mode}}",
           "refId": "A"
         },
         {
-          "expr": "sum by (mode) (increase(notebooklm_search_requests_total{status=\"completed\"}[1h]))",
-          "legendFormat": "completed / {{mode}}",
+          "expr": "histogram_quantile(0.5, sum(rate(notebooklm_search_e2e_duration_ms_bucket[5m])) by (le, mode))",
+          "legendFormat": "P50 {{mode}}",
           "refId": "B"
         }
       ],
-      "title": "Review Samples vs Completed Searches (1h)",
+      "title": "Search E2E 延迟 P50/P95",
       "type": "timeseries"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "LLM 评审的相关性、新鲜度、权威性、覆盖度和总体分数均值。",
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 2,
-          "max": 1,
-          "min": 0,
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 44 },
-      "id": 11,
-      "options": {
-        "legend": { "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi" }
-      },
+      "fieldConfig": { "defaults": { "decimals": 0, "unit": "ms" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "id": 2,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
         {
-          "expr": "notebooklm:search_review_score:avg_rate5m",
-          "legendFormat": "{{reviewer}} / {{score_type}} / {{mode}} / {{execution}}",
+          "expr": "histogram_quantile(0.95, sum(rate(notebooklm_search_stage_duration_ms_bucket[5m])) by (le, stage, mode, status))",
+          "legendFormat": "P95 {{stage}} {{mode}} {{status}}",
           "refId": "A"
         }
       ],
-      "title": "Search Review Score Avg (5m)",
+      "title": "Search 阶段延迟 P95",
       "type": "timeseries"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "最近 1 小时被规则或 LLM 标记为 bad case 的搜索样本数量。",
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 0,
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 44 },
-      "id": 12,
-      "options": {
-        "legend": { "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "single" }
-      },
+      "fieldConfig": { "defaults": { "decimals": 2, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 12 },
+      "id": 3,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
         {
-          "expr": "notebooklm:search_review_bad_cases_total:increase1h",
-          "legendFormat": "{{reviewer}} / {{reason}} / {{mode}} / {{execution}}",
+          "expr": "sum(rate(notebooklm_search_partial_failure_total[5m])) by (mode)",
+          "legendFormat": "{{mode}}",
           "refId": "A"
         }
       ],
-      "title": "Search Review Bad Cases (Last 1h)",
-      "type": "barchart"
+      "title": "部分失败 rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "decimals": 2, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 12 },
+      "id": 4,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "expr": "sum(rate(notebooklm_search_dedup_total[5m])) by (mode, dedup_type)",
+          "legendFormat": "{{mode}} {{dedup_type}}",
+          "refId": "A"
+        }
+      ],
+      "title": "去重 rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "decimals": 2, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 12 },
+      "id": 5,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "expr": "sum(rate(notebooklm_search_empty_slate_total[5m])) by (mode, reason)",
+          "legendFormat": "{{mode}} {{reason}}",
+          "refId": "A"
+        }
+      ],
+      "title": "空 Slate rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "decimals": 1, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "id": 6,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(notebooklm_search_slate_card_count_bucket[5m])) by (le, mode))",
+          "legendFormat": "P95 {{mode}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(notebooklm_search_slate_card_count_sum[5m])) / sum(rate(notebooklm_search_slate_card_count_count[5m]))",
+          "legendFormat": "avg",
+          "refId": "B"
+        }
+      ],
+      "title": "Slate 卡片数",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "decimals": 2, "min": 0, "max": 1, "unit": "percentunit" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "id": 7,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "expr": "sum(rate(notebooklm_search_authority_proxy_at10_sum[5m])) by (mode) / sum(rate(notebooklm_search_authority_proxy_at10_count[5m])) by (mode)",
+          "legendFormat": "authority@10 {{mode}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(notebooklm_search_diversity_proxy_at10_sum[5m])) by (mode) / sum(rate(notebooklm_search_diversity_proxy_at10_count[5m])) by (mode)",
+          "legendFormat": "diversity@10 {{mode}}",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(notebooklm_search_novelty_proxy_at10_sum[5m])) by (mode) / sum(rate(notebooklm_search_novelty_proxy_at10_count[5m])) by (mode)",
+          "legendFormat": "novelty@10 {{mode}}",
+          "refId": "C"
+        }
+      ],
+      "title": "质量代理 (Authority/Diversity/Novelty@10)",
+      "type": "timeseries"
     }
   ],
   "refresh": "10s",
@@ -349,8 +157,8 @@
   "templating": { "list": [] },
   "time": { "from": "now-6h", "to": "now" },
   "timezone": "browser",
-  "title": "NotebookLM Search",
+  "title": "Search",
   "uid": "notebooklm-search",
-  "version": 5,
+  "version": 1,
   "weekStart": ""
 }

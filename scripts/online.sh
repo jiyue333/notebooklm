@@ -33,140 +33,19 @@ load_root_env() {
   set +a
 }
 
-run_python_module() {
-  local module="$1"
-  shift
-  load_root_env
-  (cd "$ROOT_DIR" && "$(resolve_python)" -m "$module" "$@")
-}
-
-seed_notebooks() {
-  run_python_module backend.evals.online_seed.create_demo_notebooks "$@"
-}
-
-seed_search() {
-  run_python_module backend.evals.online_seed.create_search_sessions "$@"
-}
-
-seed_import() {
-  run_python_module backend.evals.online_seed.create_import_jobs "$@"
-}
-
-seed_chat() {
-  run_python_module backend.evals.online_seed.create_chat_threads "$@"
-}
-
-seed_summary() {
-  run_python_module backend.evals.online_seed.create_summary_runs "$@"
-}
-
-seed_all() {
-  seed_notebooks "${@}"
-  seed_search "${@}"
-  seed_import "${@}"
-  seed_chat "${@}"
-  seed_summary "${@}"
-}
-
-inspect_redis() {
-  load_root_env
-  (
-    cd "$ROOT_DIR/backend"
-    PYTHONPATH="$ROOT_DIR/backend" "$(resolve_python)" - <<'PY'
-import asyncio
-from app.modules.tracker.redis import inspect_redis_keyspace
-
-async def main():
-    result = await inspect_redis_keyspace()
-    print(f"keys_scanned={result.keys_scanned}")
-    print(f"bigkeys={result.bigkey_count}")
-    print(f"hotkeys={result.hotkey_count}")
-
-asyncio.run(main())
-PY
-  )
-}
-
-show_search_samples() {
-  local latest
-  latest="$(find "$ROOT_DIR/backend/evals/reports/search_samples" -type f -name '*.jsonl' | sort | tail -n 1)"
-  if [[ -z "$latest" ]]; then
-    echo "no search sample report found"
-    return
-  fi
-  echo "=============== latest search samples ==============="
-  echo "$latest"
-  tail -n 20 "$latest"
-}
-
-show_redis_report() {
-  local latest="$ROOT_DIR/backend/evals/reports/redis/inspection-latest.json"
-  if [[ ! -f "$latest" ]]; then
-    echo "redis inspection report not found"
-    return
-  fi
-  echo "=============== latest redis report ==============="
-  echo "$latest"
-  cat "$latest"
-}
-
 usage() {
   cat <<'EOF'
 =============== online.sh ===============
 用法:
-  ./scripts/online.sh seed notebooks [附加参数...]  - 创建测试用笔记本 (Notebooks)
-  ./scripts/online.sh seed search [附加参数...]     - 创建搜索会话 (Search)
-  ./scripts/online.sh seed import [附加参数...]     - 创建导入任务 (Import)
-  ./scripts/online.sh seed chat [附加参数...]       - 创建聊天对话 (Chat)
-  ./scripts/online.sh seed summary [附加参数...]    - 创建摘要任务 (Summary)
-  ./scripts/online.sh seed all [附加参数...]        - 一键执行所有上述数据填充操作
-  ./scripts/online.sh inspect redis                 - 检查 Redis 状态和使用情况
-  ./scripts/online.sh show search-samples           - 显示最新的搜索采样报告
-  ./scripts/online.sh show redis-report             - 显示最新的 Redis 检查报告
+  ./scripts/online.sh --help    - 显示此帮助
 
-注意事项:
-  - search/import/chat/summary 都支持不传 --input 的一键触发模式
-  - seed all 会先创建 notebook，然后再串行触发 search/import/chat/summary 的创建
+注意: evals 和 seed 工具已随 ADR 重写移除，后续会重建。
 EOF
 }
 
 COMMAND="${1:-}"
-TARGET="${2:-}"
-EXTRA_ARGS=("${@:3}")
 
 case "$COMMAND" in
-  seed)
-    case "$TARGET" in
-      notebooks) seed_notebooks "${EXTRA_ARGS[@]}" ;;
-      search) seed_search "${EXTRA_ARGS[@]}" ;;
-      import) seed_import "${EXTRA_ARGS[@]}" ;;
-      chat) seed_chat "${EXTRA_ARGS[@]}" ;;
-      summary) seed_summary "${EXTRA_ARGS[@]}" ;;
-      all) seed_all "${EXTRA_ARGS[@]}" ;;
-      *)
-        usage
-        exit 1
-        ;;
-    esac
-    ;;
-  inspect)
-    if [[ "$TARGET" == "redis" ]]; then
-      inspect_redis
-    else
-      usage
-      exit 1
-    fi
-    ;;
-  show)
-    case "$TARGET" in
-      search-samples) show_search_samples ;;
-      redis-report) show_redis_report ;;
-      *)
-        usage
-        exit 1
-        ;;
-    esac
-    ;;
   --help|-h|help)
     usage
     ;;

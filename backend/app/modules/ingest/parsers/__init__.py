@@ -1,1 +1,1 @@
-"""Parser adapters for ingestion."""
+"""Parser adapters for the ingest pipeline."""

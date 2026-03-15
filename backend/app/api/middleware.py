@@ -13,6 +13,8 @@ from app.infra.telemetry.metrics import observe_http_request
 
 logger = structlog.get_logger(__name__)
 
+_SILENT_PATHS = frozenset({"/api/metrics", "/api/health"})
+
 
 class RequestContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
@@ -41,11 +43,12 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         )
         response.headers["X-Request-ID"] = request_id
 
-        logger.info(
-            "request.completed",
-            status_code=response.status_code,
-            duration_ms=duration_ms,
-        )
+        if route_path not in _SILENT_PATHS:
+            logger.info(
+                "request.completed",
+                status_code=response.status_code,
+                duration_ms=duration_ms,
+            )
         return response
 
 

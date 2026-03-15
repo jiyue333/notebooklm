@@ -242,10 +242,11 @@ function isSameArticleSnapshot(current, next) {
 
 const createChatMessageId = () => `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const CHAT_ROUTE_LABELS = {
-    CURRENT_ARTICLE: '当前文章',
-    RELATED_ARTICLES: '相关文章',
-    EVIDENCE_LOOKUP: '证据检索',
-    GENERAL: '通用问题',
+    article_grounded: '当前文章',
+    recommendation: '来自你的笔记',
+    notebook_research: '在当前笔记研究',
+    general: '通用回答',
+    ambiguous: '待确认范围',
 };
 
 const ARTICLE_MARKDOWN_REMARK_PLUGINS = [remarkGfm];
@@ -556,6 +557,7 @@ const I = {
     toc: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z" /></svg>,
     font: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9.93 13.5h4.14L12 7.98 9.93 13.5zM20 2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-4.05 16.5l-1.14-3H9.17l-1.12 3H5.96l5.11-13h1.86l5.11 13h-2.09z" /></svg>,
     deleteChat: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" /></svg>,
+    openLink: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z" /></svg>,
     // Source-type icons (rendered in theme color via CSS)
     arxiv: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L14.85 9.15L22 12L14.85 14.85L12 22L9.15 14.85L2 12L9.15 9.15L12 2Z" /></svg>,
     github: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" /></svg>,
@@ -614,6 +616,7 @@ export default function NotebookPage() {
     const [chatConversationId, setChatConversationId] = useState(null);
     const [chatInput, setChatInput] = useState('');
     const [isChatStreaming, setIsChatStreaming] = useState(false);
+    const [chatReadingCursor, setChatReadingCursor] = useState({ page: null, sectionId: null, blockId: null });
     const [showTranslation, setShowTranslation] = useState(false);
     const [translationText, setTranslationText] = useState('');
     const [translationLoading, setTranslationLoading] = useState(false);
@@ -734,7 +737,12 @@ export default function NotebookPage() {
         setTranslationError('');
         setPdfOutline([]);
         setPdfRequestedPageNumber(null);
-    }, [selectedArticle?.id]);
+        setChatReadingCursor({
+            page: null,
+            sectionId: selectedArticle?.toc?.[0]?.id || null,
+            blockId: null,
+        });
+    }, [selectedArticle?.id, selectedArticle?.toc]);
 
     useEffect(() => {
         if (!id || !selectedArticle || selectedArticle.contentReady || selectedArticle.parseStatus === 'failed') {
@@ -816,7 +824,7 @@ export default function NotebookPage() {
                     setSummaryText((prev) => `${prev}${token}`);
                 },
             });
-            setSummaryText(result.summary);
+            setSummaryText(result.summaryText || result.summary || '');
         } catch (err) {
             if (isAuthError(err)) {
                 redirectToLogin();
@@ -874,7 +882,16 @@ export default function NotebookPage() {
         setChatMessages((prev) => [
             ...prev,
             { id: createChatMessageId(), role: 'user', content: prompt },
-            { id: pendingAssistantId, role: 'assistant', content: '', citations: [], route: null, isStreaming: true },
+            {
+                id: pendingAssistantId,
+                role: 'assistant',
+                content: '',
+                relatedArticles: [],
+                evidenceSpans: [],
+                route: null,
+                routeBadge: '',
+                isStreaming: true,
+            },
         ]);
         setChatInput('');
         setIsChatStreaming(true);
@@ -887,12 +904,19 @@ export default function NotebookPage() {
                 conversationId: chatConversationId,
             });
         }
+        const recentTurns = chatMessages
+            .slice(-6)
+            .map((item) => ({ role: item.role, content: item.content || '' }))
+            .filter((item) => item.content.trim());
         try {
             const result = await appApi.ai.streamAssistant({
                 notebookId: notebook.id,
                 articleId: selectedArticle?.id,
                 conversationId: chatConversationId,
                 message: prompt,
+                readingCursor: chatReadingCursor,
+                recentHighlights: [],
+                recentTurns,
                 onToken: (token) => {
                     setChatMessages((prev) => prev.map((msg) => (
                         msg.id === pendingAssistantId
@@ -906,9 +930,11 @@ export default function NotebookPage() {
                 msg.id === pendingAssistantId
                     ? {
                         ...msg,
-                        content: result.reply || msg.content,
-                        citations: result.citations || [],
+                        content: result.answer || msg.content,
+                        relatedArticles: result.relatedArticles || [],
+                        evidenceSpans: result.evidenceSpans || [],
                         route: result.route || null,
+                        routeBadge: result.routeBadge || '',
                         isStreaming: false,
                     }
                     : msg
@@ -923,8 +949,10 @@ export default function NotebookPage() {
                     ? {
                         ...msg,
                         content: `请求失败：${err.message || '请稍后重试'}`,
-                        citations: [],
+                        relatedArticles: [],
+                        evidenceSpans: [],
                         route: null,
+                        routeBadge: '',
                         isStreaming: false,
                     }
                     : msg
@@ -947,6 +975,11 @@ export default function NotebookPage() {
                 next.set('articleId', article.id);
                 return next;
             }, { replace: true });
+            setChatReadingCursor({
+                page: null,
+                sectionId: article.toc?.[0]?.id || null,
+                blockId: null,
+            });
         });
     }, [selectedArticle?.id, setSearchParams]);
 
@@ -955,6 +988,11 @@ export default function NotebookPage() {
         if (articleRenderMode === 'pdf') {
             if (tocItem?.pageNumber) {
                 setPdfRequestedPageNumber(tocItem.pageNumber);
+                setChatReadingCursor({
+                    page: tocItem.pageNumber,
+                    sectionId: tocItem.id || null,
+                    blockId: null,
+                });
             }
             return;
         }
@@ -971,6 +1009,11 @@ export default function NotebookPage() {
         container.scrollTo({
             top: Math.max(nextScrollTop, 0),
             behavior: 'smooth',
+        });
+        setChatReadingCursor({
+            page: null,
+            sectionId: tocItem?.id || null,
+            blockId: null,
         });
     }, [articleRenderMode]);
 
@@ -1091,8 +1134,8 @@ export default function NotebookPage() {
         if (citation.notebookTitle) {
             parts.push(citation.notebookTitle);
         }
-        if (Array.isArray(citation.matchedBy) && citation.matchedBy.length > 0) {
-            parts.push(citation.matchedBy.join(' + '));
+        if (citation.whySimilar) {
+            parts.push(citation.whySimilar);
         }
         return parts.join(' · ');
     }, []);
@@ -1306,7 +1349,20 @@ export default function NotebookPage() {
                         <>
                             <div className="nb-article-toolbar">
                                 <div className="nb-toolbar-left">
-                                    <h2 className="nb-toolbar-title">{selectedArticle.title}</h2>
+                                    <div className="nb-toolbar-title-row">
+                                        <h2 className="nb-toolbar-title">{selectedArticle.title}</h2>
+                                        {selectedArticle.sourceUrl ? (
+                                            <a
+                                                href={selectedArticle.sourceUrl}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="nb-toolbar-source-link"
+                                                title="打开链接"
+                                            >
+                                                {I.openLink}
+                                            </a>
+                                        ) : null}
+                                    </div>
                                     <div className="nb-toolbar-meta">
                                         <span>{selectedArticle.author || '未知来源'}</span>
                                         <span>·</span>
@@ -1435,7 +1491,7 @@ export default function NotebookPage() {
                                         >
                                             {msg.role === 'assistant' && msg.route && (
                                                 <div className="nb-chat-route-chip">
-                                                    {CHAT_ROUTE_LABELS[msg.route] || msg.route}
+                                                    {msg.routeBadge || CHAT_ROUTE_LABELS[msg.route] || msg.route}
                                                 </div>
                                             )}
                                             {msg.content ? (
@@ -1447,9 +1503,24 @@ export default function NotebookPage() {
                                             ) : (
                                                 <div>{msg.isStreaming ? '正在生成...' : ''}</div>
                                             )}
-                                            {msg.role === 'assistant' && Array.isArray(msg.citations) && msg.citations.length > 0 && (
+                                            {msg.role === 'assistant' && Array.isArray(msg.evidenceSpans) && msg.evidenceSpans.length > 0 && (
+                                                <div className="nb-chat-evidence-list">
+                                                    {msg.evidenceSpans.slice(0, 3).map((span, spanIndex) => (
+                                                        <div
+                                                            key={`${span.articleId || 'article'}-${span.chunkId || span.sectionId || spanIndex}`}
+                                                            className="nb-chat-evidence-item"
+                                                        >
+                                                            <span className="nb-chat-evidence-label">
+                                                                {span.role || span.sectionId || `证据 ${spanIndex + 1}`}
+                                                            </span>
+                                                            <span className="nb-chat-evidence-text">{span.text}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            {msg.role === 'assistant' && Array.isArray(msg.relatedArticles) && msg.relatedArticles.length > 0 && (
                                                 <div className="nb-chat-citations">
-                                                    {msg.citations.map((citation) => (
+                                                    {msg.relatedArticles.map((citation) => (
                                                         <button
                                                             key={`${citation.notebookId}-${citation.articleId}`}
                                                             type="button"

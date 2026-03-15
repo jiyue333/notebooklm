@@ -5,7 +5,7 @@ function normalizeText(value) {
 }
 
 function escapeMarkdownText(value) {
-    return value.replace(/([\\`*_{}\[\]()#+\-.!|>])/g, '\\$1');
+    return value.replace(/([\\`*_{}[\]()#+\-.!|>])/g, '\\$1');
 }
 
 function cleanInlineText(value) {

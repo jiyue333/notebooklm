@@ -178,23 +178,6 @@ def traced(span_name: str, *, attrs: dict | None = None) -> Callable:
     return decorator
 
 
-def start_span_now(name: str, *, attributes: dict | None = None) -> "_Span | None":
-    tracer = get_tracer()
-    if tracer is None:
-        return None
-    span = tracer.start_span(name)
-    _apply_span_attributes(span, attributes or {})
-    return span
-
-
-def finish_span(span: "_Span | None", *, attributes: dict | None = None, error: Exception | None = None) -> None:
-    if span is None:
-        return
-    _apply_span_attributes(span, attributes or {})
-    if error is not None:
-        _record_span_exception(span, error)
-    span.end()
-
 
 def _apply_span_attributes(span: "_Span | None", attributes: dict) -> None:
     if span is None or not attributes:

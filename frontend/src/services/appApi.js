@@ -669,12 +669,12 @@ const mockProvider = {
         const notebook = getNotebookRecord(notebookId);
         const article = notebook.articles.find((item) => item.id === articleId);
         if (!article) throw new Error('未找到对应文章');
-        return buildMockSummary(article);
+        return normalizeSummaryStreamPayload(buildMockSummary(article));
     },
 
     async streamSummary({ notebookId, articleId, onToken }) {
         const result = await mockProvider.generateSummary({ notebookId, articleId });
-        const chunks = result.summary.match(/.{1,24}/g) || [];
+        const chunks = result.summaryText.match(/.{1,24}/g) || [];
         for (const chunk of chunks) {
             await wait(60);
             onToken?.(chunk);
@@ -686,9 +686,10 @@ const mockProvider = {
         await wait(850);
         const notebook = getNotebookRecord(notebookId);
         const article = notebook.articles.find((item) => item.id === articleId) || notebook.articles[0];
-        return {
+        return normalizeChatStreamPayload({
             conversationId: conversationId || `conv-${notebookId}`,
-            route: 'RELATED_ARTICLES',
+            route: 'recommendation',
+            routeBadge: '来自你的笔记',
             reply: `基于《${article?.title || notebook.title}》的 mock 回复：已为“${message}”找到相关资料。正式后端会返回真实检索结果和引用。`,
             citations: article ? [{
                 articleId: article.id,
@@ -699,17 +700,20 @@ const mockProvider = {
                 score: 0.12,
                 matchedBy: ['lexical', 'semantic'],
             }] : [],
-        };
+        });
     },
 
-    async streamAssistant({ notebookId, articleId, conversationId, message, onToken }) {
+    async streamAssistant({ notebookId, articleId, conversationId, message, readingCursor, recentHighlights, recentTurns, onToken }) {
         const result = await mockProvider.askAssistant({
             notebookId,
             articleId,
             conversationId,
             message,
+            readingCursor,
+            recentHighlights,
+            recentTurns,
         });
-        const chunks = result.reply.match(/.{1,24}/g) || [];
+        const chunks = result.answer.match(/.{1,24}/g) || [];
         for (const chunk of chunks) {
             await wait(60);
             onToken?.(chunk);
@@ -807,8 +811,9 @@ const consumeSseStream = async (response, { onToken } = {}) => {
 
             if (rawEvent) {
                 const { event, payload } = parseSseEvent(rawEvent);
-                if (event === 'token' && payload?.content) {
-                    onToken?.(payload.content, payload);
+                const tokenText = payload?.content ?? payload?.text ?? '';
+                if (event === 'token' && tokenText) {
+                    onToken?.(tokenText, payload);
                 } else if (event === 'done') {
                     finalPayload = payload;
                 } else if (event === 'error') {
@@ -922,6 +927,22 @@ const request = async (path, { method = 'GET', body, headers = {}, timeoutMs = r
     }
 };
 
+const normalizeSearchItem = (item = {}) => ({
+    id: item.id || null,
+    title: item.title || '未命名来源',
+    url: item.url || '',
+    sourceName: item.sourceName || '',
+    sourceTypeBadge: item.sourceTypeBadge || '',
+    publishedAt: item.publishedAt || null,
+    authorityBadge: item.authorityBadge || null,
+    whySelected: item.whySelected || '',
+    highlights: Array.isArray(item.highlights) ? item.highlights : [],
+    importSuggestion: item.importSuggestion || 'optional',
+    description: item.description || '',
+    author: item.author || null,
+    displayRank: item.displayRank || 0,
+});
+
 const normalizeSearchPayload = (payload) => {
     const item = payload?.item || {};
     return {
@@ -930,9 +951,64 @@ const normalizeSearchPayload = (payload) => {
         modeLabel: item.modeLabel || payload?.modeLabel || getSearchModeLabel(item.mode || payload?.mode || 'auto'),
         status: item.status || payload?.status || 'completed',
         execution: item.execution || payload?.execution || 'sync',
-        items: payload?.items || item.items || [],
+        items: (payload?.items || item.items || []).map(normalizeSearchItem),
         meta: payload?.meta || item.meta || {},
         message: payload?.message || '',
+    };
+};
+
+const normalizeSummaryStreamPayload = (payload = {}) => {
+    const summaryText = payload.summaryText || payload.summary || '';
+    return {
+        articleId: payload.articleId || null,
+        summaryText,
+        summary: summaryText,
+        route: payload.route || null,
+        confidence: payload.confidence ?? 0,
+        promptVersion: payload.promptVersion || '',
+        cacheHit: Boolean(payload.cacheHit),
+        evidenceSpans: Array.isArray(payload.evidenceSpans) ? payload.evidenceSpans : [],
+        profileTags: payload.profileTags || {},
+    };
+};
+
+const normalizeRelatedArticles = (articles = []) => articles.map((article) => ({
+    index: article.index ?? null,
+    articleId: article.articleId || article.article_id || null,
+    title: article.title || '',
+    notebookId: article.notebookId || article.notebook_id || null,
+    notebookTitle: article.notebookTitle || article.notebook_title || '',
+    whySimilar: article.whySimilar || article.why_similar || '',
+    score: article.score ?? 0,
+    snippet: article.snippet || '',
+}));
+
+const normalizeEvidenceSpans = (spans = []) => spans.map((span) => ({
+    index: span.index ?? null,
+    articleId: span.articleId || span.article_id || null,
+    chunkId: span.chunkId || span.chunk_id || null,
+    sectionId: span.sectionId || span.section_id || null,
+    text: span.text || span.bulletText || span.bullet_text || '',
+    role: span.role || '',
+    blockIds: span.blockIds || span.block_ids || [],
+}));
+
+const normalizeChatStreamPayload = (payload = {}) => {
+    const answer = payload.answer || payload.reply || '';
+    const relatedArticles = normalizeRelatedArticles(payload.relatedArticles || payload.citations || []);
+    return {
+        conversationId: payload.conversationId || null,
+        messageId: payload.messageId || null,
+        route: payload.route || null,
+        routeBadge: payload.routeBadge || '',
+        answer,
+        reply: answer,
+        evidenceSpans: normalizeEvidenceSpans(payload.evidenceSpans || []),
+        relatedArticles,
+        citations: relatedArticles,
+        confidence: payload.confidence ?? 0,
+        fallbackUsed: Boolean(payload.fallbackUsed),
+        fallbackReason: payload.fallbackReason || '',
     };
 };
 
@@ -1060,6 +1136,7 @@ const backendProvider = {
                 notebookId,
                 searchSessionId: normalized.searchSessionId,
             }),
+            { intervalMs: 1000, maxAttempts: 120 },
         );
     },
 
@@ -1151,22 +1228,39 @@ const backendProvider = {
     },
 
     async streamSummary({ notebookId, articleId, onToken }) {
-        return requestStream(
+        const payload = await requestStream(
             `/notebooks/${notebookId}/articles/${articleId}/summary/stream`,
             { onToken, timeoutMs: 60_000 },
         );
+        return normalizeSummaryStreamPayload(payload);
     },
 
-    async askAssistant({ notebookId, articleId, conversationId, message }) {
-        return backendProvider.streamAssistant({ notebookId, articleId, conversationId, message });
+    async askAssistant({ notebookId, articleId, conversationId, message, readingCursor, recentHighlights, recentTurns }) {
+        return backendProvider.streamAssistant({
+            notebookId,
+            articleId,
+            conversationId,
+            message,
+            readingCursor,
+            recentHighlights,
+            recentTurns,
+        });
     },
 
-    async streamAssistant({ notebookId, articleId, conversationId, message, onToken }) {
-        return requestStream(`/notebooks/${notebookId}/chat/stream`, {
-            body: { articleId, conversationId, message },
+    async streamAssistant({ notebookId, articleId, conversationId, message, readingCursor, recentHighlights, recentTurns, onToken }) {
+        const payload = await requestStream(`/notebooks/${notebookId}/chat/stream`, {
+            body: {
+                articleId,
+                conversationId,
+                message,
+                readingCursor,
+                recentHighlights,
+                recentTurns,
+            },
             onToken,
             timeoutMs: 60_000,
         });
+        return normalizeChatStreamPayload(payload);
     },
 
     async trackAiEvent({ notebookId, operation, action, route, articleId, conversationId }) {

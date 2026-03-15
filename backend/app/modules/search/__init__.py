@@ -1,1 +1,1 @@
-"""Source discovery and import module placeholders."""
+"""Search module – ADR-001 multi-stage retrieval pipeline."""

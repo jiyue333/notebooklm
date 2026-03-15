@@ -384,22 +384,25 @@
 
 .sp-result-item {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
     padding: 8px;
     border-radius: var(--radius-sm);
     flex-shrink: 0;
 }
 
-.sp-result-icon {
-    font-size: 1rem;
-    flex-shrink: 0;
+.sp-result-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 54px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent-color), transparent 88%);
     color: var(--accent-color);
-}
-
-.sp-result-icon svg {
-    width: 16px;
-    height: 16px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    flex-shrink: 0;
 }
 
 .sp-result-info {
@@ -407,24 +410,54 @@
     min-width: 0;
 }
 
+.sp-result-title-row,
+.sp-discover-item-title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
 .sp-result-title {
     display: block;
     font-size: 0.82rem;
     font-weight: 500;
     color: var(--title-color);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    line-height: 1.35;
 }
 
 .sp-result-desc {
     display: block;
     font-size: 0.72rem;
     color: var(--meta-color);
-    margin-top: 1px;
-    white-space: nowrap;
+    margin-top: 2px;
+    line-height: 1.45;
+}
+
+.sp-result-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--title-color), transparent 92%);
+    color: var(--meta-color);
+    font-size: 0.68rem;
+    font-weight: 600;
+}
+
+.sp-result-highlight,
+.sp-discover-item-highlight {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
-    text-overflow: ellipsis;
+    margin-top: 6px;
+    padding-left: 10px;
+    border-left: 2px solid color-mix(in srgb, var(--accent-color), transparent 55%);
+    font-size: 0.72rem;
+    line-height: 1.45;
+    color: var(--text-secondary);
 }
 
 .sp-result-more {
@@ -614,9 +647,17 @@
 }
 
 .sp-discover-item-icon {
-    font-size: 1rem;
-    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 54px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent-color), transparent 88%);
     color: var(--accent-color);
+    font-size: 0.68rem;
+    font-weight: 700;
+    flex-shrink: 0;
 }
 
 .sp-discover-item-info {
@@ -630,6 +671,15 @@
     font-weight: 500;
     color: var(--title-color);
     line-height: 1.3;
+}
+
+.sp-discover-item-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+    font-size: 0.72rem;
+    color: var(--meta-color);
 }
 
 .sp-discover-item-desc {

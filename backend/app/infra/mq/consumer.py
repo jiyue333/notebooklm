@@ -51,6 +51,8 @@ class KafkaConsumer:
             enable_auto_commit=False,
             auto_offset_reset=settings.kafka_auto_offset_reset,
             request_timeout_ms=settings.kafka_request_timeout_ms,
+            session_timeout_ms=settings.kafka_session_timeout_ms,
+            max_poll_interval_ms=settings.kafka_max_poll_interval_ms,
             **self._consumer_kwargs,
         )
         await consumer.start()
