@@ -24,7 +24,6 @@ def build_block_graph(
     toc: list[TOCNode],
 ) -> BlockGraph:
     """Parse *doc* into blocks and wire parent/next edges."""
-
     blocks = _parse_blocks(doc.clean_markdown)
     edges = _build_edges(blocks)
     _assign_sections(blocks, toc)
@@ -101,12 +100,17 @@ def _parse_blocks(md: str) -> list[Block]:
             blocks.append(_block(BlockType.LIST, text, start, i - 1))
             continue
 
-        # paragraph (default)
+        # paragraph (default) – also absorbs unrecognised structural-looking
+        # lines (e.g. "#hashtag", "####### too many hashes") so we always
+        # advance *i* and never spin on the same line.
         start = i
         while i < len(lines) and lines[i].strip() and not _is_structural(lines[i]):
             i += 1
+        if i == start:
+            i += 1
         text = "\n".join(lines[start:i])
-        blocks.append(_block(BlockType.PARAGRAPH, text, start, i - 1))
+        if text.strip():
+            blocks.append(_block(BlockType.PARAGRAPH, text, start, i - 1))
 
     return blocks
 

@@ -105,11 +105,6 @@ async def process_article_ingest(job_id: str) -> None:
                 from app.infra.storage.file_store import load_file_bytes
                 ingest_input.file_bytes = load_file_bytes(article.file_storage_key)
 
-            import resource as _resource, os as _os
-            _rss = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss
-            _rss_mb = _rss / (1024 * 1024) if _os.uname().sysname == "Darwin" else _rss / 1024
-            logger.info("worker.pre_ingest_memory", rss_mb=round(_rss_mb, 1))
-
             result = await ingest(
                 session,
                 ingest_input=ingest_input,
