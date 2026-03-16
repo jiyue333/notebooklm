@@ -21,3 +21,8 @@ plan.md
 .DS_Store
 pro.md
 chain.md
+
+# Benchmark raw datasets (downloaded, not committed)
+raw/
+# Benchmark predictions and reports (generated, not committed)
+predictions/

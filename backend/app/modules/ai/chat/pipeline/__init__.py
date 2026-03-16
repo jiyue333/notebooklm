@@ -57,7 +57,7 @@ async def run_pipeline(
     # ── C: Compose ─────────────────────────────────────────────────────
     obs.on_stage_start("compose")
     t0 = perf_counter()
-    draft = compose(inp, decision, retrieval_result)
+    draft = await compose(inp, decision, retrieval_result, user=ctx.user)
     ms = _ms(t0)
     timings["compose"] = ms
     obs.on_answer_generated()

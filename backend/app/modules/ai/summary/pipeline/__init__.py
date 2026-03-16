@@ -37,7 +37,7 @@ async def run_pipeline(
     ms = _ms(t0)
     timings["profile"] = ms
     obs.on_profiled(profile.article_type.value)
-    obs.on_stage_complete("profile", ms, article_type=profile.article_type.value)
+    obs.on_stage_complete("profile", ms)
 
     # ── B: Evidence Extraction ─────────────────────────────────────────
     obs.on_stage_start("evidence")

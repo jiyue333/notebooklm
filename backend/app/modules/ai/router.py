@@ -16,8 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_user_dep, db_session_dep
 from app.api.errors import AppError
+from app.modules.settings.runtime import get_merged_user_settings
 from app.api.response import success_response
-from app.api.sse import build_sse_error_payload, encode_sse_event
+from app.api.sse import build_sse_error_payload, encode_sse_event, iter_text_token_events
 from app.modules.ai.chat.service import send_message
 from app.modules.ai.summary.service import generate_summary
 from app.modules.notebooks import repo as notebooks_repo
@@ -33,6 +34,16 @@ _SSE_HEADERS = {
     "Connection": "keep-alive",
     "X-Accel-Buffering": "no",
 }
+
+
+def _output_lang_to_service(output_lang: str) -> str:
+    """Map frontend outputLanguage to service language code."""
+    v = (output_lang or "").lower().strip()
+    if v in ("中文", "简体中文", "zh", "zh-cn", "chinese"):
+        return "zh"
+    if v in ("english", "en"):
+        return "en"
+    return "zh"  # default to Chinese
 
 
 def _normalize_summary_evidence_spans(spans: list[Any]) -> list[dict[str, Any]]:
@@ -155,6 +166,9 @@ async def summary_stream_endpoint(
                 )
                 return
 
+            settings = get_merged_user_settings(current_user)
+            output_lang = (settings.get("outputLanguage") or "中文").strip()
+
             result = await generate_summary(
                 session,
                 article_id=article.id,
@@ -166,10 +180,13 @@ async def summary_stream_endpoint(
                 block_graph_json=article.block_graph_json,
                 quality_profile_json=article.quality_profile_json,
                 quality_score=float(article.parse_quality_score or 0),
+                language=_output_lang_to_service(output_lang),
+                user=current_user,
             )
 
             summary_text = result.summary.summary_text if result.summary else ""
-            yield encode_sse_event("token", {"text": summary_text, "content": summary_text})
+            for token_event in iter_text_token_events(summary_text):
+                yield token_event
             yield encode_sse_event("done", {
                 "articleId": article_id,
                 "summaryText": summary_text,
@@ -216,6 +233,7 @@ async def chat_stream_endpoint(
                 reading_cursor=payload.readingCursor,
                 recent_highlights=payload.recentHighlights,
                 recent_turns=payload.recentTurns,
+                user=current_user,
             )
 
             related_articles = _normalize_related_articles(result.related_articles)
@@ -224,7 +242,8 @@ async def chat_stream_endpoint(
                 "conversationId": result.conversation_id,
                 "articleId": payload.articleId,
             })
-            yield encode_sse_event("token", {"text": result.answer_text, "content": result.answer_text})
+            for token_event in iter_text_token_events(result.answer_text):
+                yield token_event
             yield encode_sse_event("done", {
                 "conversationId": result.conversation_id,
                 "messageId": result.message_id,

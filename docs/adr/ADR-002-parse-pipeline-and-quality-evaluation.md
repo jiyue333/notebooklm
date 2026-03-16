@@ -499,13 +499,13 @@ Ingest 我也不会优先盯用户行为，而是盯 “文档在系统里是否
 
 ### 指标
 
-- title accuracy
-- heading / toc F1
-- reading order score
-- anchor jump accuracy
-- table retention score
-- reference extraction score
-- summary support coverage
+- **title accuracy**（预测标题与 gold 一致的比例）
+- **heading / toc F1**（标题层级与目录结构识别的 F1：精确率与召回率的调和平均）
+- **reading order score**（解析出的阅读顺序与 gold 一致程度）
+- **anchor jump accuracy**（跳转锚点预测正确的比例）
+- **table retention score**（表格区域识别与保留质量得分）
+- **reference extraction score**（引用/参考文献块识别与抽取质量得分）
+- **summary support coverage**（摘要中能被原文支撑的句子所占比例或覆盖情况）
 
 ### 最后的判断标准
 

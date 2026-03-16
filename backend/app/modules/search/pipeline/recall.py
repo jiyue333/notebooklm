@@ -27,6 +27,7 @@ logger = structlog.get_logger(__name__)
 
 _VALID_EXA_MODES: set[str] = {"fast", "auto", "deep"}
 _ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
+_ARXIV_ABS_RE = re.compile(r"arxiv\.org/abs/(\d{4}\.\d{4,5})", re.IGNORECASE)
 _ACADEMIC_ROLES = {
     QueryRole.PRIMARY,
     QueryRole.TERMINOLOGY,
@@ -49,33 +50,39 @@ async def recall(
     academic_client = httpx.AsyncClient(
         timeout=20.0,
         follow_redirects=True,
-        headers={"User-Agent": "notebooklm-search/1.0"},
+        headers={
+            "User-Agent": "notebooklm-search/1.0 (mailto:notebooklm@example.com)",
+        },
     )
     try:
-        tasks = [
-            _search_one_family(
-                exa_client,
-                academic_client,
-                family,
-                exa_api_key=exa_api_key,
-                search_mode=search_mode,
-                source_mix=source_mix,
-            )
-            for family in families
-        ]
-        nested_results = await asyncio.gather(*tasks, return_exceptions=True)
-
         candidates: list[RawCandidate] = []
-        for family, result in zip(families, nested_results):
-            if isinstance(result, BaseException):
-                logger.warning(
-                    "search.recall.family_failed",
-                    role=family.role.value,
-                    query=family.query_text[:80],
-                    error=str(result),
+        batch_size = 3
+        for batch_start in range(0, len(families), batch_size):
+            batch = families[batch_start : batch_start + batch_size]
+            tasks = [
+                _search_one_family(
+                    exa_client,
+                    academic_client,
+                    family,
+                    exa_api_key=exa_api_key,
+                    search_mode=search_mode,
+                    source_mix=source_mix,
                 )
-                continue
-            candidates.extend(result)
+                for family in batch
+            ]
+            nested_results = await asyncio.gather(*tasks, return_exceptions=True)
+            for family, result in zip(batch, nested_results):
+                if isinstance(result, BaseException):
+                    logger.warning(
+                        "search.recall.family_failed",
+                        role=family.role.value,
+                        query=family.query_text[:80],
+                        error=str(result),
+                    )
+                    continue
+                candidates.extend(result)
+            if batch_start + batch_size < len(families):
+                await asyncio.sleep(0.5)
 
         if search_mode == "deep":
             candidates.extend(
@@ -304,7 +311,8 @@ async def _search_arxiv_family(
     root = ET.fromstring(response.text)
     candidates: list[RawCandidate] = []
     for index, entry in enumerate(root.findall("atom:entry", _ATOM_NS), start=1):
-        raw_url = _entry_text(entry, "atom:id")
+        abs_url = _entry_text(entry, "atom:id")
+        raw_url = _arxiv_abs_to_pdf(abs_url) if abs_url else ""
         canonical_url = _canonicalize_url(raw_url) if raw_url else ""
         title = re.sub(r"\s+", " ", _entry_text(entry, "atom:title")).strip() or "Untitled result"
         summary = re.sub(r"\s+", " ", _entry_text(entry, "atom:summary")).strip() or None
@@ -314,7 +322,7 @@ async def _search_arxiv_family(
         candidates.append(
             RawCandidate(
                 provider=provider,
-                provider_result_id=raw_url,
+                provider_result_id=abs_url or raw_url,
                 raw_url=raw_url,
                 canonical_url=canonical_url,
                 title=title,
@@ -324,7 +332,7 @@ async def _search_arxiv_family(
                 domain="arxiv.org",
                 preview_markdown=summary[:500] if summary else None,
                 highlights=highlights,
-                raw_payload={"source": "arxiv", "entry_id": raw_url},
+                raw_payload={"source": "arxiv", "entry_id": abs_url or raw_url},
                 query_role=family.role,
                 display_rank=index + rank_offset,
             )
@@ -390,6 +398,14 @@ def _build_preview(result: dict, highlights: list[str]) -> str | None:
     if isinstance(text, str) and text.strip():
         return text.strip()[:500]
     return None
+
+
+def _arxiv_abs_to_pdf(url: str) -> str:
+    """Convert arxiv abs page URL to PDF URL for direct paper import."""
+    m = _ARXIV_ABS_RE.search(url)
+    if m:
+        return f"https://arxiv.org/pdf/{m.group(1)}.pdf"
+    return url
 
 
 def _canonicalize_url(raw_url: str) -> str:

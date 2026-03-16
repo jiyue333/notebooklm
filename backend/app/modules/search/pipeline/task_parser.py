@@ -1,13 +1,21 @@
 """Stage A – Task Parsing.
 
 Converts a raw user query + notebook context into a structured TaskSpec.
-First version is rule-based (keyword matching + heuristics).
-A future iteration can delegate to an LLM for deeper understanding.
+
+Two implementations:
+  - ``parse_task``       : rule-based (keyword matching + heuristics), always available
+  - ``parse_task_llm``   : LLM-based via Grok/OpenAI-compatible API, optional
+
+The pipeline orchestrator picks which to call based on
+``settings.search_use_llm_task_parser``.
 """
 
 from __future__ import annotations
 
+import json
 import re
+
+import structlog
 
 from app.modules.search.pipeline.types import (
     CoverageFacet,
@@ -17,6 +25,8 @@ from app.modules.search.pipeline.types import (
     TaskSpec,
     TimeSensitivity,
 )
+
+logger = structlog.get_logger(__name__)
 
 # ── keyword banks ──────────────────────────────────────────────────────────
 
@@ -188,3 +198,128 @@ def _detect_novelty_requirement(notebook: NotebookContext) -> TimeSensitivity:
     if len(notebook.existing_article_urls) >= 3:
         return TimeSensitivity.MEDIUM
     return TimeSensitivity.LOW
+
+
+# ---------------------------------------------------------------------------
+# LLM-based task parsing
+# ---------------------------------------------------------------------------
+
+_LLM_SYSTEM_PROMPT = """\
+You are a search task analyser for a research notebook application.
+Given a user query and notebook context, output a JSON object with these fields:
+
+{
+  "intent": one of "explore","compare","answer","literature_review","find_primary_source",
+  "domain": one of "cs","biomed","policy","finance","general",
+  "time_sensitivity": one of "high","medium","low",
+  "expected_source_mix": list of "web","paper","pdf","official_doc",
+  "coverage_facets": list of "overview","recent","primary","critique","implementation",
+  "primary_source_preference": one of "high","medium","low",
+  "notebook_novelty_requirement": one of "high","medium","low"
+}
+
+Rules:
+- "intent" reflects what the user truly wants: explore a topic, compare options, answer a specific question, do a literature review, or find primary sources.
+- "time_sensitivity" is "high" only if the query explicitly asks for recent/latest/newest content.
+- "coverage_facets" should include ALL relevant facets the search should cover.
+- If the notebook already has many articles, set "notebook_novelty_requirement" to "high".
+- Output ONLY valid JSON, no markdown fencing, no extra text.\
+"""
+
+
+async def parse_task_llm(
+    query: str,
+    notebook: NotebookContext,
+) -> TaskSpec:
+    """Use an LLM to parse the user query into a TaskSpec.
+
+    Falls back to rule-based parsing on any failure.
+    """
+    try:
+        from langchain_openai import ChatOpenAI
+        from pydantic import SecretStr
+
+        from app.core.config import get_settings
+
+        settings = get_settings()
+
+        api_key = settings.lite_llm_api_key or settings.grok_api_key
+        base_url = settings.lite_llm_base_url if settings.lite_llm_api_key else settings.grok_base_url
+        model = settings.lite_llm_model if settings.lite_llm_api_key else settings.grok_model
+        timeout = settings.lite_llm_timeout
+
+        if not api_key:
+            logger.info("search.task_parser.llm_no_key", msg="No LLM API key set, using rules")
+            return parse_task(query, notebook)
+
+        llm = ChatOpenAI(
+            model=model,
+            api_key=SecretStr(api_key),
+            base_url=base_url,
+            temperature=0.0,
+            max_retries=2,
+            timeout=float(timeout),
+        )
+
+        existing_info = ""
+        if notebook.existing_article_titles:
+            titles = ", ".join(notebook.existing_article_titles[:8])
+            existing_info = f"\nNotebook already contains: {titles}"
+
+        user_msg = (
+            f"User query: {query}\n"
+            f"Notebook title: {notebook.notebook_title}"
+            f"{existing_info}\n"
+            f"Number of existing articles: {len(notebook.existing_article_urls)}"
+        )
+
+        response = await llm.ainvoke([
+            {"role": "system", "content": _LLM_SYSTEM_PROMPT},
+            {"role": "user", "content": user_msg},
+        ])
+
+        raw = response.content.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
+
+        data = json.loads(raw)
+        return _parse_llm_output(data, notebook)
+
+    except Exception:
+        logger.warning(
+            "search.task_parser.llm_failed",
+            query=query[:80],
+            exc_info=True,
+        )
+        return parse_task(query, notebook)
+
+
+def _parse_llm_output(data: dict, notebook: NotebookContext) -> TaskSpec:
+    intent_map = {v.value: v for v in SearchIntent}
+    ts_map = {v.value: v for v in TimeSensitivity}
+    facet_map = {v.value: v for v in CoverageFacet}
+    mix_map = {v.value: v for v in SourceMix}
+
+    intent = intent_map.get(data.get("intent", ""), SearchIntent.EXPLORE)
+    domain = data.get("domain", "general")
+    time_sens = ts_map.get(data.get("time_sensitivity", ""), TimeSensitivity.MEDIUM)
+    source_mix = [mix_map[s] for s in data.get("expected_source_mix", ["web"]) if s in mix_map]
+    facets = [facet_map[f] for f in data.get("coverage_facets", ["overview"]) if f in facet_map]
+    primary_pref = ts_map.get(data.get("primary_source_preference", ""), TimeSensitivity.MEDIUM)
+    novelty = ts_map.get(data.get("notebook_novelty_requirement", ""), TimeSensitivity.LOW)
+
+    if not source_mix:
+        source_mix = [SourceMix.WEB]
+    if not facets:
+        facets = [CoverageFacet.OVERVIEW]
+
+    return TaskSpec(
+        intent=intent,
+        domain=domain,
+        time_sensitivity=time_sens,
+        expected_source_mix=source_mix,
+        coverage_facets=facets,
+        primary_source_preference=primary_pref,
+        notebook_novelty_requirement=novelty,
+    )

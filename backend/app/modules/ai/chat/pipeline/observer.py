@@ -28,9 +28,9 @@ class ChatPipelineObserver:
         logger.info(f"chat.{stage}_started", route=self._route, **extra)
 
     def on_stage_complete(self, stage: str, duration_ms: float, *, status: str = "success", **extra) -> None:
-        route = extra.get("route", self._route)
+        route = extra.pop("route", self._route)
         observe_chat_stage(stage=stage, route=route, status=status, duration_ms=duration_ms)
-        logger.info(f"chat.{stage}_done", route=self._route, duration_ms=duration_ms, **extra)
+        logger.info(f"chat.{stage}_done", route=route, duration_ms=duration_ms, **extra)
 
     def on_stage_error(self, stage: str, duration_ms: float, error: str) -> None:
         observe_chat_stage(stage=stage, route=self._route, status="error", duration_ms=duration_ms)

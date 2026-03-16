@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, Text
+from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infra.db.base import Base, UUIDPrimaryKeyMixin
@@ -16,7 +17,12 @@ from app.infra.db.base import Base, UUIDPrimaryKeyMixin
 class SummaryCache(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "summary_caches"  # type: ignore[assignment]
 
-    article_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    article_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("articles.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     prompt_version: Mapped[str] = mapped_column(String(32), nullable=False)
     model_provider: Mapped[str] = mapped_column(String(32), nullable=False)

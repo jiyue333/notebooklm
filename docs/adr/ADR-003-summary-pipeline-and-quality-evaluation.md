@@ -344,12 +344,12 @@ Summary 的主战场也应该是离线 benchmark。我会做一个小而精的 g
 
 ### 观察指标
 
-- faithfulness
-- coverage
-- clarity
-- concision
-- supported-sentence ratio
-- section coverage ratio
+- **faithfulness**（摘要与原文一致、不捏造的程度）
+- **coverage**（摘要对原文要点覆盖的程度）
+- **clarity**（表述是否清晰易读）
+- **concision**（是否简洁不啰嗦）
+- **supported-sentence ratio**（摘要句子中有原文证据支撑的句子所占比例）
+- **section coverage ratio**（摘要覆盖的章节数 ÷ 原文章节数）
 
 ### 打分方式
 

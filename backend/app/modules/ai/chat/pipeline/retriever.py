@@ -72,19 +72,21 @@ async def _retrieve_article_grounded(
     query_tokens = _tokenize(inp.question)
     highlight_tokens = _tokenize(" ".join(inp.recent_highlights))
     cursor_section = inp.reading_cursor.section_id if inp.reading_cursor else None
-    scored: list[tuple[ArticleChunk, float]] = []
+    scored: list[tuple[ArticleChunk, float, float]] = []  # (chunk, total_score, query_overlap)
     for chunk in chunks:
         overlap = len(query_tokens & _tokenize(chunk.chunk_text or ""))
-        score = overlap / max(len(query_tokens), 1)
+        query_score = overlap / max(len(query_tokens), 1)
+        score = query_score
         if highlight_tokens:
             score += 0.15 * (len(highlight_tokens & _tokenize(chunk.chunk_text or "")) / max(len(highlight_tokens), 1))
         if cursor_section and getattr(chunk, "section_path", None) == cursor_section:
             score += 0.25
-        scored.append((chunk, score))
+        scored.append((chunk, score, query_score))
 
     scored.sort(key=lambda x: x[1], reverse=True)
     top = scored[:5]
 
+    # Require at least some query overlap – don't return cursor-only chunks for unrelated queries
     evidence = [
         EvidenceChunk(
             article_id=inp.article_id,
@@ -94,7 +96,7 @@ async def _retrieve_article_grounded(
             score=round(s, 4),
             matched_by="lexical",
         )
-        for c, s in top if s > 0
+        for c, s, qs in top if s > 0 and qs > 0
     ]
 
     return RetrievalResult(route=ChatRoute.ARTICLE_GROUNDED, evidence_chunks=evidence)
@@ -219,7 +221,7 @@ def _cluster_evidence(
     for e in evidence:
         art_map.setdefault(e.article_id, []).append(e)
 
-    title_map = {a.id: a.title or "Untitled" for a in articles}
+    title_map = {a.id: a.title or "未命名" for a in articles}
     return [
         EvidenceCluster(
             label=title_map.get(aid, aid),
@@ -255,7 +257,7 @@ def _describe_similarity(
     current_overlap = len(_tokenize(current_text) & _tokenize(candidate_text)) if current_text else 0
 
     if current_overlap >= 6:
-        return "article synopsis overlap"
+        return "文章摘要与当前文章相似"
     if question_overlap >= 4:
-        return "topic overlap"
-    return "notebook memory overlap"
+        return "主题相关"
+    return "笔记本内相关"

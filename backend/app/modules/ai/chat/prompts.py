@@ -106,9 +106,9 @@ VERIFIER_USER = (
 # ── Route badges for UI ───────────────────────────────────────────────────
 
 ROUTE_BADGES = {
-    "article_grounded": "From this article",
-    "general": "General answer",
-    "recommendation": "From your notebooks",
-    "notebook_research": "Research in this notebook",
-    "ambiguous": "General answer",
+    "article_grounded": "来自当前文章",
+    "general": "通用回答",
+    "recommendation": "来自你的笔记本",
+    "notebook_research": "笔记本内研究",
+    "ambiguous": "通用回答",
 }

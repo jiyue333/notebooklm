@@ -3,7 +3,7 @@
 NotebookLM 是一个围绕搜索、导入和 AI 生成内容构建的研究工作台。当前仓库包含：
 
 - `frontend/`：React + Vite 前端
-- `backend/`：FastAPI API、worker、scheduler、evals
+- `backend/`：FastAPI API、worker、scheduler
 - `docker-compose.yml`：本地基础设施与观测栈
 - `scripts/*.sh`：开发、生产、benchmark、在线造数统一入口
 
@@ -83,40 +83,3 @@ cd ..
 ./scripts/dev.sh stop
 ```
 
-# =============== 目录说明 ===============
-
-- `backend/app/modules/`：业务模块
-- `backend/app/infra/`：基础设施能力
-- `backend/app/modules/tracker/`：业务观测封装
-- `backend/evals/`：在线造数、离线 benchmark、报告与 demo 资产
-- `frontend/src/`：前端页面、组件、API 调用
-- `docker/`：Prometheus、Grafana、Loki、Tempo 等配置
-- `scripts/`：统一脚本入口
-
-# =============== 观测与测试 ===============
-
-开发模式常用入口：
-
-- 前端：`http://127.0.0.1:5173`
-- API：`http://127.0.0.1:8080/api`
-- 健康检查：`http://127.0.0.1:8080/api/health`
-- Metrics：`http://127.0.0.1:8080/api/metrics`
-- Grafana：`http://127.0.0.1:3000`
-
-运行 benchmark：
-
-```bash
-./scripts/benchmark.sh build-datasets all
-./scripts/benchmark.sh run all
-./scripts/benchmark.sh gate all
-./scripts/benchmark.sh load-test search
-```
-
-运行在线造数与巡检：
-
-```bash
-./scripts/online.sh seed notebooks --count 3
-./scripts/online.sh seed all --count 3
-./scripts/online.sh inspect redis
-./scripts/online.sh show search-samples
-```

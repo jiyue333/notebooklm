@@ -32,6 +32,8 @@ class SummaryPipelineObserver:
 
     def on_stage_complete(self, stage: str, duration_ms: float, *, status: str = "success", **extra) -> None:
         observe_summary_stage(stage=stage, status=status, duration_ms=duration_ms)
+        # Avoid duplicate article_type in extra (pipeline may pass it)
+        extra = {k: v for k, v in extra.items() if k != "article_type"}
         logger.info(
             f"summary.{stage}_done",
             article_type=self._article_type,

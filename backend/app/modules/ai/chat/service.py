@@ -29,6 +29,7 @@ async def send_message(
     reading_cursor: dict | None = None,
     recent_highlights: list[str] | None = None,
     recent_turns: list[dict[str, str]] | None = None,
+    user=None,
 ) -> ChatResult:
     """Process a chat message and return a structured result.
 
@@ -84,14 +85,14 @@ async def send_message(
         recent_highlights=recent_highlights or [],
         recent_turns=turns,
     )
-    ctx = ChatContext(chat_input=chat_input)
+    ctx = ChatContext(chat_input=chat_input, user=user)
     result = await run_pipeline(ctx, db, observer=observer)
 
-    # Persist assistant message
-    retrieval_snapshot = json.dumps({
+    # Persist assistant message (dict for JSONB column)
+    retrieval_snapshot = json.loads(json.dumps({
         "evidence_spans": result.evidence_spans,
         "related_articles": result.related_articles,
-    }, ensure_ascii=False, default=str)
+    }, ensure_ascii=False, default=str))
 
     assistant_message = await repo.append_message(
         db,

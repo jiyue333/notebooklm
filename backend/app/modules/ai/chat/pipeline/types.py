@@ -133,6 +133,7 @@ class ChatInput:
 @dataclass(slots=True)
 class ChatContext:
     chat_input: ChatInput
+    user: object = None  # for LLM calls (GENERAL route)
 
 
 @dataclass(slots=True)

@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infra.db.base import Base, UUIDPrimaryKeyMixin
@@ -57,7 +58,7 @@ class ConversationMessage(UUIDPrimaryKeyMixin, Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False)  # "user" | "assistant"
     route: Mapped[str | None] = mapped_column(String(32), nullable=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    retrieval_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retrieval_snapshot_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")

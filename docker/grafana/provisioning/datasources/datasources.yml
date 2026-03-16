@@ -52,6 +52,7 @@ datasources:
     type: redis-datasource
     access: proxy
     url: redis://redis:6379
+    version: 1
     editable: true
     jsonData:
       client: standalone
@@ -64,8 +65,7 @@ datasources:
     uid: kafka
     type: hamedkarbasi93-kafka-datasource
     access: proxy
-    url: kafka:9092
     editable: true
     jsonData:
-      servers: kafka:9092
-      timeout: 2000
+      bootstrapServers: kafka:9092
+      healthcheckTimeout: 2000

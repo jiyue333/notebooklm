@@ -348,7 +348,7 @@ def observe_ingest_block_completeness(*, input_type: str, block_type: str, count
 
 
 def observe_summary_e2e(*, duration_ms: float) -> None:
-    SUMMARY_PIPELINE_E2E.labels().observe(duration_ms)
+    SUMMARY_PIPELINE_E2E.observe(duration_ms)
 
 
 def observe_summary_stage(*, stage: str, status: str, duration_ms: float) -> None:
@@ -368,11 +368,11 @@ def observe_summary_fallback(*, trigger: str) -> None:
 
 
 def observe_summary_cache_hit() -> None:
-    SUMMARY_CACHE_HIT.labels().inc()
+    SUMMARY_CACHE_HIT.inc()
 
 
 def observe_chat_e2e(*, duration_ms: float) -> None:
-    CHAT_PIPELINE_E2E.labels().observe(duration_ms)
+    CHAT_PIPELINE_E2E.observe(duration_ms)
 
 
 def observe_chat_stage(*, stage: str, route: str, status: str, duration_ms: float) -> None:

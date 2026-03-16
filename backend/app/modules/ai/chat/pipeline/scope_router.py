@@ -38,7 +38,15 @@ _NOTEBOOK_RESEARCH_KEYWORDS = re.compile(
 def route(chat_input: ChatInput) -> RouteDecision:
     """Classify the question and return a ``RouteDecision``."""
 
-    q = chat_input.question
+    q = chat_input.question.strip()
+
+    # Gibberish / meme / very short non-question → general
+    if len(q) <= 12 and not _ARTICLE_KEYWORDS.search(q) and not _RECOMMENDATION_KEYWORDS.search(q) and not _NOTEBOOK_RESEARCH_KEYWORDS.search(q):
+        return RouteDecision(
+            route=ChatRoute.GENERAL,
+            confidence=0.6,
+            reason="short input with no keyword signal, treat as general",
+        )
 
     article_score = _match_score(_ARTICLE_KEYWORDS, q)
     recom_score = _match_score(_RECOMMENDATION_KEYWORDS, q)

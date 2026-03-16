@@ -55,7 +55,7 @@ async def append_message(
     content: str,
     article_id: str | None = None,
     route: str | None = None,
-    retrieval_snapshot_json: str | None = None,
+    retrieval_snapshot_json: dict | None = None,
 ) -> ConversationMessage:
     msg = ConversationMessage(
         conversation_id=conversation_id,

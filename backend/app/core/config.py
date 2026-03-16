@@ -77,6 +77,17 @@ class Settings(BaseSettings):
     summary_cache_ttl_days: int = 30
     scheduler_failed_job_retention_days: int = 14
 
+    grok_api_key: str | None = None
+    grok_base_url: str = "https://api.x.ai/v1"
+    grok_model: str = "grok-3-mini-beta"
+
+    lite_llm_api_key: str | None = None
+    lite_llm_base_url: str = "https://api.openai.com/v1"
+    lite_llm_model: str = "claude-haiku-4-5-20251001"
+    lite_llm_timeout: int = 30
+
+    search_use_llm_task_parser: bool = False
+
     kafka_bootstrap_servers: str = "127.0.0.1:29092"
     kafka_topic: str = "notebook_async"
     kafka_consumer_poll_timeout_ms: int = 1000
