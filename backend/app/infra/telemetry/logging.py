@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import traceback
+from pathlib import Path
 
 import structlog
 
@@ -66,6 +67,13 @@ def setup_logging(settings: Settings | None = None) -> None:
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
 
     logging.basicConfig(level=level, format="%(message)s")
+    if getattr(settings, "log_file", None):
+        p = Path(settings.log_file)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        root = logging.getLogger()
+        # 行缓冲，每行立即刷盘，便于 Promtail 采集且重启前可见
+        stream = open(p, "a", encoding="utf-8", buffering=1)
+        root.addHandler(logging.StreamHandler(stream))
     for name in _NOISY_LOGGERS:
         logging.getLogger(name).setLevel(logging.WARNING)
 

@@ -124,6 +124,7 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     log_json: bool = True
+    log_file: str | None = None  # 设置后同时写入文件，供 Promtail 采集到 Loki
     api_metrics_port: int = 8080
     worker_metrics_port: int = 9101
     scheduler_metrics_port: int = 9102
