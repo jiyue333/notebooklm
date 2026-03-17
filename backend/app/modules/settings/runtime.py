@@ -7,20 +7,14 @@ import structlog
 from cryptography.fernet import InvalidToken
 
 from app.core.config import Settings, get_settings
+from app.core.constant import (
+    PROVIDER_ANTHROPIC,
+    PROVIDER_GEMINI,
+    PROVIDER_OLLAMA,
+    PROVIDER_OPENAI,
+)
 from app.infra.security.credential_crypto import get_credential_crypto
 from app.modules.settings.defaults import get_default_user_settings
-
-OPENAI_COMPATIBLE_PROVIDERS = {
-    "",
-    "openai_compatible",
-    "openai-compatible",
-    "openai",
-    "custom",
-    "自定义",
-    "anthropic",
-    "google",
-}
-OLLAMA_PROVIDERS = {"ollama"}
 
 logger = structlog.get_logger(__name__)
 
@@ -36,8 +30,10 @@ class ChatRuntimeConfig:
 
     @property
     def is_configured(self) -> bool:
-        if self.provider == "ollama":
+        if self.provider == PROVIDER_OLLAMA:
             return bool(self.model_name and self.api_url)
+        if self.provider in {PROVIDER_ANTHROPIC, PROVIDER_GEMINI}:
+            return bool(self.model_name and self.api_key)
         return bool(self.model_name and self.api_url and self.api_key)
 
 
@@ -52,8 +48,12 @@ class EmbeddingRuntimeConfig:
 
     @property
     def is_configured(self) -> bool:
-        if self.provider == "ollama":
+        if self.provider == PROVIDER_OLLAMA:
             return bool(self.model_name and self.api_url)
+        if self.provider == PROVIDER_GEMINI:
+            return bool(self.model_name and self.api_key)
+        if self.provider == PROVIDER_ANTHROPIC:
+            return False
         return bool(self.model_name and self.api_url and self.api_key)
 
     @property
@@ -67,19 +67,31 @@ def get_merged_user_settings(user) -> dict:
 
 
 def normalize_chat_provider(value: str | None) -> str:
-    normalized = (value or "").strip().lower()
-    if normalized in OLLAMA_PROVIDERS:
-        return "ollama"
-    return "openai_compatible"
+    normalized = (value or "").strip()
+    lowered = normalized.lower()
+    if lowered == PROVIDER_OLLAMA.lower():
+        return PROVIDER_OLLAMA
+    if lowered in {PROVIDER_ANTHROPIC.lower(), "claude"}:
+        return PROVIDER_ANTHROPIC
+    if lowered in {PROVIDER_GEMINI.lower(), "google", "google-genai", "google_genai"}:
+        return PROVIDER_GEMINI
+    if lowered in {PROVIDER_OPENAI.lower(), "openai_compatible", "openai-compatible", "custom", "自定义"}:
+        return PROVIDER_OPENAI
+    return PROVIDER_OPENAI
 
 
 def normalize_embedding_provider(value: str | None) -> str:
-    normalized = (value or "").strip().lower()
-    if normalized in OLLAMA_PROVIDERS:
-        return "ollama"
-    if normalized in OPENAI_COMPATIBLE_PROVIDERS:
-        return "openai_compatible"
-    return "openai_compatible"
+    normalized = (value or "").strip()
+    lowered = normalized.lower()
+    if lowered == PROVIDER_OLLAMA.lower():
+        return PROVIDER_OLLAMA
+    if lowered == PROVIDER_ANTHROPIC.lower():
+        return PROVIDER_ANTHROPIC
+    if lowered in {PROVIDER_GEMINI.lower(), "google", "google-genai", "google_genai"}:
+        return PROVIDER_GEMINI
+    if lowered in {PROVIDER_OPENAI.lower(), "openai_compatible", "openai-compatible", "custom", "自定义"}:
+        return PROVIDER_OPENAI
+    return PROVIDER_OPENAI
 
 
 def resolve_search_api_key(user, settings: Settings | None = None) -> tuple[str | None, str]:
@@ -230,7 +242,7 @@ def _resolve_provider_api_key(
     ciphertext: str | None,
     default_key: str | None,
 ) -> tuple[str | None, str]:
-    if provider == "ollama":
+    if provider == PROVIDER_OLLAMA:
         return None, "not_required"
     return _resolve_key(ciphertext=ciphertext, default_key=default_key)
 
@@ -247,13 +259,20 @@ def _resolve_provider_model_api(
     return (
         provider,
         _resolve_defaulted_string(merged=merged, field=model_field),
-        _normalize_api_base(_resolve_defaulted_string(merged=merged, field=api_url_field)),
+        _resolve_api_base(merged=merged, field=api_url_field),
     )
 
 
 def _resolve_defaulted_string(*, merged: dict, field: str) -> str:
     defaults = get_default_user_settings()
     return str(merged.get(field) or defaults[field]).strip()
+
+
+def _resolve_api_base(*, merged: dict, field: str) -> str:
+    defaults = get_default_user_settings()
+    if field in merged and merged[field] is not None:
+        return _normalize_api_base(str(merged[field]).strip())
+    return _normalize_api_base(str(defaults[field]).strip())
 
 
 def _normalize_api_base(api_url: str) -> str:

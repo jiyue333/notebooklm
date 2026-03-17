@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-import httpx
-
+from app.infra.ai.factory import build_embeddings_model
 from app.modules.settings.runtime import EmbeddingRuntimeConfig, resolve_embedding_runtime_config
 
 _EMBED_TIMEOUT_SECONDS = 120
@@ -37,38 +36,13 @@ class Embedder:
         if not texts or not self.is_configured:
             return None
 
-        if self._runtime_config.provider == "ollama":
-            timeout = httpx.Timeout(180.0, connect=10.0)
-            async with httpx.AsyncClient(
-                base_url=self._runtime_config.api_url,
-                timeout=timeout,
-                trust_env=False,
-            ) as client:
-                response = await client.post(
-                    "/api/embed",
-                    json={
-                        "model": self._runtime_config.model_name,
-                        "input": texts,
-                        "dimensions": self._runtime_config.output_dimensions,
-                    },
-                )
-                response.raise_for_status()
-                payload = response.json()
-            embeddings = payload.get("embeddings") or []
-            return _validate_embedding_dimensions(
-                embeddings,
-                expected_dimensions=self._runtime_config.output_dimensions,
-            )
-
-        from langchain_openai import OpenAIEmbeddings
-        from pydantic import SecretStr
-
-        api_key_secret = SecretStr(self._runtime_config.api_key) if self._runtime_config.api_key else None
-        embeddings = OpenAIEmbeddings(
-            model=self._runtime_config.model_name,
-            api_key=api_key_secret,
+        embeddings = build_embeddings_model(
+            provider=self._runtime_config.provider,
+            model_name=self._runtime_config.model_name,
             base_url=self._runtime_config.api_url,
-            request_timeout=_EMBED_TIMEOUT_SECONDS,
+            api_key=self._runtime_config.api_key,
+            output_dimensions=self._runtime_config.output_dimensions,
+            timeout=_EMBED_TIMEOUT_SECONDS,
         )
         response = await asyncio.wait_for(
             embeddings.aembed_documents(texts),

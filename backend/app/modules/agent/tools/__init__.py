@@ -1,1 +1,1 @@
-"""Agent tools package – LangChain tools shared across agents (chat, search, etc.)."""
+"""agent 共享工具集合。"""

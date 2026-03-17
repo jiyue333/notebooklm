@@ -55,25 +55,6 @@ async def create_article_ingest_job(
     )
 
 
-async def create_search_deep_job(
-    session: AsyncSession,
-    *,
-    search_session_id: str,
-    dedupe_key: str,
-    payload_json: dict,
-    created_at: datetime,
-) -> Job:
-    return await create_job(
-        session,
-        job_type="search_deep",
-        article_id=None,
-        search_session_id=search_session_id,
-        dedupe_key=dedupe_key,
-        payload_json=payload_json,
-        created_at=created_at,
-    )
-
-
 async def create_article_reindex_job(
     session: AsyncSession,
     *,

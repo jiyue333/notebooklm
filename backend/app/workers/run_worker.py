@@ -18,12 +18,12 @@ import structlog
 from app.core.config import get_settings
 from app.infra.db.session import get_session_manager
 from app.infra.mq.consumer import KafkaConsumer
-from app.infra.mq.topics import NOTEBOOK_ASYNC_TOPIC, TAG_ARTICLE_INGEST, TAG_SEARCH_DEEP
+from app.infra.mq.topics import NOTEBOOK_ASYNC_TOPIC, TAG_ARTICLE_INGEST
 from app.infra.telemetry.langsmith import configure_langsmith
 from app.infra.telemetry.logging import setup_logging
 from app.infra.telemetry.metrics import ensure_metrics_server
 from app.infra.telemetry.tracing import setup_tracing, shutdown_tracing
-from app.workers.handlers import handle_article_ingest, handle_search_deep
+from app.workers.handlers import handle_article_ingest
 
 logger = structlog.get_logger(__name__)
 
@@ -57,7 +57,6 @@ async def main() -> None:
         poll_timeout_ms=settings.kafka_consumer_poll_timeout_ms,
     )
     consumer.register_handler(TAG_ARTICLE_INGEST, handle_article_ingest)
-    consumer.register_handler(TAG_SEARCH_DEEP, handle_search_deep)
 
     consumer_available = True
     consumer_task: asyncio.Task[None] | None = None

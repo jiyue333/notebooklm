@@ -1,1 +1,1 @@
-"""AI module – summary, chat, and agent-powered search pipelines."""
+"""AI 模块：摘要、聊天与智能搜索。"""

@@ -1,8 +1,4 @@
-"""Chat system prompt – one prompt that handles all scenarios.
-
-The LLM decides whether it needs to search articles/chunks, not rules.
-Retrieval is exposed as tools the model can call.
-"""
+"""聊天提示词。"""
 
 PROMPT_VERSION = "v4.0"
 

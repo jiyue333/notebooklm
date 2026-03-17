@@ -27,6 +27,8 @@ from app.modules.settings.reindex import (
 )
 from app.modules.settings.runtime import (
     get_merged_user_settings,
+    normalize_chat_provider,
+    normalize_embedding_provider,
     resolve_embedding_profile_key_from_merged,
     resolve_embedding_runtime_config_from_merged,
 )
@@ -62,7 +64,8 @@ async def update_settings(
     payload: dict,
 ) -> dict:
     settings_json, effective_settings_json = _merge_user_settings(user=user, payload=payload)
-    _validate_search_provider(effective_settings_json)
+    settings_json = _normalize_provider_fields(settings_json)
+    effective_settings_json = _normalize_provider_fields(effective_settings_json)
 
     embedding_update = _build_embedding_update_plan(user=user, effective_settings_json=effective_settings_json)
     await _ensure_embedding_reindex_confirmed(
@@ -102,10 +105,13 @@ def _merge_user_settings(*, user: User, payload: dict) -> tuple[dict, dict]:
         default_settings=get_default_user_settings(),
     )
 
-
-def _validate_search_provider(effective_settings_json: dict) -> None:
-    if effective_settings_json.get("searchProvider") != "exa":
-        raise AppError(422, "当前仅支持 Exa 作为搜索 Provider", code="invalid_search_provider")
+def _normalize_provider_fields(settings_json: dict) -> dict:
+    normalized = {**settings_json}
+    if "modelProvider" in normalized:
+        normalized["modelProvider"] = normalize_chat_provider(normalized.get("modelProvider"))
+    if "embeddingProvider" in normalized:
+        normalized["embeddingProvider"] = normalize_embedding_provider(normalized.get("embeddingProvider"))
+    return normalized
 
 
 def _build_embedding_update_plan(*, user: User, effective_settings_json: dict) -> EmbeddingUpdatePlan:

@@ -1,0 +1,17 @@
+.git
+.cursor
+.venv
+logs
+node_modules
+frontend/node_modules
+frontend/dist
+backend/.venv
+backend/.pytest_cache
+backend/.mypy_cache
+backend/.ruff_cache
+backend/evals/reports
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.DS_Store

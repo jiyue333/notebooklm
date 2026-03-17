@@ -15,7 +15,7 @@ FRONTEND_PID_FILE="$LOG_DIR/frontend.pid"
 SYSTEM_PYTHON_BIN="$(command -v python3 || true)"
 NODE_BIN="$(command -v node || true)"
 VITE_BIN="$ROOT_DIR/frontend/node_modules/vite/bin/vite.js"
-NOTEBOOKLM_PYTHON_BIN=""
+VENV_PYTHON_BIN=""
 BACKEND_MATCH="uvicorn app.main:app"
 WORKER_MATCH="app.workers.run_worker"
 SCHEDULER_MATCH="app.workers.run_scheduler"
@@ -53,20 +53,39 @@ read_pid() {
   fi
 }
 
-resolve_notebooklm_python() {
-  if [[ -n "$NOTEBOOKLM_PYTHON_BIN" ]]; then
-    echo "$NOTEBOOKLM_PYTHON_BIN"
+resolve_backend_python() {
+  if [[ -n "$VENV_PYTHON_BIN" ]]; then
+    echo "$VENV_PYTHON_BIN"
     return
   fi
 
-  NOTEBOOKLM_PYTHON_BIN="$(
-    conda run --no-capture-output -n notebooklm python -c 'import sys; print(sys.executable)' 2>/dev/null | tail -n 1
-  )"
-  if [[ -z "$NOTEBOOKLM_PYTHON_BIN" || ! -x "$NOTEBOOKLM_PYTHON_BIN" ]]; then
-    echo "failed to resolve python executable for conda env notebooklm" >&2
+  # Prefer backend/.venv (created by uv sync), fallback to project .venv
+  if [[ -x "$ROOT_DIR/backend/.venv/bin/python" ]]; then
+    VENV_PYTHON_BIN="$ROOT_DIR/backend/.venv/bin/python"
+  elif [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
+    VENV_PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
+  else
+    echo "venv not found. Run: cd backend && uv sync" >&2
     exit 1
   fi
-  echo "$NOTEBOOKLM_PYTHON_BIN"
+  echo "$VENV_PYTHON_BIN"
+}
+
+ensure_backend_sync() {
+  if command -v uv >/dev/null 2>&1; then
+    (cd "$ROOT_DIR/backend" && uv sync --quiet)
+  else
+    local pip_bin
+    if [[ -x "$ROOT_DIR/backend/.venv/bin/pip" ]]; then
+      pip_bin="$ROOT_DIR/backend/.venv/bin/pip"
+    elif [[ -x "$ROOT_DIR/.venv/bin/pip" ]]; then
+      pip_bin="$ROOT_DIR/.venv/bin/pip"
+    else
+      echo "venv not found. Install uv and run: cd backend && uv sync" >&2
+      exit 1
+    fi
+    (cd "$ROOT_DIR/backend" && "$pip_bin" install -e . --quiet)
+  fi
 }
 
 start_detached_process() {
@@ -249,7 +268,7 @@ start_backend() {
 
   append_banner "$BACKEND_LOG" "backend"
   local python_bin
-  python_bin="$(resolve_notebooklm_python)"
+  python_bin="$(resolve_backend_python)"
   local pid
   pid="$(start_detached_process "$ROOT_DIR/backend" "$BACKEND_LOG" "$python_bin" -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8080 --no-access-log)"
   echo "$pid" > "$BACKEND_PID_FILE"
@@ -267,7 +286,7 @@ start_worker() {
 
   append_banner "$WORKER_LOG" "worker"
   local python_bin
-  python_bin="$(resolve_notebooklm_python)"
+  python_bin="$(resolve_backend_python)"
   local pid
   pid="$(start_detached_process "$ROOT_DIR/backend" "$WORKER_LOG" "$python_bin" -m app.workers.run_worker)"
   echo "$pid" > "$WORKER_PID_FILE"
@@ -285,7 +304,7 @@ start_scheduler() {
 
   append_banner "$SCHEDULER_LOG" "scheduler"
   local python_bin
-  python_bin="$(resolve_notebooklm_python)"
+  python_bin="$(resolve_backend_python)"
   local pid
   pid="$(start_detached_process "$ROOT_DIR/backend" "$SCHEDULER_LOG" "$python_bin" -m app.workers.run_scheduler)"
   echo "$pid" > "$SCHEDULER_PID_FILE"
@@ -369,11 +388,6 @@ show_logs() {
 }
 
 ensure_dev_prerequisites() {
-  if ! command -v conda >/dev/null 2>&1; then
-    echo "conda is not available in PATH"
-    exit 1
-  fi
-
   if [[ -z "$SYSTEM_PYTHON_BIN" ]]; then
     echo "python3 is not available in PATH"
     exit 1
@@ -393,6 +407,8 @@ ensure_dev_prerequisites() {
     echo "frontend/node_modules not found, run: cd frontend && npm install"
     exit 1
   fi
+
+  ensure_backend_sync
 }
 
 usage() {

@@ -6,6 +6,12 @@ from pathlib import Path
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.constant import (
+    PROVIDER_EXA,
+    PROVIDER_OLLAMA,
+    PROVIDER_OPENAI,
+)
+
 BASE_DIR = Path(__file__).resolve().parents[2]
 ROOT_DIR = Path(__file__).resolve().parents[3]
 
@@ -64,11 +70,11 @@ class Settings(BaseSettings):
 
     llm_default_api_key: str | None = None
     embedding_default_api_key: str | None = None
-    default_chat_provider: str = "ollama"
+    default_chat_provider: str = PROVIDER_OLLAMA
     default_chat_model_name: str = "qwen3.5:0.8b"
     default_chat_api_url: str = "http://127.0.0.1:11434"
-    default_search_provider: str = "exa"
-    default_embedding_provider: str = "ollama"
+    default_search_provider: str = PROVIDER_EXA
+    default_embedding_provider: str = PROVIDER_OLLAMA
     default_embedding_model_name: str = "qwen3-embedding:0.6b"
     default_embedding_api_url: str = "http://127.0.0.1:11434"
     embedding_output_dimensions: int = 1024
@@ -81,10 +87,17 @@ class Settings(BaseSettings):
     grok_base_url: str = "https://api.x.ai/v1"
     grok_model: str = "grok-3-mini-beta"
 
+    lite_llm_provider: str = PROVIDER_OPENAI
     lite_llm_api_key: str | None = None
-    lite_llm_base_url: str = "https://api.openai.com/v1"
+    lite_llm_base_url: str = "https://a-ocnfniawgw.cn-shanghai.fcapp.run"
     lite_llm_model: str = "claude-haiku-4-5-20251001"
-    lite_llm_timeout: int = 30
+    lite_llm_timeout: int = 60  # scoring 15 items can be slow; increase if score_fallback occurs
+
+    rerank_model: str = "Qwen3-Reranker-8B"
+    rerank_model_api_url: str = "https://router.tumuer.me/v1"
+    rerank_model_api_key: str | None = None
+    rerank_timeout: int = 30
+    rerank_max_concurrency: int = 5
 
     search_use_llm_task_parser: bool = False
 

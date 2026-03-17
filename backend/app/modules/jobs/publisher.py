@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.infra.mq.message import MQMessage
 from app.infra.mq.producer import KafkaProducer
-from app.infra.mq.topics import TAG_ARTICLE_INGEST, TAG_SEARCH_DEEP
+from app.infra.mq.topics import TAG_ARTICLE_INGEST
 from app.modules.jobs import repo
 from app.modules.jobs.models import Job
 
@@ -17,7 +17,6 @@ logger = structlog.get_logger(__name__)
 JOB_TAG_MAP = {
     "article_ingest": TAG_ARTICLE_INGEST,
     "article_reindex": TAG_ARTICLE_INGEST,
-    "search_deep": TAG_SEARCH_DEEP,
 }
 
 
@@ -55,7 +54,7 @@ async def publish_jobs(session: AsyncSession, jobs: list[Job]) -> None:
 
 async def _inline_fallback(jobs: list[Job]) -> None:
     """When Kafka is unavailable, run jobs inline in the current process."""
-    from app.workers.handlers import process_article_ingest, process_search_deep
+    from app.workers.handlers import process_article_ingest
 
     for job in jobs:
         if job.status == "queued":
@@ -63,8 +62,6 @@ async def _inline_fallback(jobs: list[Job]) -> None:
         try:
             if job.job_type in ("article_ingest", "article_reindex"):
                 await process_article_ingest(job.id)
-            elif job.job_type == "search_deep":
-                await process_search_deep(job.id)
         except Exception as exc:
             logger.exception("jobs.inline_fallback_failed", job_id=job.id, error=str(exc))
 

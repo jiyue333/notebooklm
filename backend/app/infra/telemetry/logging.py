@@ -6,6 +6,9 @@ Key design decisions:
     for Loki/Promtail ingestion).
   - Noisy loggers (uvicorn access, httpx, asyncpg) are silenced.
   - OTel trace context is injected when available.
+  - Log fields are ordered: stable/correlation fields first (request_id,
+    event, trace_id, span_id), then logger/level/timestamp, then HTTP
+    context, then event-specific fields (alphabetically).
 """
 
 from __future__ import annotations
@@ -18,6 +21,26 @@ import structlog
 from app.core.config import Settings, get_settings
 
 _LOGGING_CONFIGURED = False
+
+# Field order: most stable/correlation fields first for grep/jq/Loki.
+_LOG_FIELD_ORDER = (
+    "request_id",
+    "event",
+    "trace_id",
+    "span_id",
+    "logger",
+    "level",
+    "timestamp",
+    "http_method",
+    "http_path",
+    "status_code",
+    "duration_ms",
+    "elapsed_ms",
+    "search_session_id",
+    "exc_type",
+    "exc_message",
+    "exc_text",
+)
 
 try:
     from opentelemetry import trace
@@ -66,6 +89,7 @@ def setup_logging(settings: Settings | None = None) -> None:
             *shared_processors,
             structlog.processors.StackInfoRenderer(),
             exc_processor,
+            _order_log_fields,
             renderer,
         ],
         wrapper_class=structlog.stdlib.BoundLogger,
@@ -74,6 +98,18 @@ def setup_logging(settings: Settings | None = None) -> None:
     )
 
     _LOGGING_CONFIGURED = True
+
+
+def _order_log_fields(_logger, _method_name, event_dict: dict) -> dict:
+    """Reorder event_dict keys: stable fields first, then rest alphabetically."""
+    ordered: dict = {}
+    for key in _LOG_FIELD_ORDER:
+        if key in event_dict:
+            ordered[key] = event_dict[key]
+    for key in sorted(event_dict.keys()):
+        if key not in ordered:
+            ordered[key] = event_dict[key]
+    return ordered
 
 
 def _flatten_exception(_logger, _method_name, event_dict: dict) -> dict:

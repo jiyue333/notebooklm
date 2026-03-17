@@ -1,12 +1,4 @@
-"""Summary prompt – one focused prompt that adapts to article type.
-
-The key insight: different article types need different extraction:
-  - Opinion/blog  → author's core argument + key supporting point
-  - News          → core facts (who/what/when/where), NOT journalist's commentary
-  - Technical     → what problem, what method, what result
-  - Paper         → research question, approach, key finding, limitation
-  - Docs/tutorial → what it teaches, for whom, key takeaway
-"""
+"""摘要提示词。"""
 
 PROMPT_VERSION = "v4.0"
 

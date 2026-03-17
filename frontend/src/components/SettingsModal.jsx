@@ -7,6 +7,19 @@ import useEscapeToClose from '../hooks/useEscapeToClose';
 import './SettingsModal.css';
 
 const DEFAULT_PROVIDER_VALUE = '__default__';
+const PROVIDER_OPENAI = 'openai';
+const PROVIDER_ANTHROPIC = 'anthropic';
+const PROVIDER_GEMINI = 'gemini';
+const PROVIDER_OLLAMA = 'ollama';
+const SEARCH_PROVIDER_EXA = 'exa';
+
+const PROVIDER_LABELS = {
+    [PROVIDER_OPENAI]: 'OpenAI',
+    [PROVIDER_ANTHROPIC]: 'Anthropic',
+    [PROVIDER_GEMINI]: 'Gemini',
+    [PROVIDER_OLLAMA]: 'Ollama',
+    [SEARCH_PROVIDER_EXA]: 'Exa',
+};
 
 const tabs = [
     { id: 'language', label: '语言', icon: '🌐' },
@@ -74,17 +87,113 @@ const createInitialSettings = () => ({
     confirmPassword: '',
 });
 
-const modelProviderOptions = [
-    { value: DEFAULT_PROVIDER_VALUE, label: '系统默认' },
-    { value: 'openai_compatible', label: 'OpenAI兼容' },
-    { value: 'ollama', label: 'Ollama' },
-];
+const getProviderLabel = (provider) => PROVIDER_LABELS[provider] || provider || '未配置';
 
-const embeddingProviderOptions = [
-    { value: DEFAULT_PROVIDER_VALUE, label: '系统默认' },
-    { value: 'openai_compatible', label: 'OpenAI兼容' },
-    { value: 'ollama', label: 'Ollama' },
-];
+const buildSystemDefaultLabel = (provider, modelName) => {
+    const providerLabel = getProviderLabel(provider);
+    return modelName
+        ? `系统默认（${providerLabel} / ${modelName}）`
+        : `系统默认（${providerLabel}）`;
+};
+
+const buildLegacyOption = (provider) => ({
+    value: provider,
+    label: `当前配置（${getProviderLabel(provider)}）`,
+});
+
+const getModelProviderOptions = (settings) => {
+    const options = [
+        {
+            value: DEFAULT_PROVIDER_VALUE,
+            label: buildSystemDefaultLabel(settings.defaultModelProvider, settings.defaultModelName),
+        },
+        { value: PROVIDER_OPENAI, label: 'OpenAI' },
+        { value: PROVIDER_ANTHROPIC, label: 'Anthropic' },
+        { value: PROVIDER_GEMINI, label: 'Gemini' },
+    ];
+    if (
+        settings.modelProviderSelection !== DEFAULT_PROVIDER_VALUE
+        && !options.some((option) => option.value === settings.modelProviderSelection)
+    ) {
+        options.push(buildLegacyOption(settings.modelProviderSelection));
+    }
+    return options;
+};
+
+const getEmbeddingProviderOptions = (settings) => {
+    const options = [
+        {
+            value: DEFAULT_PROVIDER_VALUE,
+            label: buildSystemDefaultLabel(settings.defaultEmbeddingProvider, settings.defaultEmbeddingModel),
+        },
+        { value: PROVIDER_OPENAI, label: 'OpenAI' },
+    ];
+    if (
+        settings.embeddingProviderSelection !== DEFAULT_PROVIDER_VALUE
+        && !options.some((option) => option.value === settings.embeddingProviderSelection)
+    ) {
+        options.push(buildLegacyOption(settings.embeddingProviderSelection));
+    }
+    return options;
+};
+
+const getSearchProviderOptions = (settings) => ([
+    {
+        value: DEFAULT_PROVIDER_VALUE,
+        label: buildSystemDefaultLabel(settings.defaultSearchProvider),
+    },
+    { value: SEARCH_PROVIDER_EXA, label: 'Exa' },
+]);
+
+const MODEL_PROVIDER_PRESETS = {
+    [PROVIDER_OPENAI]: {
+        apiUrl: 'https://api.openai.com/v1',
+        modelPlaceholder: '例如 gpt-4.1 / grok-4 / custom-model',
+        apiUrlPlaceholder: 'https://api.openai.com/v1',
+        apiKeyPlaceholder: 'sk-...',
+    },
+    [PROVIDER_ANTHROPIC]: {
+        apiUrl: 'https://api.anthropic.com',
+        modelPlaceholder: '例如 claude-sonnet-4-5',
+        apiUrlPlaceholder: 'https://api.anthropic.com',
+        apiKeyPlaceholder: 'sk-ant-...',
+    },
+    [PROVIDER_GEMINI]: {
+        apiUrl: '',
+        modelPlaceholder: '例如 gemini-2.5-flash',
+        apiUrlPlaceholder: '可留空，默认官方 Gemini API',
+        apiKeyPlaceholder: 'Gemini API Key',
+    },
+    [PROVIDER_OLLAMA]: {
+        apiUrl: 'http://127.0.0.1:11434',
+        modelPlaceholder: '例如 qwen3.5:0.8b',
+        apiUrlPlaceholder: 'http://127.0.0.1:11434',
+        apiKeyPlaceholder: 'Ollama 通常无需 API Key',
+    },
+};
+
+const EMBEDDING_PROVIDER_PRESETS = {
+    [PROVIDER_OPENAI]: {
+        apiUrl: 'https://api.openai.com/v1',
+        modelPlaceholder: '例如 text-embedding-3-large',
+        apiUrlPlaceholder: 'https://api.openai.com/v1',
+        apiKeyPlaceholder: 'sk-...',
+    },
+    [PROVIDER_OLLAMA]: {
+        apiUrl: 'http://127.0.0.1:11434',
+        modelPlaceholder: '例如 qwen3-embedding:0.6b',
+        apiUrlPlaceholder: 'http://127.0.0.1:11434',
+        apiKeyPlaceholder: '可留空',
+    },
+};
+
+const getModelProviderPreset = (provider) => (
+    MODEL_PROVIDER_PRESETS[provider] || MODEL_PROVIDER_PRESETS[PROVIDER_OPENAI]
+);
+
+const getEmbeddingProviderPreset = (provider) => (
+    EMBEDDING_PROVIDER_PRESETS[provider] || EMBEDDING_PROVIDER_PRESETS[PROVIDER_OPENAI]
+);
 
 export default function SettingsModal({ onClose }) {
     const navigate = useNavigate();
@@ -98,6 +207,11 @@ export default function SettingsModal({ onClose }) {
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
     const [feedback, setFeedback] = useState('');
+    const modelProviderOptions = getModelProviderOptions(settings);
+    const embeddingProviderOptions = getEmbeddingProviderOptions(settings);
+    const searchProviderOptions = getSearchProviderOptions(settings);
+    const modelProviderPreset = getModelProviderPreset(settings.modelProvider);
+    const embeddingProviderPreset = getEmbeddingProviderPreset(settings.embeddingProvider);
 
     useEscapeToClose(onClose, !isSaving);
 
@@ -181,7 +295,12 @@ export default function SettingsModal({ onClose }) {
                         clearApiKey: false,
                     };
                 }
-                return { ...prev, modelProviderSelection: value, modelProvider: value };
+                return {
+                    ...prev,
+                    modelProviderSelection: value,
+                    modelProvider: value,
+                    apiUrl: getModelProviderPreset(value).apiUrl,
+                };
             }
             if (key === 'searchProviderSelection') {
                 if (value === DEFAULT_PROVIDER_VALUE) {
@@ -207,7 +326,12 @@ export default function SettingsModal({ onClose }) {
                         clearEmbeddingApiKey: false,
                     };
                 }
-                return { ...prev, embeddingProviderSelection: value, embeddingProvider: value };
+                return {
+                    ...prev,
+                    embeddingProviderSelection: value,
+                    embeddingProvider: value,
+                    embeddingApiUrl: getEmbeddingProviderPreset(value).apiUrl,
+                };
             }
             return { ...prev, [key]: value };
         });
@@ -431,12 +555,12 @@ export default function SettingsModal({ onClose }) {
                                 <div className="settings-tab-content">
                                     <div className="settings-section">
                                         <label className="settings-section-title">模型提供商</label>
-                                        <p className="settings-hint">聊天和摘要统一使用用户配置的模型；如果你没有填自定义 Key，后端会尝试使用系统默认 Key。</p>
+                                        <p className="settings-hint">聊天和摘要统一使用这里的 provider。当前可显式选择 OpenAI、Anthropic、Gemini；系统默认取自 `.env`。</p>
                                         {settings.usingDefaultModelConfig && (
-                                            <p className="settings-hint">当前显示的是系统默认聊天模型配置：{settings.defaultModelProvider} / {settings.defaultModelName}</p>
+                                            <p className="settings-hint">当前显示的是系统默认聊天模型配置：{getProviderLabel(settings.defaultModelProvider)} / {settings.defaultModelName}</p>
                                         )}
                                         {settings.modelProviderSelection === DEFAULT_PROVIDER_VALUE && (
-                                            <p className="settings-hint">保存后将直接回退到系统默认聊天 provider、模型地址和默认凭证。</p>
+                                            <p className="settings-hint">保存后将直接回退到 `.env` 中配置的默认聊天 provider、模型地址和默认凭证。</p>
                                         )}
                                         <div className="settings-select-wrapper">
                                             <select
@@ -456,7 +580,7 @@ export default function SettingsModal({ onClose }) {
                                         <label className="settings-section-title">模型名称</label>
                                         <input
                                             className="settings-input"
-                                            placeholder="例如 gpt-4o"
+                                            placeholder={modelProviderPreset.modelPlaceholder}
                                             value={settings.modelName}
                                             disabled={settings.modelProviderSelection === DEFAULT_PROVIDER_VALUE}
                                             onChange={(event) => update('modelName', event.target.value)}
@@ -467,7 +591,7 @@ export default function SettingsModal({ onClose }) {
                                         <label className="settings-section-title">API 地址</label>
                                         <input
                                             className="settings-input"
-                                            placeholder={settings.modelProvider === 'ollama' ? 'http://127.0.0.1:11434' : 'https://api.openai.com/v1'}
+                                            placeholder={modelProviderPreset.apiUrlPlaceholder}
                                             value={settings.apiUrl}
                                             disabled={settings.modelProviderSelection === DEFAULT_PROVIDER_VALUE}
                                             onChange={(event) => update('apiUrl', event.target.value)}
@@ -488,7 +612,7 @@ export default function SettingsModal({ onClose }) {
                                         <input
                                             className="settings-input"
                                             type="password"
-                                            placeholder={settings.modelProvider === 'ollama' ? 'Ollama 通常无需 API Key' : (settings.hasApiKey ? '留空则不修改，输入新值则替换' : 'sk-...')}
+                                            placeholder={settings.modelProvider === PROVIDER_OLLAMA ? modelProviderPreset.apiKeyPlaceholder : (settings.hasApiKey ? '留空则不修改，输入新值则替换' : modelProviderPreset.apiKeyPlaceholder)}
                                             value={settings.apiKey}
                                             disabled={settings.modelProviderSelection === DEFAULT_PROVIDER_VALUE}
                                             onChange={(event) => update('apiKey', event.target.value)}
@@ -509,12 +633,12 @@ export default function SettingsModal({ onClose }) {
                                 <div className="settings-tab-content">
                                     <div className="settings-section">
                                         <label className="settings-section-title">Embedding Provider</label>
-                                        <p className="settings-hint">检索向量使用独立配置。支持 OpenAI 兼容接口，也支持直接连 Ollama。</p>
+                                        <p className="settings-hint">检索向量使用独立配置。当前可显式选择 OpenAI；系统默认取自 `.env`。</p>
                                         {settings.usingDefaultEmbeddingConfig && (
-                                            <p className="settings-hint">当前显示的是系统默认 Embedding 配置：{settings.defaultEmbeddingProvider} / {settings.defaultEmbeddingModel}</p>
+                                            <p className="settings-hint">当前显示的是系统默认 Embedding 配置：{getProviderLabel(settings.defaultEmbeddingProvider)} / {settings.defaultEmbeddingModel}</p>
                                         )}
                                         {settings.embeddingProviderSelection === DEFAULT_PROVIDER_VALUE && (
-                                            <p className="settings-hint">保存后将直接回退到系统默认 Embedding provider、模型地址和默认凭证。</p>
+                                            <p className="settings-hint">保存后将直接回退到 `.env` 中配置的默认 Embedding provider、模型地址和默认凭证。</p>
                                         )}
                                         <div className="settings-select-wrapper">
                                             <select
@@ -535,7 +659,7 @@ export default function SettingsModal({ onClose }) {
                                         <p className="settings-hint">当前系统固定输出维度为 {settings.embeddingOutputDimensions}。修改模型后会触发向量重建。</p>
                                         <input
                                             className="settings-input"
-                                            placeholder={settings.embeddingProvider === 'ollama' ? '例如 qwen3-embedding:0.6b' : '例如 text-embedding-3-large'}
+                                            placeholder={embeddingProviderPreset.modelPlaceholder}
                                             value={settings.embeddingModel}
                                             disabled={settings.embeddingProviderSelection === DEFAULT_PROVIDER_VALUE}
                                             onChange={(event) => update('embeddingModel', event.target.value)}
@@ -546,7 +670,7 @@ export default function SettingsModal({ onClose }) {
                                         <label className="settings-section-title">Embedding API 地址</label>
                                         <input
                                             className="settings-input"
-                                            placeholder={settings.embeddingProvider === 'ollama' ? 'http://127.0.0.1:11434' : 'https://api.openai.com/v1'}
+                                            placeholder={embeddingProviderPreset.apiUrlPlaceholder}
                                             value={settings.embeddingApiUrl}
                                             disabled={settings.embeddingProviderSelection === DEFAULT_PROVIDER_VALUE}
                                             onChange={(event) => update('embeddingApiUrl', event.target.value)}
@@ -555,10 +679,10 @@ export default function SettingsModal({ onClose }) {
 
                                     <div className="settings-section">
                                         <label className="settings-section-title">Embedding API Key</label>
-                                        {settings.embeddingProvider === 'ollama' && (
+                                        {settings.embeddingProvider === PROVIDER_OLLAMA && (
                                             <p className="settings-hint">Ollama 原生模式通常不需要 API Key。</p>
                                         )}
-                                        {settings.usingDefaultEmbeddingApiKey && !settings.hasCustomEmbeddingApiKey && !settings.clearEmbeddingApiKey && settings.embeddingProvider !== 'ollama' && (
+                                        {settings.usingDefaultEmbeddingApiKey && !settings.hasCustomEmbeddingApiKey && !settings.clearEmbeddingApiKey && settings.embeddingProvider !== PROVIDER_OLLAMA && (
                                             <p className="settings-hint">当前使用系统默认 embedding Key{settings.embeddingApiKeyMasked ? `：${settings.embeddingApiKeyMasked}` : ''}。留空则继续使用默认值，输入新值可覆盖。</p>
                                         )}
                                         {settings.hasCustomEmbeddingApiKey && !settings.clearEmbeddingApiKey && settings.embeddingProviderSelection !== DEFAULT_PROVIDER_VALUE && (
@@ -570,7 +694,7 @@ export default function SettingsModal({ onClose }) {
                                         <input
                                             className="settings-input"
                                             type="password"
-                                            placeholder={settings.embeddingProvider === 'ollama' ? '可留空' : (settings.hasEmbeddingApiKey ? '留空则不修改，输入新值则替换' : 'sk-...')}
+                                            placeholder={settings.embeddingProvider === PROVIDER_OLLAMA ? embeddingProviderPreset.apiKeyPlaceholder : (settings.hasEmbeddingApiKey ? '留空则不修改，输入新值则替换' : embeddingProviderPreset.apiKeyPlaceholder)}
                                             value={settings.embeddingApiKey}
                                             disabled={settings.embeddingProviderSelection === DEFAULT_PROVIDER_VALUE}
                                             onChange={(event) => update('embeddingApiKey', event.target.value)}
@@ -591,12 +715,12 @@ export default function SettingsModal({ onClose }) {
                                 <div className="settings-tab-content">
                                     <div className="settings-section">
                                         <label className="settings-section-title">搜索引擎 Provider</label>
-                                        <p className="settings-hint">当前搜索来源发现统一走后端 Search Provider。现阶段只开放 Exa，可使用系统默认 Key，也可以配置用户自己的 Key。</p>
+                                        <p className="settings-hint">当前搜索来源发现统一走后端 Search Provider。现阶段只开放 Exa；系统默认取自 `.env`，也可以配置用户自己的 Key。</p>
                                         {settings.usingDefaultSearchConfig && (
-                                            <p className="settings-hint">当前显示的是系统默认搜索引擎配置：{settings.defaultSearchProvider}</p>
+                                            <p className="settings-hint">当前显示的是系统默认搜索引擎配置：{getProviderLabel(settings.defaultSearchProvider)}</p>
                                         )}
                                         {settings.searchProviderSelection === DEFAULT_PROVIDER_VALUE && (
-                                            <p className="settings-hint">保存后将直接回退到系统默认搜索 provider 和默认凭证。</p>
+                                            <p className="settings-hint">保存后将直接回退到 `.env` 中配置的默认搜索 provider 和默认凭证。</p>
                                         )}
                                         <div className="settings-select-wrapper">
                                             <select
@@ -604,8 +728,9 @@ export default function SettingsModal({ onClose }) {
                                                 value={settings.searchProviderSelection}
                                                 onChange={(event) => update('searchProviderSelection', event.target.value)}
                                             >
-                                                <option value={DEFAULT_PROVIDER_VALUE}>系统默认</option>
-                                                <option value="exa">Exa</option>
+                                                {searchProviderOptions.map((option) => (
+                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
                                             </select>
                                             <span className="settings-select-arrow">▾</span>
                                         </div>

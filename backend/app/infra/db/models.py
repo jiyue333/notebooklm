@@ -12,4 +12,4 @@ def import_models() -> None:
     from app.modules.jobs import models as _job_models  # noqa: F401
     from app.modules.notebooks import models as _notebook_models  # noqa: F401
     from app.modules.notes import models as _note_models  # noqa: F401
-    from app.modules.search.sessions import models as _search_models  # noqa: F401
+    from app.modules.agent.search import models as _search_models  # noqa: F401

@@ -1126,6 +1126,7 @@ const backendProvider = {
         const payload = await request(`/notebooks/${notebookId}/sources/search`, {
             method: 'POST',
             body: { query, mode, maxResults, freshnessHours },
+            timeoutMs: 90_000,
         });
         const normalized = normalizeSearchPayload(payload);
         if (normalized.execution !== 'async' || !normalized.searchSessionId) {

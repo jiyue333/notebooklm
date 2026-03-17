@@ -1,40 +1,33 @@
-"""Retrieval tools for the chat agent.
-
-These are LangChain tools that the LangGraph ReAct agent can call.
-The agent decides when and how many times to call them.
-"""
+"""聊天检索工具。"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
+
+from langchain.tools import ToolRuntime
 from langchain_core.tools import tool
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.notebooks.models import Article, ArticleChunk
 
-_DB_SESSION: AsyncSession | None = None
-_CONTEXT: dict = {}
-
-
-def set_tool_context(db: AsyncSession, **kwargs) -> None:
-    """Set the DB session and context for tool execution.
-
-    Called before the agent runs so tools can access the database.
-    """
-    global _DB_SESSION, _CONTEXT
-    _DB_SESSION = db
-    _CONTEXT = kwargs
+@dataclass(slots=True)
+class ChatToolContext:
+    db: AsyncSession
+    article_id: str | None
+    notebook_id: str
+    user_id: str
 
 
 @tool
-async def search_article_chunks(query: str) -> str:
-    """Search within the current article for relevant passages.
-
-    Use this when the user asks about content in the article they're reading.
-    Returns matching text passages from the article.
-    """
-    db = _DB_SESSION
-    article_id = _CONTEXT.get("article_id")
+async def search_article_chunks(
+    query: str,
+    runtime: ToolRuntime[ChatToolContext, dict[str, Any]],
+) -> str:
+    """在当前文章内检索相关片段。"""
+    db = runtime.context.db
+    article_id = runtime.context.article_id
     if not db or not article_id:
         return "No article selected."
 
@@ -70,17 +63,15 @@ async def search_article_chunks(query: str) -> str:
 
 
 @tool
-async def search_notebook_articles(query: str) -> str:
-    """Search across all articles in the user's notebook.
-
-    Use this when the user asks about topics across their research,
-    wants to find similar content, or asks a research synthesis question.
-    Returns matching article titles and previews.
-    """
-    db = _DB_SESSION
-    notebook_id = _CONTEXT.get("notebook_id")
-    user_id = _CONTEXT.get("user_id")
-    article_id = _CONTEXT.get("article_id")
+async def search_notebook_articles(
+    query: str,
+    runtime: ToolRuntime[ChatToolContext, dict[str, Any]],
+) -> str:
+    """在当前 notebook 的全部文章中检索。"""
+    db = runtime.context.db
+    notebook_id = runtime.context.notebook_id
+    user_id = runtime.context.user_id
+    article_id = runtime.context.article_id
     if not db or not notebook_id or not user_id:
         return "No notebook context available."
 

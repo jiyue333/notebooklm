@@ -1,7 +1,4 @@
-"""ORM models for conversations and conversation_messages tables.
-
-Table structure matches existing Alembic migrations.
-"""
+"""聊天会话与消息表模型。"""
 
 from __future__ import annotations
 
@@ -37,6 +34,7 @@ class Conversation(UUIDPrimaryKeyMixin, Base):
         DateTime(timezone=True), nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     user: Mapped["User"] = relationship()
     notebook: Mapped["Notebook"] = relationship()
@@ -55,7 +53,7 @@ class ConversationMessage(UUIDPrimaryKeyMixin, Base):
     article_id: Mapped[str | None] = mapped_column(
         ForeignKey("articles.id", ondelete="SET NULL"), nullable=True,
     )
-    role: Mapped[str] = mapped_column(String(16), nullable=False)  # "user" | "assistant"
+    role: Mapped[str] = mapped_column(String(16), nullable=False)  # 角色值："user" | "assistant"
     route: Mapped[str | None] = mapped_column(String(32), nullable=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     retrieval_snapshot_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

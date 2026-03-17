@@ -1,1 +1,1 @@
-"""AI-powered search – agent-driven multi-source retrieval pipeline."""
+"""智能搜索模块。"""

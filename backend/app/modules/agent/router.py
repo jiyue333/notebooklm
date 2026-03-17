@@ -1,9 +1,4 @@
-"""AI API endpoints – summary and chat (SSE streaming).
-
-POST /notebooks/{id}/ai/events                      – record user event
-POST /notebooks/{id}/articles/{aid}/summary/stream   – SSE stream summary
-POST /notebooks/{id}/chat/stream                     – SSE stream chat
-"""
+"""AI 接口路由：摘要、聊天、搜索。"""
 
 from __future__ import annotations
 
@@ -22,6 +17,9 @@ from app.api.sse import build_sse_error_payload, encode_sse_event
 from app.modules.agent.chat.service import send_message
 from app.modules.agent.summary.service import generate_summary
 from app.modules.notebooks import repo as notebooks_repo
+from app.modules.settings.runtime import resolve_search_api_key
+from app.modules.agent.search.schemas import SearchRequest, SearchResponse
+from app.modules.agent.search.service import get_search_session, start_agent_search
 
 logger = structlog.get_logger(__name__)
 
@@ -145,3 +143,59 @@ async def chat_stream_endpoint(
             )
 
     return StreamingResponse(_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+# ── Search ─────────────────────────────────────────────────────────────────
+
+@router.post("/notebooks/{notebook_id}/sources/search")
+async def search_sources_endpoint(
+    notebook_id: str,
+    payload: SearchRequest,
+    current_user=Depends(current_user_dep),
+    session: AsyncSession = Depends(db_session_dep),
+) -> SearchResponse:
+    notebook = await notebooks_repo.get_notebook(
+        session, user_id=current_user.id, notebook_id=notebook_id,
+    )
+    if notebook is None:
+        raise AppError(404, "未找到对应的笔记本", code="notebook_not_found")
+
+    exa_api_key, _key_source = resolve_search_api_key(current_user)
+    if not exa_api_key:
+        raise AppError(422, "请先在设置里配置 Exa API Key", code="search_api_key_required")
+
+    existing_articles = await notebooks_repo.list_articles_by_notebook(
+        session,
+        user_id=current_user.id,
+        notebook_id=notebook_id,
+    )
+    existing_urls = [a.source_url for a in existing_articles if a.source_url]
+    existing_titles = [a.title for a in existing_articles if a.title]
+
+    return await start_agent_search(
+        session,
+        user=current_user,
+        notebook_id=notebook_id,
+        query=payload.query,
+        mode=payload.mode,
+        max_results=payload.maxResults,
+        exa_api_key=exa_api_key,
+        notebook_title=notebook.title or "",
+        existing_article_urls=existing_urls,
+        existing_article_titles=existing_titles,
+    )
+
+
+@router.get("/notebooks/{notebook_id}/search-sessions/{search_session_id}")
+async def get_search_session_endpoint(
+    notebook_id: str,
+    search_session_id: str,
+    current_user=Depends(current_user_dep),
+    session: AsyncSession = Depends(db_session_dep),
+) -> SearchResponse:
+    return await get_search_session(
+        session,
+        user_id=current_user.id,
+        notebook_id=notebook_id,
+        search_session_id=search_session_id,
+    )

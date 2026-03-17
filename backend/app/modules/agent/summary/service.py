@@ -1,8 +1,4 @@
-"""Summary service – generates focused article summaries via LLM.
-
-Architecture: check cache → single LLM call → cache result.
-No multi-stage pipeline. The prompt adapts to article type automatically.
-"""
+"""摘要服务：负责缓存命中、生成摘要、保存结果。"""
 
 from __future__ import annotations
 
@@ -13,6 +9,7 @@ import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.infra.ai.factory import get_model_identity
 from app.infra.ai.chat_models import build_user_chat_model
 from app.infra.telemetry.metrics import observe_summary_cache_hit, observe_summary_e2e
 from app.modules.agent.summary.prompts import PROMPT_VERSION, SYSTEM_PROMPT, USER_PROMPT
@@ -34,11 +31,9 @@ async def generate_summary(
     user=None,
     **_kwargs,
 ) -> dict:
-    """Generate or retrieve a cached summary.
+    """生成摘要，或直接返回缓存摘要。"""
 
-    Returns ``{"summary_text": str, "cached": bool}``.
-    """
-
+    # ========== phase 1 检查缓存 ==========
     content_hash = hashlib.sha256(clean_markdown.encode()).hexdigest()
 
     cached = await repo.get_cached_summary(
@@ -54,6 +49,7 @@ async def generate_summary(
             text = await _translate_to_chinese(text, user)
         return {"summary_text": text, "cached": True}
 
+    # ========== phase 2 准备模型与提示词 ==========
     model = build_user_chat_model(user) if user else None
     if model is None:
         return {"summary_text": "", "cached": False, "error": "model_not_configured"}
@@ -71,6 +67,7 @@ async def generate_summary(
         HumanMessage(content=USER_PROMPT.format(title=title, content=content)),
     ]
 
+    # ========== phase 3 调用模型 ==========
     try:
         response = await model.ainvoke(messages)
         summary_text = (response.content or "").strip()
@@ -82,9 +79,9 @@ async def generate_summary(
     observe_summary_e2e(duration_ms=elapsed_ms)
     logger.info("summary.generated", article_id=article_id, elapsed_ms=elapsed_ms, length=len(summary_text))
 
+    # ========== phase 4 保存缓存 ==========
     if summary_text:
-        model_name = getattr(model, "model_name", "unknown")
-        provider = "ollama" if "ollama" in str(type(model)).lower() else "openai"
+        provider, model_name = get_model_identity(model)
         await repo.save_summary_cache(
             db,
             article_id=article_id,

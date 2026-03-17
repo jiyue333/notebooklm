@@ -1,7 +1,4 @@
-"""ORM model for the summary_caches table.
-
-Table structure matches existing Alembic migration.
-"""
+"""摘要缓存表模型。"""
 
 from __future__ import annotations
 

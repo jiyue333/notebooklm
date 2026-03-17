@@ -1,4 +1,4 @@
-"""Repository for SummaryCache persistence."""
+"""摘要缓存持久化仓储。"""
 
 from __future__ import annotations
 

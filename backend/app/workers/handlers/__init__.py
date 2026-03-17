@@ -1,7 +1,8 @@
 """Worker handlers for async job processing.
 
-Currently handles article_ingest jobs. The worker picks up jobs from
-the Kafka queue (or inline fallback) and runs the ingest pipeline.
+Handles article_ingest jobs. The worker picks up jobs from the Kafka
+queue (or inline fallback) and runs the ingest pipeline.
+Search is always synchronous – no search worker needed.
 """
 
 from __future__ import annotations
@@ -12,15 +13,12 @@ from sqlalchemy import delete, select
 import structlog
 
 from app.infra.db.session import get_session_manager
-from app.modules.auth.models import User
 from app.modules.ingest.pipeline.types import IngestInput, InputType
 from app.modules.ingest.service import build_article_chunk_rows, build_article_fields, ingest
 from app.modules.jobs import repo as jobs_repo
 from app.modules.notebooks import repo as notebooks_repo
 from app.modules.notebooks.models import Article, ArticleChunk
 from app.modules.notebooks.service import invalidate_notebook_detail_cache
-from app.modules.search.sessions.service import execute_search_session
-from app.modules.settings.runtime import resolve_search_api_key
 
 logger = structlog.get_logger(__name__)
 
@@ -162,67 +160,6 @@ async def process_article_ingest(job_id: str) -> None:
             )
 
 
-async def process_search_deep(job_id: str) -> None:
-    """Execute a queued deep-search session."""
-
-    async for session in get_session_manager().session():
-        job = await jobs_repo.get_job(session, job_id)
-        if job is None:
-            logger.warning("worker.search_deep.job_not_found", job_id=job_id)
-            return
-
-        await jobs_repo.mark_job_running(job)
-        await session.commit()
-
-        payload = job.payload_json or {}
-        search_session_id = payload.get("searchSessionId") or job.search_session_id
-        if not search_session_id:
-            await jobs_repo.mark_job_failed(job, error="missing searchSessionId")
-            await session.commit()
-            return
-
-        try:
-            from app.modules.search.sessions import repo as search_repo
-
-            search_session = await search_repo.get_search_session_by_id(
-                session,
-                search_session_id=search_session_id,
-            )
-            if search_session is None:
-                await jobs_repo.mark_job_failed(job, error="search session not found")
-                await session.commit()
-                return
-
-            user = await session.get(User, search_session.user_id)
-            exa_api_key, _ = resolve_search_api_key(user) if user else (None, "missing")
-            if not exa_api_key:
-                await jobs_repo.mark_job_failed(job, error="search api key missing")
-                await session.commit()
-                return
-
-            await execute_search_session(
-                search_session_id=search_session_id,
-                exa_api_key=exa_api_key,
-            )
-            await jobs_repo.mark_job_succeeded(job)
-            await session.commit()
-            logger.info(
-                "worker.search_deep.completed",
-                search_session_id=search_session_id,
-                job_id=job_id,
-            )
-        except Exception as exc:
-            await session.rollback()
-            job = await jobs_repo.get_job(session, job_id) or job
-            await jobs_repo.mark_job_failed(job, error=str(exc)[:500])
-            await session.commit()
-            logger.exception(
-                "worker.search_deep.failed",
-                search_session_id=search_session_id,
-                job_id=job_id,
-            )
-
-
 def _build_job_handler(*, job_type: str, log_event: str, processor: JobProcessor):
     async def _handler(payload: dict) -> None:
         logger.info(log_event, payload=payload)
@@ -236,10 +173,4 @@ handle_article_ingest = _build_job_handler(
     processor=process_article_ingest,
 )
 
-handle_search_deep = _build_job_handler(
-    job_type="search_deep",
-    log_event="worker.search_deep.received",
-    processor=process_search_deep,
-)
-
-__all__ = ["handle_article_ingest", "handle_search_deep", "process_search_deep"]
+__all__ = ["handle_article_ingest"]

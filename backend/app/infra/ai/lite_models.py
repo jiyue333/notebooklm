@@ -9,6 +9,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from app.core.config import Settings, get_settings
+from app.core.constant import PROVIDER_OPENAI
+from app.infra.ai.factory import build_chat_model
 
 if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
@@ -24,14 +26,11 @@ def build_lite_llm(settings: Settings | None = None) -> BaseChatModel | None:
     if not api_key:
         return None
 
-    from langchain_openai import ChatOpenAI
-    from pydantic import SecretStr
-
-    return ChatOpenAI(
-        model=s.lite_llm_model,
-        api_key=SecretStr(api_key),
+    return build_chat_model(
+        provider=s.lite_llm_provider or PROVIDER_OPENAI,
+        model_name=s.lite_llm_model,
         base_url=s.lite_llm_base_url,
-        temperature=0.0,
-        max_retries=2,
+        api_key=api_key,
         timeout=float(s.lite_llm_timeout),
+        metadata={"config_scope": "lite_llm"},
     )

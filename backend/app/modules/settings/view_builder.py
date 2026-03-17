@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from app.core.constant import (
+    PROVIDER_EXA,
+    PROVIDER_OLLAMA,
+)
 from app.core.config import get_settings as get_system_settings
 from app.modules.auth.models import User
 from app.modules.settings.defaults import (
@@ -30,9 +34,9 @@ def build_settings_view(user: User) -> dict:
         "modelProvider": chat_provider,
         "modelName": merged["modelName"],
         "apiUrl": merged["apiUrl"],
-        "searchProvider": merged.get("searchProvider", "exa"),
+        "searchProvider": merged.get("searchProvider", PROVIDER_EXA),
         "usingDefaultModelConfig": _is_using_default_config(user_settings, MODEL_SETTINGS_FIELDS),
-        "defaultModelProvider": default_settings["modelProvider"],
+        "defaultModelProvider": normalize_chat_provider(default_settings["modelProvider"]),
         "defaultModelName": default_settings["modelName"],
         "defaultApiUrl": default_settings["apiUrl"],
         "embeddingProvider": embedding_provider,
@@ -41,7 +45,7 @@ def build_settings_view(user: User) -> dict:
         "usingDefaultSearchConfig": _is_using_default_config(user_settings, SEARCH_SETTINGS_FIELDS),
         "defaultSearchProvider": default_settings["searchProvider"],
         "usingDefaultEmbeddingConfig": _is_using_default_config(user_settings, EMBEDDING_SETTINGS_FIELDS),
-        "defaultEmbeddingProvider": default_settings["embeddingProvider"],
+        "defaultEmbeddingProvider": normalize_embedding_provider(default_settings["embeddingProvider"]),
         "defaultEmbeddingModel": default_settings["embeddingModel"],
         "defaultEmbeddingApiUrl": default_settings["embeddingApiUrl"],
         "embeddingOutputDimensions": system_settings.embedding_output_dimensions,
@@ -111,7 +115,7 @@ def _build_api_key_view(
         last4=last4,
         default_key=default_key,
     )
-    if provider == "ollama" and not state["hasCustomKey"]:
+    if provider == PROVIDER_OLLAMA and not state["hasCustomKey"]:
         state = {**state, "hasEffectiveKey": False, "usingDefaultKey": False, "masked": ""}
     return {
         has_field: state["hasEffectiveKey"],

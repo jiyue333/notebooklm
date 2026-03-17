@@ -5,10 +5,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.errors import register_exception_handlers
 from app.api.health import router as health_router
 from app.api.middleware import RequestContextMiddleware
 from app.core.config import get_settings
+from app.core.exceptions import register_exception_handlers
 from app.infra.cache.redis_client import get_redis_factory
 from app.infra.db.session import get_session_manager
 from app.infra.telemetry.langsmith import configure_langsmith 
@@ -19,7 +19,7 @@ from app.modules.auth.router import router as auth_router
 from app.modules.notebooks.router import router as notebooks_router
 from app.modules.notes.router import router as notes_router
 from app.modules.settings.router import router as settings_router
-from app.modules.search.router import router as search_router
+from app.modules.sources.router import router as sources_router
 
 
 @asynccontextmanager
@@ -66,7 +66,7 @@ def create_app() -> FastAPI:
     app.include_router(notebooks_router, prefix=settings.api_prefix)
     app.include_router(notes_router, prefix=settings.api_prefix)
     app.include_router(settings_router, prefix=settings.api_prefix)
-    app.include_router(search_router, prefix=settings.api_prefix)
+    app.include_router(sources_router, prefix=settings.api_prefix)
 
     return app
 

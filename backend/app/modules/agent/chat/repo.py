@@ -1,4 +1,4 @@
-"""Repository for Conversation / ConversationMessage persistence."""
+"""聊天会话持久化仓储。"""
 
 from __future__ import annotations
 
@@ -40,6 +40,7 @@ async def create_conversation(
         current_article_id=article_id,
         title=title,
         created_at=now,
+        updated_at=now,
         last_message_at=now,
     )
     session.add(conv)

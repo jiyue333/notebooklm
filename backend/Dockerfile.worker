@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app/backend
+
+COPY README.md /app/README.md
+COPY backend /app/backend
+
+RUN python -m pip install --upgrade pip \
+    && pip install .
+
+EXPOSE 9101
+
+CMD ["python", "-m", "app.workers.run_worker"]

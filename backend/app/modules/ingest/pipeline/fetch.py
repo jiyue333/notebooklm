@@ -20,6 +20,16 @@ logger = structlog.get_logger(__name__)
 
 _FETCH_TIMEOUT = 30.0
 
+_DEFAULT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+}
+
 
 async def fetch(ingest_input: IngestInput) -> FetchedArtifact:
     """Produce a ``FetchedArtifact`` from the ingest input."""
@@ -76,7 +86,11 @@ async def _from_url(inp: IngestInput) -> FetchedArtifact:
     if not url:
         raise ValueError("source_url is required for URL/search_result inputs")
 
-    async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT, follow_redirects=True) as client:
+    async with httpx.AsyncClient(
+        timeout=_FETCH_TIMEOUT,
+        follow_redirects=True,
+        headers=_DEFAULT_HEADERS,
+    ) as client:
         resp = await client.get(url)
         resp.raise_for_status()
 
