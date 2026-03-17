@@ -1,1 +1,1 @@
-"""Ingest module – ADR-002 multi-stage parse pipeline."""
+"""Ingest module – MinerU/Dripper-powered parse pipeline."""

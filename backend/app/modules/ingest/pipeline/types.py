@@ -1,7 +1,16 @@
-"""Data types for the ADR-002 ingest pipeline.
+"""Data types for the ingest pipeline.
 
 Each stage consumes and produces typed dataclasses so the pipeline
 is easy to test, log, and evolve independently.
+
+Pipeline stages:
+  A  Fetch & Fingerprint   → FetchedArtifact
+  B  Canonicalize & Dedup  → CanonicalDoc
+  C  Document Type Router  → DocRoute
+  D  Parse to Markdown     → FusedDocument  (MinerU / Dripper / text)
+  E  TOC Generation        → list[TOCNode]
+  F  BlockGraph            → BlockGraph
+  G  Chunk & Embed         → list[ChunkDraft]
 """
 
 from __future__ import annotations
@@ -36,7 +45,6 @@ class IngestInput:
     file_name: str | None = None
     file_mime: str | None = None
     raw_text: str | None = None
-    # optional metadata from upstream (e.g. search card)
     author: str | None = None
     published_at: datetime | None = None
     description: str | None = None
@@ -58,7 +66,7 @@ class FetchedArtifact:
     http_headers: dict[str, str] = field(default_factory=dict)
     fetched_at: datetime | None = None
     size_bytes: int = 0
-    raw_text: str | None = None  # for text/markdown inputs
+    raw_text: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +79,6 @@ class CanonicalDoc:
     dedupe_key: str
     is_duplicate: bool = False
     duplicate_article_id: str | None = None
-    # extracted identifiers
     doi: str | None = None
     arxiv_id: str | None = None
     canonical_url: str | None = None
@@ -84,8 +91,8 @@ class CanonicalDoc:
 class DocCategory(str, Enum):
     HTML = "html"
     PDF = "pdf"
-    OFFICE = "office"  # docx, pptx, xlsx
-    TEXT = "text"       # txt, md, csv
+    OFFICE = "office"
+    TEXT = "text"
     IMAGE = "image"
     UNKNOWN = "unknown"
 
@@ -99,11 +106,13 @@ class DocRoute:
 
 
 # ---------------------------------------------------------------------------
-# Stage D – Multi-Parser Candidates
+# Stage D – Parse to Markdown (single parser per type)
 # ---------------------------------------------------------------------------
 
 @dataclass(slots=True)
 class ParseCandidate:
+    """Intermediate result from a single parser."""
+
     parser_name: str
     markdown: str
     title: str | None = None
@@ -115,37 +124,10 @@ class ParseCandidate:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-# ---------------------------------------------------------------------------
-# Stage E – Parse Quality Judge
-# ---------------------------------------------------------------------------
-
-@dataclass(slots=True)
-class QualityScoreBreakdown:
-    structure_integrity: float = 0.0
-    reading_order: float = 0.0
-    heading_quality: float = 0.0
-    sentence_integrity: float = 0.0
-    table_fidelity: float = 0.0
-    reference_quality: float = 0.0
-    metadata_consistency: float = 0.0
-    anchorability: float = 0.0
-    total: float = 0.0
-
-
-@dataclass(slots=True)
-class ScoredParseCandidate:
-    candidate: ParseCandidate
-    quality: QualityScoreBreakdown
-    rank: int = 0
-    needs_llm_fallback: bool = False
-
-
-# ---------------------------------------------------------------------------
-# Stage F – Fusion & Repair
-# ---------------------------------------------------------------------------
-
 @dataclass(slots=True)
 class FusedDocument:
+    """Final parsed document ready for downstream stages."""
+
     clean_markdown: str
     title: str
     author: str | None = None
@@ -159,7 +141,7 @@ class FusedDocument:
 
 
 # ---------------------------------------------------------------------------
-# Stage G – TOC Builder
+# Stage E – TOC Builder
 # ---------------------------------------------------------------------------
 
 @dataclass(slots=True)
@@ -167,13 +149,13 @@ class TOCNode:
     id: str
     title: str
     level: int
-    anchor: str  # block_id or line reference
+    anchor: str
     is_synthetic: bool = False
     children: list[TOCNode] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
-# Stage H – BlockGraph
+# Stage F – BlockGraph
 # ---------------------------------------------------------------------------
 
 class BlockType(str, Enum):
@@ -224,7 +206,7 @@ class BlockGraph:
 
 
 # ---------------------------------------------------------------------------
-# Stage I – Indexer
+# Stage G – Indexer
 # ---------------------------------------------------------------------------
 
 @dataclass(slots=True)
@@ -244,7 +226,6 @@ class ChunkDraft:
 class IngestContext:
     ingest_input: IngestInput
     existing_dedupe_keys: set[str] = field(default_factory=set)
-    exa_api_key: str | None = None
 
 
 @dataclass(slots=True)
@@ -256,7 +237,6 @@ class IngestResult:
     is_duplicate: bool = False
     duplicate_article_id: str | None = None
     doc_route: DocRoute | None = None
-    parse_candidate_count: int = 0
     primary_parser: str = ""
     quality_score: float = 0.0
     elapsed_stages: dict[str, float] = field(default_factory=dict)

@@ -88,6 +88,11 @@ class Settings(BaseSettings):
 
     search_use_llm_task_parser: bool = False
 
+    # ── Ingest document parsing ────────────────────────────────────
+    # MinerU 和 Dripper 均使用本地 Python API。
+    # MinerU 后端：auto | pipeline | hybrid-auto-engine
+    mineru_backend: str = "auto"
+
     kafka_bootstrap_servers: str = "127.0.0.1:29092"
     kafka_topic: str = "notebook_async"
     kafka_consumer_poll_timeout_ms: int = 1000

@@ -143,6 +143,9 @@ case -> source_artifact -> ingest_gold -> search_recall / search_slate -> summar
 - `must_drop_regions`：必须去掉的噪声区块
 - `section_tree_gold`：期望章节树
 - `anchor_contract`：关键跳转锚点
+- `reading_order_gold`：期望的 block 阅读顺序序列，用于评测 reading order score
+- `table_regions_gold`：表格区域标注，用于评测 table retention score
+- `reference_block_gold`：参考文献块标注，用于评测 reference extraction score
 - `reader_acceptance_contract`：统一阅读体验验收规则
 
 示例：
@@ -162,6 +165,13 @@ case -> source_artifact -> ingest_gold -> search_recall / search_slate -> summar
   "anchor_contract": [
     {"anchor_id": "a2", "jump_label": "Observed Failure Modes", "target_hint": "page 5 section heading"},
     {"anchor_id": "a3", "jump_label": "Limitations", "target_hint": "page 7 section heading"}
+  ],
+  "reading_order_gold": ["b_exec_summary", "b_intro", "b_failure_modes", "b_table_1", "b_limitations", "b_refs"],
+  "table_regions_gold": [
+    {"table_id": "t1", "page_no": 6, "caption": "Table 1: Failure Mode Frequency by Deployment Type"}
+  ],
+  "reference_block_gold": [
+    {"ref_id": "r1", "text_snippet": "[1] Smith et al. Enterprise Agent Evaluation..."}
   ],
   "reader_acceptance_contract": {
     "must_have_title": true,
@@ -228,6 +238,7 @@ case -> source_artifact -> ingest_gold -> search_recall / search_slate -> summar
 - `artifact_id`
 - `gold_include_level`：`must_include | good_to_have | optional | reject`
 - `gold_facets`
+- `gold_authority`：来源权威性评分（1–3），用于计算 authority-weighted nDCG
 - `gold_novelty_to_notebook`
 - `gold_ingestability`
 - `label_reason`
@@ -241,6 +252,7 @@ case -> source_artifact -> ingest_gold -> search_recall / search_slate -> summar
   "artifact_id": "af_102_pdf",
   "gold_include_level": "must_include",
   "gold_facets": ["critique", "recent", "report"],
+  "gold_authority": 3,
   "gold_novelty_to_notebook": 3,
   "gold_ingestability": 2,
   "label_reason": "这是一篇专门讨论企业知识管理 agent 失败模式的报告，能补当前 notebook 缺失的 critique 与 recent 维度。"
@@ -262,6 +274,8 @@ case -> source_artifact -> ingest_gold -> search_recall / search_slate -> summar
 - `must_capture_points`
 - `must_avoid_points`
 - `supporting_anchor_ids`
+- `gold_evidence_spans`：每个 must_capture_point 对应的原文证据 block/section，用于评测 faithfulness 和 supported-sentence ratio
+- `section_roles_gold`：各章节角色标签，用于评测 section coverage ratio
 - `ideal_brief_summary`
 
 示例：
@@ -282,6 +296,16 @@ case -> source_artifact -> ingest_gold -> search_recall / search_slate -> summar
     "不能发散到文章没有讲的监管建议"
   ],
   "supporting_anchor_ids": ["a2", "a3"],
+  "gold_evidence_spans": [
+    {"point_index": 0, "block_ids": ["b_intro"], "section_id": "s1"},
+    {"point_index": 1, "block_ids": ["b_failure_modes", "b_table_1"], "section_id": "s2"},
+    {"point_index": 2, "block_ids": ["b_limitations"], "section_id": "s3"}
+  ],
+  "section_roles_gold": [
+    {"section_id": "s1", "role": "background"},
+    {"section_id": "s2", "role": "result"},
+    {"section_id": "s3", "role": "limitation"}
+  ],
   "ideal_brief_summary": "这份报告总结了企业知识管理 agent 的常见失效模式，重点指出跨知识源检索不稳定等问题，并明确说明其结论不覆盖高监管行业。"
 }
 ```
@@ -299,6 +323,7 @@ case -> source_artifact -> ingest_gold -> search_recall / search_slate -> summar
 - `seed_article_id`
 - `search_space_gold`
 - `expected_article_ids`
+- `expected_article_relevance`：逐篇 relevance 分级，用于计算 recommendation nDCG@5
 - `expected_reason_facets`
 - `must_cross_notebook`
 
@@ -311,6 +336,10 @@ case -> source_artifact -> ingest_gold -> search_recall / search_slate -> summar
   "seed_article_id": "art_102",
   "search_space_gold": "all_imported_notebooks",
   "expected_article_ids": ["art_031", "art_044"],
+  "expected_article_relevance": [
+    {"article_id": "art_031", "grade": 3},
+    {"article_id": "art_044", "grade": 2}
+  ],
   "expected_reason_facets": ["topic", "failure_mode", "enterprise_setting"],
   "must_cross_notebook": true
 }

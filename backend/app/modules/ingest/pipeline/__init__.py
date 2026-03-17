@@ -1,7 +1,16 @@
 """Ingest pipeline orchestrator.
 
-Wires stages A → I into a single ``run_pipeline`` call.  All
+Wires stages A → G into a single ``run_pipeline`` call.  All
 observability is delegated to an optional ``IngestPipelineObserver``.
+
+Stages:
+  A  Fetch & Fingerprint
+  B  Canonicalize & Dedup
+  C  Document Type Router
+  D  Parse to Markdown   (MinerU / Dripper / LLM / trafilatura / text)
+  E  TOC Generation
+  F  BlockGraph
+  G  Chunk & Embed
 """
 
 from __future__ import annotations
@@ -13,10 +22,8 @@ from app.modules.ingest.pipeline.block_graph import build_block_graph
 from app.modules.ingest.pipeline.canonicalize import canonicalize
 from app.modules.ingest.pipeline.doc_router import route_document
 from app.modules.ingest.pipeline.fetch import fetch
-from app.modules.ingest.pipeline.fusion import fuse
 from app.modules.ingest.pipeline.indexer import build_chunks, embed_chunks
-from app.modules.ingest.pipeline.parse import generate_parse_candidates
-from app.modules.ingest.pipeline.quality_judge import judge_candidates
+from app.modules.ingest.pipeline.parse import parse_to_markdown
 from app.modules.ingest.pipeline.toc_builder import build_toc
 from app.modules.ingest.pipeline.types import IngestContext, IngestResult
 
@@ -33,7 +40,7 @@ async def run_pipeline(
     ctx: IngestContext,
     observer: IngestPipelineObserver | None = None,
 ) -> IngestResult:
-    """Execute the full A → I ingest pipeline."""
+    """Execute the full A → G ingest pipeline."""
 
     obs: IngestPipelineObserver = observer or _NullObserver()  # type: ignore[assignment]
     timings: dict[str, float] = {}
@@ -75,51 +82,25 @@ async def run_pipeline(
     obs.on_type_routed(route.category.value)
     obs.on_stage_complete("doc_route", ms, category=route.category.value)
 
-    # ── D: Multi-Parser Candidates ─────────────────────────────────────
+    # ── D: Parse to Markdown ───────────────────────────────────────────
     obs.on_stage_start("parse")
     t0 = perf_counter()
-    candidates = await generate_parse_candidates(
-        canonical, route, exa_api_key=ctx.exa_api_key,
-    )
+    fused = await parse_to_markdown(canonical, route)
     ms = _elapsed_ms(t0)
     timings["parse"] = ms
-    for c in candidates:
-        obs.on_parse_candidate_generated(c.parser_name, bool(c.markdown))
-    obs.on_stage_complete("parse", ms, candidate_count=len(candidates))
 
-    if not candidates:
-        obs.on_fallback_triggered("no_parse_candidates")
-        obs.on_pipeline_complete(_elapsed_ms(pipeline_start), card_count=0)
+    if fused is None:
+        obs.on_stage_complete("parse", ms, status="no_result")
+        obs.on_pipeline_complete(_elapsed_ms(pipeline_start), chunk_count=0)
         return IngestResult(
             doc_route=route,
-            parse_candidate_count=0,
             elapsed_stages=timings,
         )
 
-    # ── E: Quality Judge ───────────────────────────────────────────────
-    obs.on_stage_start("quality_judge")
-    t0 = perf_counter()
-    scored = judge_candidates(candidates)
-    ms = _elapsed_ms(t0)
-    timings["quality_judge"] = ms
-    for s in scored:
-        obs.on_parse_scored(s.candidate.parser_name, s.quality.total)
-    best = scored[0]
-    obs.on_parse_selected(best.candidate.parser_name, best.quality.total)
-    obs.on_stage_complete("quality_judge", ms, best_score=best.quality.total)
+    obs.on_parse_complete(fused.primary_parser, fused.word_count)
+    obs.on_stage_complete("parse", ms, parser=fused.primary_parser)
 
-    if best.needs_llm_fallback:
-        obs.on_fallback_triggered("low_quality_score")
-
-    # ── F: Fusion & Repair ─────────────────────────────────────────────
-    obs.on_stage_start("fusion")
-    t0 = perf_counter()
-    fused = fuse(scored)
-    ms = _elapsed_ms(t0)
-    timings["fusion"] = ms
-    obs.on_stage_complete("fusion", ms, word_count=fused.word_count)
-
-    # ── G: TOC Generation ──────────────────────────────────────────────
+    # ── E: TOC Generation ──────────────────────────────────────────────
     obs.on_stage_start("toc")
     t0 = perf_counter()
     toc = build_toc(fused)
@@ -127,10 +108,9 @@ async def run_pipeline(
     timings["toc"] = ms
     is_synthetic = any(n.is_synthetic for n in toc)
     obs.on_toc_generated(len(toc), is_synthetic)
-    obs.on_anchor_bound(len(toc))
     obs.on_stage_complete("toc", ms, node_count=len(toc))
 
-    # ── H: BlockGraph ──────────────────────────────────────────────────
+    # ── F: BlockGraph ──────────────────────────────────────────────────
     obs.on_stage_start("block_graph")
     t0 = perf_counter()
     graph = build_block_graph(fused, toc)
@@ -139,7 +119,7 @@ async def run_pipeline(
     obs.on_block_graph_built(graph.block_type_counts)
     obs.on_stage_complete("block_graph", ms, block_count=len(graph.blocks))
 
-    # ── I: Chunk & Embed ───────────────────────────────────────────────
+    # ── G: Chunk & Embed ───────────────────────────────────────────────
     obs.on_stage_start("index")
     t0 = perf_counter()
     chunks = build_chunks(graph)
@@ -164,7 +144,6 @@ async def run_pipeline(
         block_graph=graph,
         chunks=chunks,
         doc_route=route,
-        parse_candidate_count=len(candidates),
         primary_parser=fused.primary_parser,
         quality_score=fused.quality_score,
         elapsed_stages=timings,

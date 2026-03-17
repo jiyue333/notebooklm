@@ -14,7 +14,7 @@ from app.infra.db.session import get_session_manager
 from app.infra.telemetry.langsmith import configure_langsmith 
 from app.infra.telemetry.logging import setup_logging
 from app.infra.telemetry.tracing import setup_tracing, shutdown_tracing
-from app.modules.ai.router import router as ai_router
+from app.modules.agent.router import router as ai_router
 from app.modules.auth.router import router as auth_router
 from app.modules.notebooks.router import router as notebooks_router
 from app.modules.notes.router import router as notes_router

@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from app.core.config import get_settings
 from app.infra.telemetry.metrics import observe_scheduler_action
 from app.infra.db.session import get_session_manager
-from app.modules.ai.summary import repo as summary_repo
+from app.modules.agent.summary import repo as summary_repo
 from app.modules.jobs import repo as jobs_repo
 from app.modules.jobs.publisher import republish_pending_jobs
 

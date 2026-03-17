@@ -1,10 +1,7 @@
-"""Ingest pipeline observability – single file for all instrumentation.
+"""Ingest pipeline observability.
 
-Same pattern as search/pipeline/observer.py: an observer injected into
-the pipeline orchestrator.  All Prometheus, structlog and OTel code
-lives here so pipeline stages and the service layer stay clean.
-
-ADR-002 §6.1 log points and online metrics.
+Observer injected into the pipeline orchestrator for Prometheus,
+structlog, and OTel instrumentation.
 """
 
 from __future__ import annotations
@@ -14,9 +11,7 @@ import structlog
 from app.infra.telemetry.metrics import (
     observe_ingest_block_completeness,
     observe_ingest_e2e,
-    observe_ingest_fallback_rate,
     observe_ingest_fetch_latency,
-    observe_ingest_parse_success,
     observe_ingest_route_distribution,
     observe_ingest_stage,
     observe_ingest_synthetic_toc,
@@ -99,37 +94,13 @@ class IngestPipelineObserver:
         observe_ingest_route_distribution(input_type=self._input_type, category=category)
         logger.info("ingest.type_routed", input_type=self._input_type, category=category)
 
-    def on_parse_candidate_generated(self, parser_name: str, success: bool) -> None:
-        observe_ingest_parse_success(
-            input_type=self._input_type, parser=parser_name,
-            result="success" if success else "failure",
-        )
+    def on_parse_complete(self, parser_name: str, word_count: int) -> None:
         logger.info(
-            "ingest.parse_candidate_generated",
+            "ingest.parse_complete",
             input_type=self._input_type,
             parser=parser_name,
-            success=success,
+            word_count=word_count,
         )
-
-    def on_parse_scored(self, parser_name: str, score: float) -> None:
-        logger.info(
-            "ingest.parse_scored",
-            input_type=self._input_type,
-            parser=parser_name,
-            score=score,
-        )
-
-    def on_parse_selected(self, parser_name: str, score: float) -> None:
-        logger.info(
-            "ingest.parse_selected",
-            input_type=self._input_type,
-            parser=parser_name,
-            score=score,
-        )
-
-    def on_fallback_triggered(self, trigger: str) -> None:
-        observe_ingest_fallback_rate(input_type=self._input_type, trigger=trigger)
-        logger.warning("ingest.fallback_triggered", input_type=self._input_type, trigger=trigger)
 
     def on_toc_generated(self, count: int, is_synthetic: bool) -> None:
         observe_ingest_synthetic_toc(
@@ -155,9 +126,6 @@ class IngestPipelineObserver:
             input_type=self._input_type,
             block_counts=block_counts,
         )
-
-    def on_anchor_bound(self, count: int) -> None:
-        logger.info("ingest.anchor_bound", input_type=self._input_type, anchor_count=count)
 
     # ── OTel span helper ───────────────────────────────────────────────
 

@@ -85,8 +85,6 @@ async def process_article_ingest(job_id: str) -> None:
                 notebook_id=article.notebook_id,
                 article_id=article.id,
             )
-            user = await session.get(User, article.user_id)
-            exa_api_key, _ = resolve_search_api_key(user) if user else (None, "missing")
             ingest_input = IngestInput(
                 input_type=input_type,
                 notebook_id=article.notebook_id,
@@ -109,7 +107,6 @@ async def process_article_ingest(job_id: str) -> None:
                 session,
                 ingest_input=ingest_input,
                 existing_dedupe_keys=existing_dedupe_keys,
-                exa_api_key=exa_api_key,
             )
 
             if result.is_duplicate:

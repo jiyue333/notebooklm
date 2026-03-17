@@ -1,113 +1,124 @@
-"""Stage D – Multi-Parser Candidate Generation.
+"""Stage D – Parse to Markdown.
 
-Routes the document to one or more parsers based on the DocRoute
-and collects all resulting ParseCandidates.
+Routes the document to a single parser based on DocRoute and produces
+a FusedDocument with clean markdown.
+
+Parser routing:
+  HTML   → DripperClient (LLM / API / local) → trafilatura fallback
+  PDF    → MinerUClient
+  OFFICE → MinerUClient
+  IMAGE  → MinerUClient (with OCR)
+  TEXT   → direct pass-through
+
+All infra clients read configuration from ``get_settings()`` internally,
+so this module does not need to thread config parameters.
 """
 
 from __future__ import annotations
 
-import asyncio
+import re
 
 import structlog
 
 from app.modules.ingest.parsers.file_parser import parse_file
-from app.modules.ingest.parsers.html_parser import parse_html_exa, parse_html_trafilatura
+from app.modules.ingest.parsers.html_parser import parse_html
 from app.modules.ingest.parsers.text_parser import decode_text_bytes, parse_text
 from app.modules.ingest.pipeline.types import (
     CanonicalDoc,
     DocCategory,
     DocRoute,
-    ParseCandidate,
+    FusedDocument,
 )
 
 logger = structlog.get_logger(__name__)
 
 
-async def generate_parse_candidates(
+async def parse_to_markdown(
     doc: CanonicalDoc,
     route: DocRoute,
-    *,
-    exa_api_key: str | None = None,
-) -> list[ParseCandidate]:
-    """Run the appropriate parsers and return all non-empty candidates."""
+) -> FusedDocument | None:
+    """Parse the document into a FusedDocument with clean markdown."""
 
     if route.category == DocCategory.TEXT:
         return _parse_text(doc)
 
     if route.category == DocCategory.HTML:
-        return await _parse_html(doc, exa_api_key=exa_api_key)
+        return await _parse_html(doc)
 
-    if route.category in (DocCategory.PDF, DocCategory.OFFICE):
-        return await _parse_file(doc, route)
-
-    if route.category == DocCategory.IMAGE:
-        return _parse_image_placeholder(doc)
+    if route.category in (DocCategory.PDF, DocCategory.OFFICE, DocCategory.IMAGE):
+        return await _parse_file(doc)
 
     logger.warning("ingest.parse.unknown_route", category=route.category.value)
     return _fallback_text(doc)
 
 
-# ── route handlers ─────────────────────────────────────────────────────────
-
-def _parse_text(doc: CanonicalDoc) -> list[ParseCandidate]:
+def _parse_text(doc: CanonicalDoc) -> FusedDocument | None:
     raw_text = doc.artifact.raw_text
     if not raw_text and doc.artifact.raw_bytes:
         raw_text = decode_text_bytes(doc.artifact.raw_bytes)
     if not raw_text:
-        return []
+        return None
+
     candidate = parse_text(raw_text, title=None)
-    return [candidate] if candidate else []
+    if not candidate:
+        return None
+
+    return _to_fused(candidate)
 
 
-async def _parse_html(
-    doc: CanonicalDoc,
-    *,
-    exa_api_key: str | None,
-) -> list[ParseCandidate]:
+async def _parse_html(doc: CanonicalDoc) -> FusedDocument | None:
     url = doc.artifact.source_url or ""
-    tasks = []
+    candidate = await parse_html(url, raw_html=doc.artifact.raw_bytes or None)
+    if not candidate:
+        return None
 
-    tasks.append(parse_html_trafilatura(url, raw_html=doc.artifact.raw_bytes or None))
-
-    if exa_api_key and url:
-        tasks.append(parse_html_exa(url, exa_api_key=exa_api_key))
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    candidates: list[ParseCandidate] = []
-    for r in results:
-        if isinstance(r, ParseCandidate):
-            candidates.append(r)
-        elif isinstance(r, BaseException):
-            logger.warning("ingest.parse.html_parser_failed", error=str(r))
-    return candidates
+    return _to_fused(candidate)
 
 
-async def _parse_file(doc: CanonicalDoc, route: DocRoute) -> list[ParseCandidate]:
+async def _parse_file(doc: CanonicalDoc) -> FusedDocument | None:
     candidate = await parse_file(
         doc.artifact.raw_bytes,
         file_name=doc.artifact.file_name,
         file_ext=doc.artifact.file_ext,
     )
-    return [candidate] if candidate else []
+    if not candidate:
+        return None
+
+    return _to_fused(candidate)
 
 
-def _parse_image_placeholder(doc: CanonicalDoc) -> list[ParseCandidate]:
-    title = doc.artifact.file_name or "Image"
-    url = doc.artifact.source_url or ""
-    markdown = f"# {title}\n\n![{title}]({url})\n"
-    return [ParseCandidate(
-        parser_name="image_placeholder",
-        markdown=markdown,
-        title=title,
-        word_count=len(markdown.split()),
-    )]
-
-
-def _fallback_text(doc: CanonicalDoc) -> list[ParseCandidate]:
+def _fallback_text(doc: CanonicalDoc) -> FusedDocument | None:
     """Last resort – try to decode as text."""
     if doc.artifact.raw_bytes:
         text = decode_text_bytes(doc.artifact.raw_bytes)
         if text.strip():
             candidate = parse_text(text)
-            return [candidate] if candidate else []
-    return []
+            if candidate:
+                return _to_fused(candidate)
+    return None
+
+
+def _to_fused(candidate) -> FusedDocument:
+    """Convert a ParseCandidate into a FusedDocument with markdown cleanup."""
+
+    clean = _clean_markdown(candidate.markdown)
+    return FusedDocument(
+        clean_markdown=clean,
+        title=candidate.title or "",
+        author=candidate.author,
+        published_at=candidate.published_at,
+        description=candidate.description,
+        language=candidate.language,
+        word_count=len(clean.split()),
+        primary_parser=candidate.parser_name,
+        metadata=candidate.metadata,
+    )
+
+
+def _clean_markdown(md: str) -> str:
+    text = md.strip()
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = "\n".join(line.rstrip() for line in text.splitlines())
+    text = text.replace("\x00", "")
+    return text.strip() + "\n"

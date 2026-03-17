@@ -1,7 +1,8 @@
 """Ingest service – the single entry point for content ingestion.
 
-Creates an Article, runs the ADR-002 pipeline, and persists the
-results (clean_markdown, toc, chunks) back to the database.
+Runs the ingest pipeline and returns results for the caller to persist.
+All parser configuration (MinerU, Dripper, LLM) is read by the infra
+layer via ``get_settings()``; the service layer does not thread it.
 """
 
 from __future__ import annotations
@@ -24,9 +25,8 @@ async def ingest(
     *,
     ingest_input: IngestInput,
     existing_dedupe_keys: set[str] | None = None,
-    exa_api_key: str | None = None,
 ) -> IngestResult:
-    """Run the full ingest pipeline and persist results.
+    """Run the full ingest pipeline and return results for persistence.
 
     This is the **only** public function external modules need to call.
     """
@@ -35,7 +35,6 @@ async def ingest(
     ctx = IngestContext(
         ingest_input=ingest_input,
         existing_dedupe_keys=existing_dedupe_keys or set(),
-        exa_api_key=exa_api_key,
     )
 
     result = await run_pipeline(ctx, observer=observer)
@@ -51,14 +50,9 @@ async def ingest(
         logger.warning("ingest.no_fused_doc")
         return result
 
-    # Persist results to the Article and ArticleChunk tables.
-    # The actual ORM writes are deferred to the caller who owns the
-    # db session and Article lifecycle.  We return the IngestResult
-    # with all data ready for persistence.
     logger.info(
         "ingest.complete",
         title=result.fused_doc.title,
-        quality_score=result.quality_score,
         primary_parser=result.primary_parser,
         chunk_count=len(result.chunks),
         toc_count=len(result.toc),
@@ -71,8 +65,6 @@ def build_article_fields(result: IngestResult) -> dict:
     """Build a dict of Article column values from the pipeline result.
 
     The caller applies these to an Article ORM instance and commits.
-    Includes block_graph_json and quality_profile_json so downstream
-    pipelines (summary, chat) can consume them in separate requests.
     """
 
     if result.fused_doc is None:
@@ -121,19 +113,6 @@ def build_article_fields(result: IngestResult) -> dict:
             ],
         }
 
-    quality_profile_json = None
-    if result.quality_score > 0:
-        quality_profile_json = {
-            "total_score": result.quality_score,
-            "primary_parser": result.primary_parser,
-            "parse_candidate_count": result.parse_candidate_count,
-            "doc_category": result.doc_route.category.value if result.doc_route else None,
-            "toc_count": len(result.toc),
-            "chunk_count": len(result.chunks),
-            "block_count": len(result.block_graph.blocks) if result.block_graph else 0,
-            "block_type_counts": result.block_graph.block_type_counts if result.block_graph else {},
-        }
-
     clean_markdown = result.fused_doc.clean_markdown
     return {
         "title": result.fused_doc.title or None,
@@ -143,9 +122,7 @@ def build_article_fields(result: IngestResult) -> dict:
         "clean_markdown": clean_markdown,
         "toc_json": toc_json,
         "block_graph_json": block_graph_json,
-        "quality_profile_json": quality_profile_json,
         "content_hash": hashlib.sha256(clean_markdown.encode("utf-8")).hexdigest(),
-        "parse_quality_score": result.fused_doc.quality_score,
         "parser_name": result.fused_doc.primary_parser,
         "article_retrieval_text": _build_article_retrieval_text(result),
         "parse_status": "ready",

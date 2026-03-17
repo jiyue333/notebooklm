@@ -1,7 +1,7 @@
 """Stage C – Document Type Router.
 
 Classifies the artifact into a ``DocCategory`` (html, pdf, office,
-text, image) so downstream stages know which parser lane to use.
+text, image) so downstream stages know which parser to use.
 """
 
 from __future__ import annotations
@@ -60,50 +60,40 @@ def route_document(doc: CanonicalDoc) -> DocRoute:
     mime = doc.artifact.content_type.lower()
     ext = (doc.artifact.file_ext or "").lower()
 
-    # 1. MIME
     if mime in _IMAGE_MIMES:
-        return DocRoute(category=DocCategory.IMAGE, mime_type=mime, file_ext=ext)
+        return DocRoute(
+            category=DocCategory.IMAGE, mime_type=mime, file_ext=ext,
+            parser_hints=["mineru"],
+        )
+
     cat = _MIME_MAP.get(mime)
     if cat:
         return DocRoute(
-            category=cat,
-            mime_type=mime,
-            file_ext=ext,
-            parser_hints=_hints_for(cat, doc),
+            category=cat, mime_type=mime, file_ext=ext,
+            parser_hints=_hints_for(cat),
         )
 
-    # 2. Extension
     cat = _EXT_MAP.get(ext)
     if cat:
         return DocRoute(
-            category=cat,
-            mime_type=mime,
-            file_ext=ext,
-            parser_hints=_hints_for(cat, doc),
+            category=cat, mime_type=mime, file_ext=ext,
+            parser_hints=_hints_for(cat),
         )
 
-    # 3. URL pattern – assume HTML if it looks like a webpage
     if doc.artifact.source_url and not ext:
         return DocRoute(
-            category=DocCategory.HTML,
-            mime_type=mime,
-            file_ext=ext,
-            parser_hints=["trafilatura"],
+            category=DocCategory.HTML, mime_type=mime, file_ext=ext,
+            parser_hints=["dripper"],
         )
 
     return DocRoute(category=DocCategory.UNKNOWN, mime_type=mime, file_ext=ext)
 
 
-def _hints_for(cat: DocCategory, doc: CanonicalDoc) -> list[str]:
+def _hints_for(cat: DocCategory) -> list[str]:
     if cat == DocCategory.HTML:
-        hints = ["trafilatura"]
-        if doc.artifact.source_url:
-            hints.append("exa")
-        return hints
-    if cat == DocCategory.PDF:
-        return ["markitdown"]
-    if cat == DocCategory.OFFICE:
-        return ["markitdown"]
+        return ["dripper"]
+    if cat in (DocCategory.PDF, DocCategory.OFFICE, DocCategory.IMAGE):
+        return ["mineru"]
     if cat == DocCategory.TEXT:
         return ["text_direct"]
     return []

@@ -1,64 +1,46 @@
-"""File parser adapter – MarkItDown for PDF, Word, PowerPoint, etc."""
+"""File parser adapter – delegates to ``infra.providers.mineru``."""
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import structlog
 
+from app.infra.providers.mineru.client import MinerUClient
 from app.modules.ingest.pipeline.types import ParseCandidate
 
 logger = structlog.get_logger(__name__)
+
 
 async def parse_file(
     raw_bytes: bytes,
     file_name: str | None = None,
     file_ext: str | None = None,
 ) -> ParseCandidate | None:
-    """Convert a binary file to markdown using MarkItDown."""
-
-    try:
-        from markitdown import MarkItDown
-    except ImportError:
-        logger.warning("ingest.parser.markitdown_unavailable")
-        return None
+    """Convert a binary file to markdown using MinerU."""
 
     ext = file_ext or (Path(file_name).suffix if file_name else "")
     if not ext:
         return None
 
-    suffix = ext if ext.startswith(".") else f".{ext}"
-    tmp_path: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp.write(raw_bytes)
-            tmp_path = tmp.name
-
-        converter = MarkItDown()
-        result = converter.convert(tmp_path)
-        markdown = (result.text_content or "").strip()
-        if not markdown:
-            return None
-
-        title = getattr(result, "title", None)
-
-        return ParseCandidate(
-            parser_name="markitdown",
-            markdown=markdown,
-            title=title,
-            word_count=len(markdown.split()),
-        )
-    except Exception as exc:
-        logger.warning(
-            "ingest.parser.markitdown_error",
-            file_name=file_name,
-            error=str(exc),
-        )
+    client = MinerUClient()
+    markdown = await client.parse(raw_bytes, file_ext=ext)
+    if not markdown:
+        logger.warning("ingest.parser.mineru_failed", file_name=file_name)
         return None
-    finally:
-        if tmp_path:
-            try:
-                Path(tmp_path).unlink(missing_ok=True)
-            except Exception:
-                pass
+
+    title = _extract_title(markdown)
+    return ParseCandidate(
+        parser_name="mineru",
+        markdown=markdown,
+        title=title or (Path(file_name).stem if file_name else None),
+        word_count=len(markdown.split()),
+    )
+
+
+def _extract_title(markdown: str) -> str | None:
+    for line in markdown.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# ") and not stripped.startswith("## "):
+            return stripped[2:].strip()
+    return None
