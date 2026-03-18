@@ -56,20 +56,19 @@ async def run_search_agent(
     existing_titles = existing_article_titles or []
     existing_urls = set(existing_article_urls or [])
     pipeline_start = perf_counter()
-    _mode = exa_mode
 
     # ========== phase 1 意图识别 ==========
     # ====== step 1 生成结构化意图 ======
     t0 = perf_counter()
-    with start_span("search.intent", attributes={"search.mode": _mode}):
+    with start_span("search.intent", attributes={"search.mode": exa_mode}):
         intent = await _phase_intent(
-            chat_model,
+            lite_model,
             query=query,
             notebook_title=notebook_title,
             existing_titles=existing_titles,
         )
     observe_search_stage(
-        stage="intent", mode=_mode, status="success",
+        stage="intent", mode=exa_mode, status="success",
         duration_ms=_elapsed_ms(t0),
     )
     logger.info(
@@ -83,7 +82,7 @@ async def run_search_agent(
     # ========== phase 2 并行召回 ==========
     # ====== step 1 并发执行搜索工具 ======
     t0 = perf_counter()
-    with start_span("search.recall", attributes={"search.mode": _mode}):
+    with start_span("search.recall", attributes={"search.mode": exa_mode}):
         raw_items = await _phase_recall(
             intent=intent,
             query=query,
@@ -92,14 +91,14 @@ async def run_search_agent(
             max_results=max_results,
         )
     observe_search_stage(
-        stage="recall", mode=_mode, status="success",
+        stage="recall", mode=exa_mode, status="success",
         duration_ms=_elapsed_ms(t0),
     )
     logger.info("search_agent.recall_done", raw_count=len(raw_items), duration_ms=_elapsed_ms(t0))
 
     if not raw_items:
-        observe_search_empty_slate(mode=_mode, reason="no_recall_results")
-        observe_search_e2e(mode=_mode, duration_ms=_elapsed_ms(pipeline_start))
+        observe_search_empty_slate(mode=exa_mode, reason="no_recall_results")
+        observe_search_e2e(mode=exa_mode, duration_ms=_elapsed_ms(pipeline_start))
         return {
             "cards": [],
             "intent": intent.model_dump(),
@@ -114,9 +113,9 @@ async def run_search_agent(
     deduped = _deduplicate(raw_items)
     removed = len(raw_items) - len(deduped)
     if removed > 0:
-        observe_search_dedup(mode=_mode, dedup_type="url", count=removed)
+        observe_search_dedup(mode=exa_mode, dedup_type="url", count=removed)
     observe_search_stage(
-        stage="dedup", mode=_mode, status="success",
+        stage="dedup", mode=exa_mode, status="success",
         duration_ms=_elapsed_ms(t0),
     )
     logger.info("search_agent.dedup_done", before=len(raw_items), after=len(deduped))
@@ -124,7 +123,7 @@ async def run_search_agent(
     # ========== phase 4 打分排序 ==========
     # ====== step 1 结构化打分 ======
     t0 = perf_counter()
-    with start_span("search.score", attributes={"search.mode": _mode}):
+    with start_span("search.score", attributes={"search.mode": exa_mode}):
         scored = await _phase_score(
             lite_model or chat_model,
             candidates=deduped,
@@ -134,7 +133,7 @@ async def run_search_agent(
             existing_titles=existing_titles,
         )
     observe_search_stage(
-        stage="score", mode=_mode, status="success",
+        stage="score", mode=exa_mode, status="success",
         duration_ms=_elapsed_ms(t0),
     )
     logger.info("search_agent.score_done", scored_count=len(scored), duration_ms=_elapsed_ms(t0))
@@ -142,10 +141,10 @@ async def run_search_agent(
     # ========== phase 5 组装结果卡片 ==========
     # ====== step 1 转换前端卡片 ======
     cards = _build_cards(scored, existing_urls=existing_urls, max_results=max_results)
-    observe_search_slate_card_count(mode=_mode, count=len(cards))
+    observe_search_slate_card_count(mode=exa_mode, count=len(cards))
     if not cards:
-        observe_search_empty_slate(mode=_mode, reason="slate_empty_after_build")
-    observe_search_e2e(mode=_mode, duration_ms=_elapsed_ms(pipeline_start))
+        observe_search_empty_slate(mode=exa_mode, reason="slate_empty_after_build")
+    observe_search_e2e(mode=exa_mode, duration_ms=_elapsed_ms(pipeline_start))
     logger.info(
         "search_agent.cards_built",
         card_count=len(cards),

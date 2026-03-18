@@ -108,7 +108,7 @@ services:
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
+      dockerfile: ../docker/Dockerfile.frontend
       args:
         VITE_DATA_SOURCE: ${VITE_DATA_SOURCE:-api}
         # 生产环境固定用相对路径，由同域 nginx 转发到 backend，避免浏览器请求 127.0.0.1
@@ -128,7 +128,7 @@ services:
   backend:
     build:
       context: .
-      dockerfile: backend/Dockerfile.api
+      dockerfile: docker/Dockerfile.api
     image: notebooklm-backend:latest
     container_name: notebooklm-backend
     restart: unless-stopped
@@ -163,7 +163,7 @@ services:
   worker:
     build:
       context: .
-      dockerfile: backend/Dockerfile.worker
+      dockerfile: docker/Dockerfile.worker
     image: notebooklm-worker:latest
     container_name: notebooklm-worker
     restart: unless-stopped
@@ -192,7 +192,7 @@ services:
   scheduler:
     build:
       context: .
-      dockerfile: backend/Dockerfile.scheduler
+      dockerfile: docker/Dockerfile.scheduler
     image: notebooklm-scheduler:latest
     container_name: notebooklm-scheduler
     restart: unless-stopped
