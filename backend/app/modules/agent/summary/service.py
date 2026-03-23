@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from typing import TYPE_CHECKING
 
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -14,6 +15,9 @@ from app.infra.ai.chat_models import build_user_chat_model
 from app.infra.telemetry.metrics import observe_summary_cache_hit, observe_summary_e2e
 from app.modules.agent.summary.prompts import PROMPT_VERSION, SYSTEM_PROMPT, USER_PROMPT
 from app.modules.agent.summary import repo
+
+if TYPE_CHECKING:
+    from app.modules.notebooks.models import Article
 
 logger = structlog.get_logger(__name__)
 
@@ -95,6 +99,42 @@ async def generate_summary(
         await db.commit()
 
     return {"summary_text": summary_text, "cached": False}
+
+
+async def list_notebook_summaries(
+    db: AsyncSession,
+    *,
+    articles: list["Article"],
+) -> list[dict]:
+    """批量读取 notebook 下文章的摘要缓存，不触发生成。"""
+
+    article_ids = [article.id for article in articles]
+    cached_rows = await repo.list_cached_summaries_by_article_ids(
+        db,
+        article_ids=article_ids,
+        prompt_version=PROMPT_VERSION,
+    )
+
+    latest_by_article_id: dict[str, object] = {}
+    for row in cached_rows:
+        latest_by_article_id.setdefault(row.article_id, row)
+
+    summaries: list[dict] = []
+    for article in articles:
+        if not article.content_hash:
+            continue
+        cached = latest_by_article_id.get(article.id)
+        if cached is None or getattr(cached, "content_hash", None) != article.content_hash:
+            continue
+        summary_text = getattr(cached, "summary_text", "").strip()
+        if not summary_text:
+            continue
+        summaries.append({
+            "articleId": article.id,
+            "title": article.title,
+            "summaryText": summary_text,
+        })
+    return summaries
 
 
 def _needs_chinese_translation(text: str) -> bool:

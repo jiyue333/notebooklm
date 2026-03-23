@@ -48,6 +48,7 @@ const createInitialSettings = () => ({
     apiUrl: 'http://127.0.0.1:11434',
     searchProviderSelection: DEFAULT_PROVIDER_VALUE,
     searchProvider: 'exa',
+    preferredSites: [],
     usingDefaultModelConfig: true,
     defaultModelProvider: 'ollama',
     defaultModelName: 'qwen3.5:0.8b',
@@ -333,6 +334,15 @@ export default function SettingsModal({ onClose }) {
                     embeddingApiUrl: getEmbeddingProviderPreset(value).apiUrl,
                 };
             }
+            if (key === 'preferredSitesText') {
+                return {
+                    ...prev,
+                    preferredSites: value
+                        .split('\n')
+                        .map((line) => line.trim())
+                        .filter(Boolean),
+                };
+            }
             return { ...prev, [key]: value };
         });
     };
@@ -346,10 +356,14 @@ export default function SettingsModal({ onClose }) {
         }
         if (activeTab === 'search') {
             if (settings.searchProviderSelection === DEFAULT_PROVIDER_VALUE) {
-                return { useDefaultSearchConfig: true };
+                return {
+                    useDefaultSearchConfig: true,
+                    preferredSites: settings.preferredSites,
+                };
             }
             return {
                 searchProvider: settings.searchProvider,
+                preferredSites: settings.preferredSites,
                 ...(settings.searchApiKey.trim() ? { searchApiKey: settings.searchApiKey.trim() } : {}),
                 ...(settings.clearSearchApiKey ? { clearSearchApiKey: true } : {}),
             };
@@ -715,13 +729,6 @@ export default function SettingsModal({ onClose }) {
                                 <div className="settings-tab-content">
                                     <div className="settings-section">
                                         <label className="settings-section-title">搜索引擎 Provider</label>
-                                        <p className="settings-hint">当前搜索来源发现统一走后端 Search Provider。现阶段只开放 Exa；系统默认取自 `.env`，也可以配置用户自己的 Key。</p>
-                                        {settings.usingDefaultSearchConfig && (
-                                            <p className="settings-hint">当前显示的是系统默认搜索引擎配置：{getProviderLabel(settings.defaultSearchProvider)}</p>
-                                        )}
-                                        {settings.searchProviderSelection === DEFAULT_PROVIDER_VALUE && (
-                                            <p className="settings-hint">保存后将直接回退到 `.env` 中配置的默认搜索 provider 和默认凭证。</p>
-                                        )}
                                         <div className="settings-select-wrapper">
                                             <select
                                                 className="settings-select"
@@ -734,6 +741,17 @@ export default function SettingsModal({ onClose }) {
                                             </select>
                                             <span className="settings-select-arrow">▾</span>
                                         </div>
+                                    </div>
+                                    <div className="settings-section">
+                                        <label className="settings-section-title">偏好站点</label>
+                                        <p className="settings-hint">每行一个域名，例如 `arxiv.org`、`openai.com`、`anthropic.com`。</p>
+                                        <textarea
+                                            className="settings-input"
+                                            rows={5}
+                                            value={(settings.preferredSites || []).join('\n')}
+                                            onChange={(event) => update('preferredSitesText', event.target.value)}
+                                            placeholder={'arxiv.org\nopenai.com\ndocs.anthropic.com'}
+                                        />
                                     </div>
                                     <div className="settings-section">
                                         <label className="settings-section-title">Exa API Key</label>

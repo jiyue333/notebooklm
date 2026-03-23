@@ -17,6 +17,7 @@ class SettingsUpdateRequest(BaseModel):
     searchProvider: str | None = Field(default=None, max_length=32)
     searchApiKey: str | None = None
     clearSearchApiKey: bool | None = None
+    preferredSites: list[str] | None = None
     useDefaultEmbeddingConfig: bool | None = None
     embeddingProvider: str | None = Field(default=None, max_length=64)
     embeddingModel: str | None = Field(default=None, max_length=128)

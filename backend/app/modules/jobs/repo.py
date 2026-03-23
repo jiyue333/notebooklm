@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.jobs.models import Job
@@ -80,14 +80,31 @@ async def get_job(session: AsyncSession, job_id: str) -> Job | None:
     return result.scalar_one_or_none()
 
 
-async def list_pending_publish_jobs(session: AsyncSession, *, limit: int = 100) -> list[Job]:
+async def list_pending_publish_jobs(
+    session: AsyncSession,
+    *,
+    limit: int = 100,
+    publish_timeout_seconds: int = 120,
+) -> list[Job]:
+    now = datetime.now(UTC)
+    stale_cutoff = now - timedelta(seconds=publish_timeout_seconds)
     result = await session.execute(
         select(Job)
-        .where(Job.status == "pending_publish", Job.available_at <= datetime.now(UTC))
+        .where(
+            or_(
+                (Job.status == "pending_publish") & (Job.available_at <= now),
+                (Job.status == "publishing") & (Job.available_at <= stale_cutoff),
+            )
+        )
         .order_by(Job.created_at.asc())
         .limit(limit)
     )
     return list(result.scalars().all())
+
+
+async def mark_job_publishing(job: Job) -> None:
+    job.status = "publishing"
+    job.available_at = datetime.now(UTC)
 
 
 async def mark_job_queued(job: Job) -> None:

@@ -11,6 +11,7 @@ const DEFAULT_SETTINGS = {
     modelName: mockUser.settings?.model || 'qwen3.5:0.8b',
     apiUrl: 'http://127.0.0.1:11434',
     searchProvider: 'exa',
+    preferredSites: [],
     embeddingProvider: 'ollama',
     embeddingModel: 'qwen3-embedding:0.6b',
     embeddingApiUrl: 'http://127.0.0.1:11434',
@@ -183,6 +184,7 @@ const buildSettingsView = (user, settings) => ({
     modelName: settings.modelName,
     apiUrl: settings.apiUrl,
     searchProvider: settings.searchProvider || 'exa',
+    preferredSites: Array.isArray(settings.preferredSites) ? settings.preferredSites : [],
     usingDefaultModelConfig:
         settings.modelProvider === DEFAULT_SETTINGS.modelProvider
         && settings.modelName === DEFAULT_SETTINGS.modelName
@@ -931,6 +933,7 @@ const normalizeSearchItem = (item = {}) => ({
     id: item.id || null,
     title: item.title || '未命名来源',
     url: item.url || '',
+    domain: item.domain || item.sourceName || '',
     sourceName: item.sourceName || '',
     sourceTypeBadge: item.sourceTypeBadge || '',
     publishedAt: item.publishedAt || null,
@@ -940,19 +943,35 @@ const normalizeSearchItem = (item = {}) => ({
     importSuggestion: item.importSuggestion || 'optional',
     description: item.description || '',
     author: item.author || null,
+    finalScore: item.finalScore ?? 0,
+    scoreBreakdown: item.scoreBreakdown || {},
+    provider: item.provider || '',
+    queryFamily: item.queryFamily || '',
+    preferredSiteHit: Boolean(item.preferredSiteHit),
+    matchedPreferredSite: item.matchedPreferredSite || null,
+    duplicateRisk: Boolean(item.duplicateRisk),
+    selectedReasonTags: Array.isArray(item.selectedReasonTags) ? item.selectedReasonTags : [],
     displayRank: item.displayRank || 0,
 });
 
 const normalizeSearchPayload = (payload) => {
-    const item = payload?.item || {};
+    const legacyItem = payload?.item || {};
+    const run = payload?.run || {};
     return {
-        searchSessionId: item.searchSessionId || payload?.searchSessionId || null,
-        mode: item.mode || payload?.mode || 'auto',
-        modeLabel: item.modeLabel || payload?.modeLabel || getSearchModeLabel(item.mode || payload?.mode || 'auto'),
-        status: item.status || payload?.status || 'completed',
-        execution: item.execution || payload?.execution || 'sync',
-        items: (payload?.items || item.items || []).map(normalizeSearchItem),
-        meta: payload?.meta || item.meta || {},
+        searchSessionId: run.id || legacyItem.searchSessionId || payload?.searchSessionId || null,
+        mode: run.mode || legacyItem.mode || payload?.mode || 'auto',
+        modeLabel: run.modeLabel || legacyItem.modeLabel || payload?.modeLabel || getSearchModeLabel(run.mode || legacyItem.mode || payload?.mode || 'auto'),
+        status: run.status || legacyItem.status || payload?.status || 'completed',
+        execution: 'sync',
+        currentRound: run.currentRound || 1,
+        maxRounds: run.maxRounds || 1,
+        targetCount: run.targetCount || 10,
+        elapsedMs: run.elapsedMs || payload?.meta?.elapsedMs || 0,
+        items: (payload?.items || legacyItem.items || []).map(normalizeSearchItem),
+        taskSpec: payload?.taskSpec || payload?.meta?.intent || {},
+        recallSummary: payload?.recallSummary || {},
+        preferencesApplied: payload?.preferencesApplied || {},
+        debug: payload?.debug || null,
         message: payload?.message || '',
     };
 };
@@ -1122,23 +1141,13 @@ const backendProvider = {
         return normalizeSearchPayload(payload);
     },
 
-    async searchSources({ notebookId, query, mode = 'auto', maxResults = 10, freshnessHours = 24 }) {
+    async searchSources({ notebookId, query, mode = 'auto', maxResults = 10 }) {
         const payload = await request(`/notebooks/${notebookId}/sources/search`, {
             method: 'POST',
-            body: { query, mode, maxResults, freshnessHours },
+            body: { query, mode, maxResults },
             timeoutMs: 90_000,
         });
-        const normalized = normalizeSearchPayload(payload);
-        if (normalized.execution !== 'async' || !normalized.searchSessionId) {
-            return normalized;
-        }
-        return pollSearchSession(
-            () => backendProvider.getSearchSession({
-                notebookId,
-                searchSessionId: normalized.searchSessionId,
-            }),
-            { intervalMs: 1000, maxAttempts: 120 },
-        );
+        return normalizeSearchPayload(payload);
     },
 
     async importSources({ notebookId, searchSessionId, searchResultIds }) {

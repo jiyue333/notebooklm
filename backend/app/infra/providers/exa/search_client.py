@@ -16,6 +16,8 @@ class ExaSearchRequest:
     mode: ExaSearchMode = "auto"
     max_results: int = 10
     freshness_hours: int | None = None
+    include_domains: list[str] | None = None
+    exclude_domains: list[str] | None = None
 
 
 class ExaSearchClient:
@@ -40,22 +42,26 @@ class ExaSearchClient:
         if not api_key:
             raise ValueError("Exa api key is required")
 
+        contents: dict[str, Any] = {
+            "highlights": {
+                "query": request.query,
+                "maxCharacters": 1800,
+            },
+            "livecrawlTimeout": 10000,
+        }
+        if request.freshness_hours is not None:
+            contents["maxAgeHours"] = request.freshness_hours
+
         payload = {
             "query": request.query,
             "type": request.mode,
             "numResults": request.max_results,
-            "contents": {
-                "highlights": {
-                    "query": request.query,
-                    "highlightsPerUrl": 3,
-                    "numSentences": 3,
-                }
-            },
+            "contents": contents,
         }
-        # Exa freshness knobs are intentionally kept in the adapter so later
-        # steps can tune them without leaking provider details upward.
-        if request.freshness_hours is not None:
-            payload["maxAgeHours"] = request.freshness_hours
+        if request.include_domains:
+            payload["includeDomains"] = request.include_domains
+        if request.exclude_domains:
+            payload["excludeDomains"] = request.exclude_domains
 
         response = await self._client.post(
             "/search",

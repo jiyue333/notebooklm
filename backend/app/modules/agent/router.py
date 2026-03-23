@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import AsyncIterator, Literal
+from urllib.parse import urlparse
 
 import structlog
 from fastapi import APIRouter, Depends
@@ -15,9 +16,10 @@ from app.api.errors import AppError
 from app.api.response import success_response
 from app.api.sse import build_sse_error_payload, encode_sse_event
 from app.modules.agent.chat.service import send_message
+from app.modules.agent.summary.service import list_notebook_summaries
 from app.modules.agent.summary.service import generate_summary
 from app.modules.notebooks import repo as notebooks_repo
-from app.modules.settings.runtime import resolve_search_api_key
+from app.modules.settings.runtime import resolve_preferred_sites, resolve_search_api_key, resolve_tavily_api_key
 from app.modules.agent.search.schemas import SearchRequest, SearchResponse
 from app.modules.agent.search.service import get_search_session, start_agent_search
 
@@ -30,6 +32,17 @@ _SSE_HEADERS = {
     "Connection": "keep-alive",
     "X-Accel-Buffering": "no",
 }
+
+
+def _normalize_existing_url(url: str | None) -> str:
+    raw = (url or "").strip().lower()
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    path = parsed.path.rstrip("/") or "/"
+    return f"{parsed.scheme}://{parsed.netloc}{path}"
 
 
 class AiEventRequest(BaseModel):
@@ -161,16 +174,22 @@ async def search_sources_endpoint(
         raise AppError(404, "未找到对应的笔记本", code="notebook_not_found")
 
     exa_api_key, _key_source = resolve_search_api_key(current_user)
-    if not exa_api_key:
-        raise AppError(422, "请先在设置里配置 Exa API Key", code="search_api_key_required")
 
     existing_articles = await notebooks_repo.list_articles_by_notebook(
         session,
         user_id=current_user.id,
         notebook_id=notebook_id,
     )
-    existing_urls = [a.source_url for a in existing_articles if a.source_url]
-    existing_titles = [a.title for a in existing_articles if a.title]
+    existing_urls = [
+        article.normalized_url or _normalize_existing_url(article.source_url)
+        for article in existing_articles
+        if (article.normalized_url or article.source_url)
+    ]
+    notebook_summaries = await list_notebook_summaries(session, articles=existing_articles)
+    preferred_sites = resolve_preferred_sites(current_user)
+    tavily_api_key, _tavily_source = resolve_tavily_api_key()
+    if not exa_api_key and not tavily_api_key:
+        raise AppError(422, "请先在设置里配置 Exa Key 或系统 Tavily Key", code="search_api_key_required")
 
     return await start_agent_search(
         session,
@@ -180,9 +199,11 @@ async def search_sources_endpoint(
         mode=payload.mode,
         max_results=payload.maxResults,
         exa_api_key=exa_api_key,
+        tavily_api_key=tavily_api_key,
         notebook_title=notebook.title or "",
         existing_article_urls=existing_urls,
-        existing_article_titles=existing_titles,
+        notebook_article_summaries=notebook_summaries,
+        preferred_sites=preferred_sites,
     )
 
 

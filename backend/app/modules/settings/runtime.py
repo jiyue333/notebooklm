@@ -66,6 +66,19 @@ def get_merged_user_settings(user) -> dict:
     return {**get_default_user_settings(), **(user.settings_json or {})}
 
 
+def resolve_preferred_sites(user) -> list[str]:
+    merged = get_merged_user_settings(user)
+    raw_sites = merged.get("preferredSites") or []
+    sites: list[str] = []
+    for site in raw_sites:
+        normalized = str(site).strip().lower()
+        if not normalized:
+            continue
+        normalized = normalized.removeprefix("https://").removeprefix("http://").strip("/")
+        sites.append(normalized)
+    return list(dict.fromkeys(sites))
+
+
 def normalize_chat_provider(value: str | None) -> str:
     normalized = (value or "").strip()
     lowered = normalized.lower()
@@ -108,6 +121,13 @@ def resolve_search_api_key(user, settings: Settings | None = None) -> tuple[str 
     return None, "missing"
 
 
+def resolve_tavily_api_key(settings: Settings | None = None) -> tuple[str | None, str]:
+    runtime_settings = settings or get_settings()
+    if runtime_settings.tavily_default_api_key:
+        return runtime_settings.tavily_default_api_key, "default"
+    return None, "missing"
+
+
 def resolve_chat_runtime_config(user, settings: Settings | None = None) -> ChatRuntimeConfig:
     runtime_settings = settings or get_settings()
     merged = get_merged_user_settings(user)
@@ -121,7 +141,7 @@ def resolve_chat_runtime_config(user, settings: Settings | None = None) -> ChatR
     api_key, key_source = _resolve_provider_api_key(
         provider=provider,
         ciphertext=user.llm_api_key_ciphertext,
-        default_key=runtime_settings.llm_default_api_key,
+        default_key=runtime_settings.default_chat_api_key,
     )
     return ChatRuntimeConfig(
         provider=provider,

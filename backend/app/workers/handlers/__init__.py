@@ -8,12 +8,16 @@ Search is always synchronous – no search worker needed.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+
 from sqlalchemy import delete, select
 
 import structlog
 
+from app.core.config import get_settings
 from app.infra.db.session import get_session_manager
-from app.modules.ingest.pipeline.types import IngestInput, InputType
+from app.infra.telemetry.metrics import observe_mq_job_skip
+from app.modules.ingest.types import IngestInput, InputType
 from app.modules.ingest.service import build_article_chunk_rows, build_article_fields, ingest
 from app.modules.jobs import repo as jobs_repo
 from app.modules.notebooks import repo as notebooks_repo
@@ -21,6 +25,8 @@ from app.modules.notebooks.models import Article, ArticleChunk
 from app.modules.notebooks.service import invalidate_notebook_detail_cache
 
 logger = structlog.get_logger(__name__)
+
+_TERMINAL_STATES = frozenset({"succeeded", "dead"})
 
 JobProcessor = Callable[[str], Awaitable[None]]
 
@@ -55,6 +61,19 @@ async def process_article_ingest(job_id: str) -> None:
         if job is None:
             logger.warning("worker.article_ingest.job_not_found", job_id=job_id)
             return
+
+        if job.status in _TERMINAL_STATES:
+            logger.info("worker.article_ingest.skip_terminal", job_id=job_id, status=job.status)
+            observe_mq_job_skip(job_type=job.job_type, reason=job.status)
+            return
+
+        if job.status == "running" and job.started_at:
+            lease_ms = get_settings().kafka_max_poll_interval_ms
+            elapsed = (datetime.now(UTC) - job.started_at).total_seconds()
+            if elapsed < lease_ms / 1000:
+                logger.info("worker.article_ingest.skip_running", job_id=job_id, elapsed_s=round(elapsed))
+                observe_mq_job_skip(job_type=job.job_type, reason="running_lease_active")
+                return
 
         await jobs_repo.mark_job_running(job)
         await session.commit()
@@ -104,7 +123,10 @@ async def process_article_ingest(job_id: str) -> None:
             result = await ingest(
                 session,
                 ingest_input=ingest_input,
+                article_id=article.id,
                 existing_dedupe_keys=existing_dedupe_keys,
+                mineru_batch_id=payload.get("mineruBatchId"),
+                mineru_data_id=payload.get("mineruDataId"),
             )
 
             if result.is_duplicate:
@@ -113,7 +135,7 @@ async def process_article_ingest(job_id: str) -> None:
                 article.parse_error_message = "该来源与当前笔记本中的已有文章重复，已跳过解析。"
                 article.chunk_status = "failed"
                 article.index_status = "failed"
-            elif result.fused_doc:
+            elif result.clean_markdown:
                 fields = build_article_fields(result)
                 for key, value in fields.items():
                     if hasattr(article, key):
@@ -128,7 +150,7 @@ async def process_article_ingest(job_id: str) -> None:
                 article.index_status = "completed" if chunk_rows else "failed"
             else:
                 article.parse_status = "failed"
-                article.parse_error_tag = "no_fused_doc"
+                article.parse_error_tag = "no_content"
                 article.parse_error_message = "解析未生成可用正文。"
                 article.chunk_status = "failed"
                 article.index_status = "failed"

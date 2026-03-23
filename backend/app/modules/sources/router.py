@@ -63,7 +63,9 @@ async def import_sources_endpoint(
     )
     result_map = {r.id: r for r in results}
     now = datetime.now(UTC)
-    jobs = []
+
+    # ====== step 1 创建 Article 记录 ======
+    articles_for_batch: list[tuple[Article, str]] = []  # (article, raw_url)
     for rid in payload.searchResultIds:
         sr = result_map.get(rid)
         if sr is None:
@@ -84,15 +86,46 @@ async def import_sources_endpoint(
         )
         session.add(article)
         await session.flush()
+        articles_for_batch.append((article, sr.raw_url))
+
+    # ====== step 2 batch 提交所有 URL 到 MinerU ======
+    mineru_batch_id: str | None = None
+    if articles_for_batch:
+        try:
+            from app.infra.providers.mineru.client import MinerUCloudClient
+            mineru = MinerUCloudClient()
+            batch_items = [
+                {"url": url, "data_id": article.id}
+                for article, url in articles_for_batch
+            ]
+            mineru_batch_id = await mineru.submit_url_batch(
+                batch_items, model_version="MinerU-HTML",
+            )
+        except Exception:
+            import structlog
+            structlog.get_logger(__name__).warning(
+                "sources.import.mineru_batch_submit_failed",
+                count=len(articles_for_batch),
+                exc_info=True,
+            )
+
+    # ====== step 3 创建 Job，带上 batch 信息 ======
+    jobs = []
+    for article, _url in articles_for_batch:
+        payload_json: dict = {"articleId": article.id}
+        if mineru_batch_id:
+            payload_json["mineruBatchId"] = mineru_batch_id
+            payload_json["mineruDataId"] = article.id
         job = await jobs_repo.create_article_ingest_job(
             session,
             article_id=article.id,
             search_session_id=search_session.id,
             dedupe_key=f"ingest:{article.id}",
-            payload_json={"articleId": article.id},
+            payload_json=payload_json,
             created_at=now,
         )
         jobs.append(job)
+
     await session.commit()
     if jobs:
         await job_publisher.publish_jobs(session, jobs)

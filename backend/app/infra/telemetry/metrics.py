@@ -267,6 +267,11 @@ MQ_CONSUME_COUNTER = Counter(
     "Message consume outcomes",
     ["topic", "tag", "status"],
 )
+MQ_JOB_SKIP_COUNTER = Counter(
+    "notebooklm_mq_job_skip_total",
+    "Jobs skipped due to terminal or running state",
+    ["job_type", "reason"],
+)
 
 
 def observe_http_request(*, method: str, path: str, status_code: int, duration_ms: float) -> None:
@@ -408,6 +413,10 @@ def observe_mq_publish(*, topic: str, tag: str, status: str, duration_ms: float)
 
 def observe_mq_consume(*, topic: str, tag: str, status: str) -> None:
     MQ_CONSUME_COUNTER.labels(topic=topic, tag=tag, status=status).inc()
+
+
+def observe_mq_job_skip(*, job_type: str, reason: str) -> None:
+    MQ_JOB_SKIP_COUNTER.labels(job_type=job_type, reason=reason).inc()
 
 
 def ensure_metrics_server(*, port: int, addr: str = "127.0.0.1") -> None:

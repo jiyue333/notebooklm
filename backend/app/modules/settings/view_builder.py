@@ -35,6 +35,7 @@ def build_settings_view(user: User) -> dict:
         "modelName": merged["modelName"],
         "apiUrl": merged["apiUrl"],
         "searchProvider": merged.get("searchProvider", PROVIDER_EXA),
+        "preferredSites": merged.get("preferredSites", []),
         "usingDefaultModelConfig": _is_using_default_config(user_settings, MODEL_SETTINGS_FIELDS),
         "defaultModelProvider": normalize_chat_provider(default_settings["modelProvider"]),
         "defaultModelName": default_settings["modelName"],
@@ -64,7 +65,7 @@ def _build_chat_api_key_view(user: User, system_settings, *, provider: str) -> d
     return _build_api_key_view(
         ciphertext=user.llm_api_key_ciphertext,
         last4=user.llm_api_key_last4,
-        default_key=system_settings.llm_default_api_key,
+        default_key=system_settings.default_chat_api_key,
         provider=provider,
         has_field="hasApiKey",
         custom_field="hasCustomApiKey",

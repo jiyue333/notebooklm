@@ -1,1 +1,1 @@
-"""Ingest module – MinerU/Dripper-powered parse pipeline."""
+"""Ingest 模块 — 内容解析管线。"""

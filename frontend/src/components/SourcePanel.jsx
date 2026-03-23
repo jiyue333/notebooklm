@@ -160,54 +160,62 @@ export default function SourcePanel({
     const renderSearchBar = () => (
         <div className="sp-search-area">
             <div className="sp-search-box">
-                <span className="sp-search-icon">{Ic.search}</span>
-                <input
-                    className="sp-search-input"
-                    placeholder="在网络中搜索新来源"
-                    value={searchQuery}
-                    onChange={(event) => setSearchQuery(event.target.value)}
-                    onKeyDown={handleSearchKeyDown}
-                />
-            </div>
-            <div className="sp-search-actions">
-                <div className="sp-mode-selector">
-                    <div className="sp-mode-drop-wrapper" ref={modeDropRef}>
-                        <button
-                            className="sp-mode-btn active"
-                            onClick={() => {
-                                setShowModeDropdown(!showModeDropdown);
-                            }}
-                        >
-                            <span className="sp-mode-btn-icon">{currentMode.icon}</span>
-                            <span>{currentMode.label}</span>
-                            <span className="sp-mode-caret">{Ic.chevronDown}</span>
-                        </button>
-                        {showModeDropdown && (
-                            <div className="sp-mode-dropdown">
-                                {modeOptions.map((option) => (
-                                    <button
-                                        key={option.id}
-                                        className={`sp-mode-option ${mode === option.id ? 'active' : ''}`}
-                                        onClick={() => {
-                                            setMode(option.id);
-                                            setShowModeDropdown(false);
-                                        }}
-                                    >
-                                        <span className="sp-mode-option-icon">{option.icon}</span>
-                                        <div className="sp-mode-option-info">
-                                            <span className="sp-mode-option-label">{option.label}</span>
-                                            <span className="sp-mode-option-desc">{option.desc}</span>
-                                        </div>
-                                        {mode === option.id && <span className="sp-mode-option-check">{Ic.check}</span>}
-                                    </button>
-                                ))}
-                            </div>
-                        )}
-                    </div>
+                <div className="sp-search-input-row">
+                    <span className="sp-search-icon">{Ic.search}</span>
+                    <textarea
+                        className="sp-search-input"
+                        placeholder="在网络中搜索新来源"
+                        value={searchQuery}
+                        onChange={(event) => setSearchQuery(event.target.value)}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter' && !event.shiftKey) {
+                                event.preventDefault();
+                                handleSearchKeyDown(event);
+                            }
+                        }}
+                        rows={1}
+                    />
                 </div>
-                <button className="sp-submit-btn" onClick={handleSearch} disabled={isBusy}>
-                    {isSearching ? <span className="sp-spinner" /> : Ic.send}
-                </button>
+                <div className="sp-search-actions">
+                    <div className="sp-mode-selector">
+                        <div className="sp-mode-drop-wrapper" ref={modeDropRef}>
+                            <button
+                                className="sp-mode-btn active"
+                                onClick={() => {
+                                    setShowModeDropdown(!showModeDropdown);
+                                }}
+                            >
+                                <span className="sp-mode-btn-icon">{currentMode.icon}</span>
+                                <span>{currentMode.label}</span>
+                                <span className="sp-mode-caret">{Ic.chevronDown}</span>
+                            </button>
+                            {showModeDropdown && (
+                                <div className="sp-mode-dropdown">
+                                    {modeOptions.map((option) => (
+                                        <button
+                                            key={option.id}
+                                            className={`sp-mode-option ${mode === option.id ? 'active' : ''}`}
+                                            onClick={() => {
+                                                setMode(option.id);
+                                                setShowModeDropdown(false);
+                                            }}
+                                        >
+                                            <span className="sp-mode-option-icon">{option.icon}</span>
+                                            <div className="sp-mode-option-info">
+                                                <span className="sp-mode-option-label">{option.label}</span>
+                                                <span className="sp-mode-option-desc">{option.desc}</span>
+                                            </div>
+                                            {mode === option.id && <span className="sp-mode-option-check">{Ic.check}</span>}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                    <button className="sp-submit-btn" onClick={handleSearch} disabled={isBusy}>
+                        {isSearching ? <span className="sp-spinner" /> : Ic.send}
+                    </button>
+                </div>
             </div>
         </div>
     );

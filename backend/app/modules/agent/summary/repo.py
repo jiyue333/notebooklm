@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent.summary.models import SummaryCache
@@ -25,6 +25,26 @@ async def get_cached_summary(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def list_cached_summaries_by_article_ids(
+    session: AsyncSession,
+    *,
+    article_ids: list[str],
+    prompt_version: str,
+) -> list[SummaryCache]:
+    if not article_ids:
+        return []
+
+    result = await session.execute(
+        select(SummaryCache)
+        .where(
+            SummaryCache.article_id.in_(article_ids),
+            SummaryCache.prompt_version == prompt_version,
+        )
+        .order_by(desc(SummaryCache.created_at))
+    )
+    return list(result.scalars().all())
 
 
 async def save_summary_cache(

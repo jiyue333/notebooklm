@@ -34,6 +34,7 @@ class KafkaProducer:
             bootstrap_servers=resolve_bootstrap_servers(settings),
             client_id=self._client_id,
             request_timeout_ms=settings.kafka_request_timeout_ms,
+            enable_idempotence=True,
             **self._producer_kwargs,
         )
         await producer.start()

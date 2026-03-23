@@ -57,6 +57,8 @@ class Settings(BaseSettings):
 
     exa_base_url: str = "https://api.exa.ai"
     exa_default_api_key: str | None = None
+    tavily_base_url: str = "https://api.tavily.com"
+    tavily_default_api_key: str | None = None
     search_inline_deadline_ms: int = 4500
     search_review_sampling_enabled: bool = True
     search_review_sampling_rate: float = 0.02
@@ -68,7 +70,7 @@ class Settings(BaseSettings):
     ai_review_sampling_mode: str = "llm"
     ai_review_bad_case_threshold: float = 0.6
 
-    llm_default_api_key: str | None = None
+    default_chat_api_key: str | None = None
     embedding_default_api_key: str | None = None
     default_chat_provider: str = PROVIDER_OLLAMA
     default_chat_model_name: str = "qwen3.5:0.8b"
@@ -102,9 +104,19 @@ class Settings(BaseSettings):
     search_use_llm_task_parser: bool = False
 
     # ── Ingest document parsing ────────────────────────────────────
-    # MinerU 和 Dripper 均使用本地 Python API。
-    # MinerU 后端：auto | pipeline | hybrid-auto-engine
-    mineru_backend: str = "auto"
+    # Tika
+    tika_server_url: str = ""
+
+    # MinerU Cloud API
+    mineru_api_token: str = ""
+    mineru_api_base_url: str = "https://mineru.net/api/v4"
+    mineru_default_model: str = "vlm"
+    mineru_poll_interval_seconds: int = 3
+    mineru_poll_timeout_seconds: int = 300
+
+    # Remark (Node.js subprocess)
+    remark_processor_path: str = ""
+    remark_timeout_seconds: int = 30
 
     kafka_bootstrap_servers: str = "127.0.0.1:29092"
     kafka_topic: str = "notebook_async"

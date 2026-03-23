@@ -33,6 +33,18 @@ def _sanitize_json(value: Any) -> Any:
     return value
 
 
+def _coerce_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not value:
+        return None
+    try:
+        normalized = str(value).replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
 # ── SearchSession CRUD ─────────────────────────────────────────────────────
 
 _MODE_LABELS = {
@@ -155,16 +167,23 @@ async def save_agent_search_results(
             title=_sanitize_text(card.get("title", "")) or "Untitled",
             description=_sanitize_text(card.get("description")),
             author=_sanitize_text(card.get("author")),
-            published_at=None,
-            domain=card.get("source_name", ""),
-            display_rank=card.get("display_rank", 0),
+            published_at=_coerce_datetime(card.get("publishedAt") or card.get("published_at")),
+            domain=card.get("sourceName") or card.get("source_name") or card.get("domain", ""),
+            display_rank=card.get("displayRank") or card.get("display_rank", 0),
             raw_payload_json=_sanitize_json({
-                "source_type_badge": card.get("source_type_badge", ""),
-                "authority_badge": card.get("authority_badge"),
-                "why_selected": card.get("why_selected", ""),
+                "source_type_badge": card.get("sourceTypeBadge") or card.get("source_type_badge", ""),
+                "authority_badge": card.get("authorityBadge") or card.get("authority_badge"),
+                "why_selected": card.get("whySelected") or card.get("why_selected", ""),
                 "highlights": card.get("highlights", []),
-                "import_suggestion": card.get("import_suggestion", "optional"),
-                "final_score": card.get("final_score", 0),
+                "import_suggestion": card.get("importSuggestion") or card.get("import_suggestion", "optional"),
+                "final_score": card.get("finalScore") or card.get("final_score", 0),
+                "score_breakdown": card.get("scoreBreakdown") or card.get("score_breakdown", {}),
+                "provider": card.get("provider"),
+                "query_family": card.get("queryFamily") or card.get("query_family"),
+                "preferred_site_hit": card.get("preferredSiteHit") or card.get("preferred_site_hit", False),
+                "matched_preferred_site": card.get("matchedPreferredSite") or card.get("matched_preferred_site"),
+                "duplicate_risk": card.get("duplicateRisk") or card.get("duplicate_risk", False),
+                "selected_reason_tags": card.get("selectedReasonTags") or card.get("selected_reason_tags", []),
             }),
             created_at=ts,
         )

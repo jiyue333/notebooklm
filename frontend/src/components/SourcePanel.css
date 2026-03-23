@@ -48,24 +48,32 @@
 
 .sp-search-box {
     display: flex;
-    align-items: center;
-    gap: 8px;
+    flex-direction: column;
+    gap: 15px;
     background: var(--card-bg);
-    border-radius: var(--radius);
-    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 24px;
+    padding: 15px 16px 13px;
     box-shadow: var(--card-shadow);
-    margin-bottom: 8px;
+}
+
+.sp-search-input-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
 }
 
 .sp-search-icon {
     display: flex;
     align-items: center;
     color: var(--meta-color);
+    flex-shrink: 0;
 }
 
 .sp-search-icon svg {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
 }
 
 .sp-search-input {
@@ -73,9 +81,16 @@
     border: none;
     background: transparent;
     color: var(--text-color);
-    font-size: 0.85rem;
+    font-size: 0.92rem;
+    line-height: 1.45;
     font-family: inherit;
     outline: none;
+    min-width: 0;
+    resize: none;
+    overflow: hidden;
+    white-space: pre-wrap;
+    word-break: break-word;
+    field-sizing: content;
 }
 
 .sp-search-input::placeholder {
@@ -86,7 +101,8 @@
 .sp-search-actions {
     display: flex;
     align-items: center;
-    gap: 6px;
+    justify-content: space-between;
+    gap: 10px;
 }
 
 /* Mode selector */
@@ -95,19 +111,23 @@
     align-items: center;
     gap: 4px;
     flex: 1;
+    min-width: 0;
 }
 
 .sp-mode-drop-wrapper {
     position: relative;
+    max-width: 100%;
 }
 
 .sp-mode-btn {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 4px;
-    padding: 6px 12px;
+    gap: 7px;
+    min-height: 30px;
+    max-width: 100%;
+    padding: 0 14px;
     border: 1px solid var(--border-color);
-    border-radius: 100px;
+    border-radius: 999px;
     background: var(--card-bg);
     font-size: 0.78rem;
     font-family: inherit;
@@ -120,7 +140,7 @@
 .sp-mode-btn.active {
     color: var(--accent-color);
     font-weight: 600;
-    border-color: var(--accent-color);
+    border-color: color-mix(in srgb, var(--accent-color), transparent 25%);
     background: color-mix(in srgb, var(--accent-color), transparent 92%);
 }
 
@@ -129,25 +149,20 @@
     color: var(--accent-color);
 }
 
-.sp-mode-btn-icon {
+.sp-mode-btn-icon,
+.sp-mode-caret {
     display: flex;
     align-items: center;
 }
 
 .sp-mode-btn-icon svg {
-    width: 15px;
-    height: 15px;
-}
-
-.sp-mode-caret {
-    display: flex;
-    align-items: center;
-    opacity: 0.6;
+    width: 12px;
+    height: 12px;
 }
 
 .sp-mode-caret svg {
-    width: 14px;
-    height: 14px;
+    width: 10px;
+    height: 10px;
 }
 
 /* Mode dropdown */
@@ -155,7 +170,7 @@
     position: absolute;
     top: calc(100% + 6px);
     left: 0;
-    min-width: 240px;
+    width: 130%;
     background: var(--card-bg);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
@@ -214,14 +229,14 @@
 
 .sp-mode-option-label {
     display: block;
-    font-size: 0.88rem;
+    font-size: 0.82rem;
     font-weight: 500;
     color: var(--title-color);
 }
 
 .sp-mode-option-desc {
     display: block;
-    font-size: 0.72rem;
+    font-size: 0.7rem;
     color: var(--meta-color);
     margin-top: 2px;
 }
@@ -240,28 +255,28 @@
 
 /* Submit button */
 .sp-submit-btn {
-    width: 28px;
-    height: 28px;
+    width: 30px;
+    height: 30px;
     display: flex;
     align-items: center;
     justify-content: center;
     border: none;
     border-radius: 50%;
-    background: var(--accent-color);
-    color: #fff;
+    background: var(--hover-bg);
+    color: var(--meta-color);
     cursor: pointer;
-    margin-left: auto;
     flex-shrink: 0;
-    transition: box-shadow 0.2s;
+    transition: all 0.15s;
 }
 
 .sp-submit-btn svg {
-    width: 14px;
-    height: 14px;
+    width: 13px;
+    height: 13px;
 }
 
-.sp-submit-btn:hover {
-    box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-color), transparent 50%);
+.sp-submit-btn:hover:not(:disabled) {
+    color: var(--accent-color);
+    background: color-mix(in srgb, var(--accent-color), transparent 90%);
 }
 
 .sp-submit-btn:disabled {

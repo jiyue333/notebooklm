@@ -40,14 +40,18 @@ async def publish_jobs(session: AsyncSession, jobs: list[Job]) -> None:
     producer = KafkaProducer(client_id="notebooklm-api")
     try:
         for job in jobs:
+            await repo.mark_job_publishing(job)
+            await session.commit()
+
             await producer.publish(_build_message(job))
+
             await repo.mark_job_queued(job)
+            await session.commit()
     except ImportError:
         logger.warning("jobs.kafka_unavailable, running inline fallback")
         await _inline_fallback(jobs)
     except Exception as exc:
         logger.exception("jobs.publish_failed", error=str(exc))
-        await _inline_fallback(jobs)
     finally:
         await producer.shutdown()
 

@@ -1,21 +1,17 @@
-"""Ingest service – the single entry point for content ingestion.
+"""Ingest service — 对外唯一入口。
 
-Runs the ingest pipeline and returns results for the caller to persist.
-All parser configuration (MinerU, Dripper, LLM) is read by the infra
-layer via ``get_settings()``; the service layer does not thread it.
+调用 pipeline 并返回结果，调用方负责持久化。
 """
 
 from __future__ import annotations
 
-import hashlib
 from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.ingest.pipeline import run_pipeline
-from app.modules.ingest.pipeline.observer import IngestPipelineObserver
-from app.modules.ingest.pipeline.types import ChunkDraft, IngestContext, IngestInput, IngestResult
+from app.modules.ingest.types import ChunkDraft, IngestInput, IngestResult
 
 logger = structlog.get_logger(__name__)
 
@@ -24,107 +20,65 @@ async def ingest(
     db: AsyncSession,
     *,
     ingest_input: IngestInput,
+    article_id: str | None = None,
     existing_dedupe_keys: set[str] | None = None,
+    mineru_batch_id: str | None = None,
+    mineru_data_id: str | None = None,
+    user=None,
 ) -> IngestResult:
-    """Run the full ingest pipeline and return results for persistence.
-
-    This is the **only** public function external modules need to call.
-    """
-
-    observer = IngestPipelineObserver(input_type=ingest_input.input_type.value)
-    ctx = IngestContext(
+    result = await run_pipeline(
+        db,
         ingest_input=ingest_input,
-        existing_dedupe_keys=existing_dedupe_keys or set(),
+        article_id=article_id,
+        existing_dedupe_keys=existing_dedupe_keys,
+        mineru_batch_id=mineru_batch_id,
+        mineru_data_id=mineru_data_id,
+        user=user,
     )
 
-    result = await run_pipeline(ctx, observer=observer)
-
     if result.is_duplicate:
-        logger.info(
-            "ingest.skipped_duplicate",
-            dedupe_article_id=result.duplicate_article_id,
-        )
+        logger.info("ingest.skipped_duplicate", hash=result.content_hash)
         return result
 
-    if result.fused_doc is None:
-        logger.warning("ingest.no_fused_doc")
+    if result.clean_markdown is None:
+        logger.warning("ingest.no_content")
         return result
 
     logger.info(
         "ingest.complete",
-        title=result.fused_doc.title,
-        primary_parser=result.primary_parser,
-        chunk_count=len(result.chunks),
-        toc_count=len(result.toc),
+        title=result.title,
+        parser=result.parser_name,
+        chunks=len(result.chunks),
+        toc=len(result.toc),
     )
-
     return result
 
 
 def build_article_fields(result: IngestResult) -> dict:
-    """Build a dict of Article column values from the pipeline result.
+    """从 pipeline 结果构建 Article 字段 dict，供调用方 setattr。"""
 
-    The caller applies these to an Article ORM instance and commits.
-    """
-
-    if result.fused_doc is None:
+    if result.clean_markdown is None:
         return {"parse_status": "failed"}
 
     toc_json = [
-        {
-            "id": n.id,
-            "title": n.title,
-            "level": n.level,
-            "anchor": n.anchor,
-            "is_synthetic": n.is_synthetic,
-        }
+        {"id": n.id, "title": n.title, "level": n.level, "anchor": n.anchor}
         for n in result.toc
     ]
 
-    block_graph_json = None
-    if result.block_graph is not None:
-        block_graph_json = {
-            "blocks": [
-                {
-                    "block_id": b.block_id,
-                    "block_type": b.block_type.value,
-                    "text": b.text,
-                    "section_id": b.section_id,
-                    "anchor": f"L{b.line_start}",
-                    "source_span": {
-                        "lineStart": b.line_start,
-                        "lineEnd": b.line_end,
-                    },
-                    "level": b.level,
-                    "line_start": b.line_start,
-                    "line_end": b.line_end,
-                    "confidence": b.confidence,
-                    "metadata": b.metadata,
-                }
-                for b in result.block_graph.blocks
-            ],
-            "edges": [
-                {
-                    "source_id": e.source_id,
-                    "target_id": e.target_id,
-                    "relation": e.relation,
-                }
-                for e in result.block_graph.edges
-            ],
-        }
-
-    clean_markdown = result.fused_doc.clean_markdown
     return {
-        "title": result.fused_doc.title or None,
-        "author": result.fused_doc.author,
-        "published_at": result.fused_doc.published_at,
-        "language": result.fused_doc.language,
-        "clean_markdown": clean_markdown,
+        "title": result.title,
+        "author": result.author,
+        "published_at": result.published_at,
+        "language": result.language,
+        "clean_markdown": result.clean_markdown,
+        "content_html": result.content_html,
+        "mdast_json": result.mdast_json,
         "toc_json": toc_json,
-        "block_graph_json": block_graph_json,
-        "content_hash": hashlib.sha256(clean_markdown.encode("utf-8")).hexdigest(),
-        "parser_name": result.fused_doc.primary_parser,
-        "article_retrieval_text": _build_article_retrieval_text(result),
+        "content_hash": result.content_hash,
+        "tika_mime": result.tika_mime,
+        "reading_time_minutes": result.reading_time_minutes,
+        "parser_name": result.parser_name,
+        "article_retrieval_text": _build_retrieval_text(result),
         "parse_status": "ready",
         "parse_error_tag": None,
         "parse_error_message": None,
@@ -133,35 +87,24 @@ def build_article_fields(result: IngestResult) -> dict:
 
 
 def build_article_chunk_rows(result: IngestResult) -> list[dict]:
-    """Build ``ArticleChunk`` row payloads from pipeline chunks."""
-
     if not result.chunks:
         return []
-
-    toc_title_by_id = {node.id: node.title for node in result.toc}
+    toc_title_by_id = {n.id: n.title for n in result.toc}
     return [
-        _build_chunk_row(chunk, toc_title_by_id=toc_title_by_id)
-        for chunk in result.chunks
+        {
+            "chunk_index": c.chunk_index,
+            "section_path": c.section_id,
+            "heading_title": toc_title_by_id.get(c.section_id or ""),
+            "token_count": c.token_count,
+            "chunk_text": c.text,
+            "chunk_vector": c.embedding,
+            "created_at": datetime.now(UTC),
+        }
+        for c in result.chunks
     ]
 
 
-def _build_chunk_row(
-    chunk: ChunkDraft,
-    *,
-    toc_title_by_id: dict[str, str],
-) -> dict:
-    return {
-        "chunk_index": chunk.chunk_index,
-        "section_path": chunk.section_id,
-        "heading_title": toc_title_by_id.get(chunk.section_id or ""),
-        "token_count": chunk.token_count,
-        "chunk_text": chunk.text,
-        "chunk_vector": chunk.embedding,
-        "created_at": datetime.now(UTC),
-    }
-
-
-def _build_article_retrieval_text(result: IngestResult) -> str:
+def _build_retrieval_text(result: IngestResult) -> str:
     if result.chunks:
-        return "\n\n".join(chunk.text for chunk in result.chunks[:8])
-    return (result.fused_doc.clean_markdown or "")[:4000]
+        return "\n\n".join(c.text for c in result.chunks[:8])
+    return (result.clean_markdown or "")[:4000]
