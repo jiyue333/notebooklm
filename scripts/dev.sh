@@ -408,6 +408,11 @@ ensure_dev_prerequisites() {
     exit 1
   fi
 
+  if [[ ! -d "$ROOT_DIR/tools/remark-processor/node_modules" ]]; then
+    echo "installing remark-processor dependencies..."
+    (cd "$ROOT_DIR/tools/remark-processor" && npm install --silent)
+  fi
+
   ensure_backend_sync
 }
 

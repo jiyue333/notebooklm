@@ -148,6 +148,8 @@ async def process_article_ingest(job_id: str) -> None:
                 )
                 article.chunk_status = "completed" if chunk_rows else "failed"
                 article.index_status = "completed" if chunk_rows else "failed"
+                # 补写 article_vector
+                await _try_embed_article_vector(article)
             else:
                 article.parse_status = "failed"
                 article.parse_error_tag = "no_content"
@@ -180,6 +182,26 @@ async def process_article_ingest(job_id: str) -> None:
                 article_id=article_id,
                 job_id=job_id,
             )
+
+
+async def _try_embed_article_vector(article: Article) -> None:
+    """对 article_retrieval_text 做 embedding 写入 article_vector。"""
+    text = article.article_retrieval_text
+    if not text:
+        return
+    try:
+        from app.modules.settings.runtime import resolve_embedding_runtime_config
+        from app.infra.ai.embedder import Embedder
+
+        runtime_config = resolve_embedding_runtime_config(None)
+        embedder = Embedder(runtime_config)
+        if not embedder.is_configured:
+            return
+        vectors = await embedder.embed_texts([text[:4000]])
+        if vectors and vectors[0]:
+            article.article_vector = vectors[0]
+    except Exception as exc:
+        logger.debug("worker.embed_article_vector_failed", error=str(exc)[:200])
 
 
 def _build_job_handler(*, job_type: str, log_event: str, processor: JobProcessor):

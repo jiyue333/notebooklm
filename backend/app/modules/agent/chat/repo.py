@@ -57,6 +57,11 @@ async def append_message(
     article_id: str | None = None,
     route: str | None = None,
     retrieval_snapshot_json: dict | None = None,
+    web_searched: bool = False,
+    retrieval_count: int | None = None,
+    citation_count: int | None = None,
+    latency_ms: float | None = None,
+    token_cost: int | None = None,
 ) -> ConversationMessage:
     msg = ConversationMessage(
         conversation_id=conversation_id,
@@ -65,6 +70,11 @@ async def append_message(
         route=route,
         content=content,
         retrieval_snapshot_json=retrieval_snapshot_json,
+        web_searched=web_searched,
+        retrieval_count=retrieval_count,
+        citation_count=citation_count,
+        latency_ms=latency_ms,
+        token_cost=token_cost,
         created_at=datetime.now(UTC),
     )
     session.add(msg)

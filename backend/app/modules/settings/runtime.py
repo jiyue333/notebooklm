@@ -63,7 +63,8 @@ class EmbeddingRuntimeConfig:
 
 
 def get_merged_user_settings(user) -> dict:
-    return {**get_default_user_settings(), **(user.settings_json or {})}
+    user_overrides = (getattr(user, "settings_json", None) or {}) if user else {}
+    return {**get_default_user_settings(), **user_overrides}
 
 
 def resolve_preferred_sites(user) -> list[str]:

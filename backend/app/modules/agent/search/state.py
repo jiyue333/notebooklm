@@ -13,7 +13,6 @@ class SearchQueryPlan(BaseModel):
     key: str
     query: str
     intent: str = ""
-    include_domains: list[str] = Field(default_factory=list)
     exclude_domains: list[str] = Field(default_factory=list)
     exclude_paths: list[str] = Field(default_factory=list)
 

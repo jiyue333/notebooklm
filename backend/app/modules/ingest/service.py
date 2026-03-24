@@ -94,9 +94,10 @@ def build_article_chunk_rows(result: IngestResult) -> list[dict]:
         {
             "chunk_index": c.chunk_index,
             "section_path": c.section_id,
-            "heading_title": toc_title_by_id.get(c.section_id or ""),
+            "heading_title": c.heading_title or toc_title_by_id.get(c.section_id or ""),
             "token_count": c.token_count,
             "chunk_text": c.text,
+            "contextualized_text": c.contextualized_text,
             "chunk_vector": c.embedding,
             "created_at": datetime.now(UTC),
         }

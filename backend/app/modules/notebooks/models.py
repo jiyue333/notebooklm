@@ -137,7 +137,17 @@ class ArticleChunk(UUIDPrimaryKeyMixin, Base):
     heading_title: Mapped[str | None] = mapped_column(Text, nullable=True, comment="所属标题")
     token_count: Mapped[int] = mapped_column(nullable=False, comment="Token 数量")
     chunk_text: Mapped[str] = mapped_column(Text, nullable=False, comment="分块文本")
+    contextualized_text: Mapped[str | None] = mapped_column(Text, nullable=True, comment="上下文增强文本")
     chunk_vector: Mapped[list[float] | None] = mapped_column(Vector(1024), nullable=True, comment="分块向量")
+    chunk_tsv: Mapped[str | None] = mapped_column(
+        TSVECTOR,
+        Computed(
+            "to_tsvector('simple', coalesce(contextualized_text, chunk_text))",
+            persisted=True,
+        ),
+        nullable=True,
+        comment="分块全文检索向量",
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, comment="创建时间")
 
     article: Mapped[Article] = relationship(back_populates="chunks")

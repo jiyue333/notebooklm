@@ -17,6 +17,16 @@ from pydantic import BaseModel, Field
 
 from app.infra.providers.exa.search_client import ExaSearchClient, ExaSearchRequest
 from app.infra.providers.tavily.search_client import TavilySearchClient, TavilySearchRequest
+from app.infra.telemetry.metrics import (
+    observe_search_authority_proxy,
+    observe_search_dedup,
+    observe_search_diversity_proxy,
+    observe_search_empty_slate,
+    observe_search_novelty_proxy,
+    observe_search_partial_failure,
+    observe_search_stage,
+)
+from app.infra.telemetry.tracing import start_span
 from app.modules.agent.search.state import (
     SearchCandidate,
     SearchGraphState,
@@ -51,6 +61,10 @@ _AUTHORITY_PATTERNS = [
     ("medium.com", 0.58),
 ]
 _ROUND_MULTIPLIER = {"fast": 2, "auto": 3, "deep": 4}
+
+
+def _elapsed_ms(start: float) -> float:
+    return round((perf_counter() - start) * 1000, 2)
 
 
 def _safe_text(value: Any) -> str:
@@ -149,68 +163,145 @@ async def run_search_agent(
 
 def _build_search_graph(*, intent_model, scoring_model):
     async def intent_analysis_node(state: SearchGraphState) -> dict[str, Any]:
-        task_spec = await _analyze_task_spec(
-            intent_model,
-            query=state["query"],
-            notebook_title=state["notebook_title"],
-            notebook_summaries=state.get("notebook_article_summaries", []),
-            preferred_sites=state.get("preferred_sites", []),
-        )
-        return {"task_spec": task_spec}
+        t0 = perf_counter()
+        mode = state["mode"]
+        with start_span("search.intent_analysis", attributes={"search.mode": mode}):
+            task_spec = await _analyze_task_spec(
+                intent_model,
+                query=state["query"],
+                notebook_title=state["notebook_title"],
+                notebook_summaries=state.get("notebook_article_summaries", []),
+            )
+            observe_search_stage(stage="intent_analysis", mode=mode, status="ok", duration_ms=_elapsed_ms(t0))
+            return {"task_spec": task_spec}
 
     async def recall_node(state: SearchGraphState) -> dict[str, Any]:
+        t0 = perf_counter()
+        mode = state["mode"]
         round_no = state["current_round"]
-        query_plans = _plans_for_round(
-            task_spec=state["task_spec"],
-            round_no=round_no,
-            preferred_sites=state.get("preferred_sites", []),
-            existing_article_urls=state.get("existing_article_urls", []),
-        )
-        exa_results, tavily_results = await asyncio.gather(
-            _search_with_exa(
-                exa_api_key=state.get("exa_api_key"),
-                mode=state["mode"],
+        with start_span("search.recall", attributes={"search.mode": mode, "search.round": round_no}):
+            query_plans = _plans_for_round(
                 task_spec=state["task_spec"],
-                query_plans=query_plans,
-            ),
-            _search_with_tavily(
-                tavily_api_key=state.get("tavily_api_key"),
-                task_spec=state["task_spec"],
-                query_plans=query_plans,
-            ),
-        )
-        merged_candidates, seen_urls = _merge_candidates(
-            existing=state.get("recall_candidates", []),
-            seen_urls=set(state.get("seen_urls", [])),
-            new_candidates=exa_results + tavily_results,
-        )
-        return {
-            "recall_candidates": merged_candidates,
-            "seen_urls": sorted(seen_urls),
-            "recall_summary": {
-                "currentRound": round_no,
-                "candidateCount": len(merged_candidates),
-                "selectedCount": len(state.get("selected_candidates", [])),
-                "providerCounts": {
-                    "exa": len(exa_results),
-                    "tavily": len(tavily_results),
+                round_no=round_no,
+                existing_article_urls=state.get("existing_article_urls", []),
+            )
+            preferred_sites = state.get("preferred_sites", [])
+
+            tasks: list = [
+                _search_with_exa(
+                    exa_api_key=state.get("exa_api_key"),
+                    mode=mode,
+                    task_spec=state["task_spec"],
+                    query_plans=query_plans,
+                ),
+                _search_with_tavily(
+                    tavily_api_key=state.get("tavily_api_key"),
+                    task_spec=state["task_spec"],
+                    query_plans=query_plans,
+                ),
+            ]
+
+            # 偏好站点召回：仅 round 1 且用户配置了 preferred_sites 时执行
+            if preferred_sites and round_no == 1:
+                pref_plan = [SearchQueryPlan(
+                    key="preferred_sites",
+                    query=state["task_spec"].rewritten_query,
+                    intent="preferred_sites",
+                    exclude_paths=_build_tavily_exclude_paths(state.get("existing_article_urls", [])),
+                )]
+                tasks.extend([
+                    _search_with_exa(
+                        exa_api_key=state.get("exa_api_key"),
+                        mode=mode,
+                        task_spec=state["task_spec"],
+                        query_plans=pref_plan,
+                        include_domains=preferred_sites,
+                        is_preferred=True,
+                    ),
+                    _search_with_tavily(
+                        tavily_api_key=state.get("tavily_api_key"),
+                        task_spec=state["task_spec"],
+                        query_plans=pref_plan,
+                        include_domains=preferred_sites,
+                        is_preferred=True,
+                    ),
+                ])
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            new_candidates: list[SearchCandidate] = []
+            failure_count = 0
+            for result in results:
+                if isinstance(result, list):
+                    new_candidates.extend(result)
+                elif isinstance(result, Exception):
+                    failure_count += 1
+                    logger.warning("search.recall_task_failed", error=str(result)[:200])
+
+            if failure_count > 0 and new_candidates:
+                observe_search_partial_failure(mode=mode)
+
+            existing_count = len(state.get("recall_candidates", []))
+            merged_candidates, seen_urls = _merge_candidates(
+                existing=state.get("recall_candidates", []),
+                seen_urls=set(state.get("seen_urls", [])),
+                new_candidates=new_candidates,
+            )
+            dedup_count = len(new_candidates) - (len(merged_candidates) - existing_count)
+            if dedup_count > 0:
+                observe_search_dedup(mode=mode, dedup_type="url_canonicalize", count=dedup_count)
+
+            exa_count = sum(1 for c in new_candidates if c.provider == "exa")
+            tavily_count = sum(1 for c in new_candidates if c.provider == "tavily")
+            observe_search_stage(stage="recall", mode=mode, status="ok", duration_ms=_elapsed_ms(t0))
+            return {
+                "recall_candidates": merged_candidates,
+                "seen_urls": sorted(seen_urls),
+                "recall_summary": {
+                    "currentRound": round_no,
+                    "candidateCount": len(merged_candidates),
+                    "selectedCount": len(state.get("selected_candidates", [])),
+                    "providerCounts": {
+                        "exa": exa_count,
+                        "tavily": tavily_count,
+                    },
                 },
-            },
-        }
+            }
 
     async def score_node(state: SearchGraphState) -> dict[str, Any]:
-        scored = await _score_candidates(scoring_model, state)
-        target_count = state["target_count"]
-        selected = [candidate for candidate in scored if candidate.final_score >= 0.6][:target_count]
-        return {
-            "recall_candidates": scored,
-            "selected_candidates": selected,
-        }
+        t0 = perf_counter()
+        mode = state["mode"]
+        with start_span("search.score", attributes={"search.mode": mode, "search.candidate_count": len(state.get("recall_candidates", []))}):
+            scored = await _score_candidates(scoring_model, state)
+            target_count = state["target_count"]
+            selected = [candidate for candidate in scored if candidate.final_score >= 0.6][:target_count]
+            observe_search_stage(stage="score", mode=mode, status="ok", duration_ms=_elapsed_ms(t0))
+            return {
+                "recall_candidates": scored,
+                "selected_candidates": selected,
+            }
 
     async def expand_recall_node(state: SearchGraphState) -> dict[str, Any]:
+        observe_search_stage(stage="expand_recall", mode=state["mode"], status="ok", duration_ms=0)
         return {"current_round": state["current_round"] + 1}
 
     async def finalize_node(state: SearchGraphState) -> dict[str, Any]:
+        mode = state["mode"]
+        selected = state.get("selected_candidates") or state.get("recall_candidates", [])
+        top = selected[:10]
+
+        if top:
+            authority_count = sum(1 for c in top if c.score_breakdown.get("authority_score", 0) >= 0.8)
+            observe_search_authority_proxy(mode=mode, ratio=authority_count / len(top))
+
+            unique_domains = len({c.domain for c in top})
+            observe_search_diversity_proxy(mode=mode, entropy=unique_domains / len(top))
+
+            novel_count = sum(1 for c in top if c.score_breakdown.get("novelty_score", 0) >= 0.5)
+            observe_search_novelty_proxy(mode=mode, ratio=novel_count / len(top))
+        else:
+            observe_search_empty_slate(mode=mode, reason="no_above_threshold")
+
+        observe_search_stage(stage="finalize", mode=mode, status="ok", duration_ms=0)
         return {"debug": {
             **state.get("debug", {}),
             "finalCandidateCount": len(state.get("recall_candidates", [])),
@@ -294,23 +385,20 @@ async def _analyze_task_spec(
     query: str,
     notebook_title: str,
     notebook_summaries: list[dict[str, str]],
-    preferred_sites: list[str],
 ) -> SearchTaskSpec:
     summary_lines = [
         f"- {_safe_text(item.get('title')) or 'Untitled'}: {_safe_text(item.get('summaryText'))[:160]}"
         for item in notebook_summaries[:8]
         if _safe_text(item.get("summaryText"))
     ]
-    preferred = ", ".join(preferred_sites[:10]) if preferred_sites else "(none)"
     user_prompt = "\n".join([
         f"用户问题：{query}",
         f"Notebook 标题：{notebook_title or 'Untitled'}",
         "Notebook 已有摘要：",
         "\n".join(summary_lines) if summary_lines else "(none)",
-        f"用户偏好站点：{preferred}",
     ])
     if model is None:
-        return _fallback_task_spec(query, preferred_sites)
+        return _fallback_task_spec(query)
     try:
         structured_model = model.with_structured_output(
             _TaskSpecOutput,
@@ -335,15 +423,15 @@ async def _analyze_task_spec(
             novelty_requirement=output.novelty_requirement,
             domain_hint=output.domain_hint,
             rewritten_query=output.rewritten_query,
-            query_plans=output.query_plans or _fallback_query_plans(query, preferred_sites),
+            query_plans=output.query_plans or _fallback_query_plans(query),
             score_weights=_normalize_weights(output.score_weights or _DEFAULT_SCORE_WEIGHTS),
         )
     except Exception:
         logger.warning("search.intent_analysis_fallback", exc_info=True)
-        return _fallback_task_spec(query, preferred_sites)
+        return _fallback_task_spec(query)
 
 
-def _fallback_task_spec(query: str, preferred_sites: list[str]) -> SearchTaskSpec:
+def _fallback_task_spec(query: str) -> SearchTaskSpec:
     lowered = query.lower()
     search_type = "objective_fact" if any(keyword in lowered for keyword in ["是什么", "what is", "define", "定义"]) else "exploratory"
     content_depth = "detail" if any(keyword in lowered for keyword in ["深入", "detail", "原理", "实现"]) else "mixed"
@@ -356,18 +444,18 @@ def _fallback_task_spec(query: str, preferred_sites: list[str]) -> SearchTaskSpe
         novelty_requirement="medium",
         domain_hint="general",
         rewritten_query=query,
-        query_plans=_fallback_query_plans(query, preferred_sites),
+        query_plans=_fallback_query_plans(query),
         score_weights=_default_weights_for(search_type, time_sensitivity),
     )
 
 
-def _fallback_query_plans(query: str, preferred_sites: list[str]) -> list[SearchQueryPlan]:
+def _fallback_query_plans(query: str) -> list[SearchQueryPlan]:
     normalized_query = _safe_text(query)
     return [
         SearchQueryPlan(key="base", query=normalized_query, intent="base"),
         SearchQueryPlan(key="overview", query=f"{normalized_query} overview".strip(), intent="overview"),
         SearchQueryPlan(key="detail", query=f"{normalized_query} detailed analysis".strip(), intent="detail"),
-        SearchQueryPlan(key="authority", query=f"{normalized_query} official documentation report paper".strip(), intent="authority", include_domains=preferred_sites),
+        SearchQueryPlan(key="authority", query=f"{normalized_query} official documentation report paper".strip(), intent="authority"),
         SearchQueryPlan(key="fresh", query=f"{normalized_query} latest updates".strip(), intent="fresh"),
     ]
 
@@ -401,10 +489,9 @@ def _plans_for_round(
     *,
     task_spec: SearchTaskSpec,
     round_no: int,
-    preferred_sites: list[str],
     existing_article_urls: list[str],
 ) -> list[SearchQueryPlan]:
-    base_plans = task_spec.query_plans[:5] or _fallback_query_plans(task_spec.rewritten_query, preferred_sites)
+    base_plans = task_spec.query_plans[:5] or _fallback_query_plans(task_spec.rewritten_query)
     exclude_domains = _build_exclude_domains(existing_article_urls)
     exclude_paths = _build_tavily_exclude_paths(existing_article_urls)
     if round_no == 1:
@@ -417,7 +504,6 @@ def _plans_for_round(
             key=f"expand_{round_no}",
             query=f"{task_spec.rewritten_query} case study limitations",
             intent="expand",
-            include_domains=preferred_sites,
         ))
     return [
         plan.model_copy(update={
@@ -434,6 +520,8 @@ async def _search_with_exa(
     mode: str,
     task_spec: SearchTaskSpec,
     query_plans: list[SearchQueryPlan],
+    include_domains: list[str] | None = None,
+    is_preferred: bool = False,
 ) -> list[SearchCandidate]:
     if not exa_api_key:
         return []
@@ -446,8 +534,8 @@ async def _search_with_exa(
                     mode="deep" if mode == "deep" else "auto",
                     max_results=6 if mode == "deep" else 4,
                     freshness_hours=_resolve_exa_max_age_hours(task_spec),
-                    include_domains=plan.include_domains or None,
-                    exclude_domains=plan.exclude_domains or None,
+                    include_domains=include_domains,
+                    exclude_domains=None if include_domains else (plan.exclude_domains or None),
                 ),
                 api_key=exa_api_key,
             )
@@ -477,7 +565,7 @@ async def _search_with_exa(
                 highlights=_safe_highlights(row.get("highlights")),
                 provider="exa",
                 query_key=plan.key,
-                preferred_site_hit=domain in plan.include_domains if plan.include_domains else False,
+                preferred_site_hit=is_preferred,
             ))
     return candidates
 
@@ -487,6 +575,8 @@ async def _search_with_tavily(
     tavily_api_key: str | None,
     task_spec: SearchTaskSpec,
     query_plans: list[SearchQueryPlan],
+    include_domains: list[str] | None = None,
+    is_preferred: bool = False,
 ) -> list[SearchCandidate]:
     if not tavily_api_key:
         return []
@@ -498,8 +588,8 @@ async def _search_with_tavily(
                     query=plan.query,
                     search_depth="advanced",
                     max_results=4,
-                    include_domains=plan.include_domains,
-                    exclude_domains=plan.exclude_domains,
+                    include_domains=include_domains or [],
+                    exclude_domains=[] if include_domains else plan.exclude_domains,
                     exclude_paths=plan.exclude_paths,
                     time_range=_resolve_tavily_time_range(task_spec),
                     include_raw_content=False,
@@ -534,7 +624,7 @@ async def _search_with_tavily(
                 highlights=highlights,
                 provider="tavily",
                 query_key=plan.key,
-                preferred_site_hit=domain in plan.include_domains if plan.include_domains else False,
+                preferred_site_hit=is_preferred,
             ))
     return candidates
 

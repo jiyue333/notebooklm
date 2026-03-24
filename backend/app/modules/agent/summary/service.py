@@ -1,19 +1,24 @@
-"""摘要服务：负责缓存命中、生成摘要、保存结果。"""
+"""摘要服务：缓存 + LangGraph 编排。"""
 
 from __future__ import annotations
 
 import hashlib
 import re
+from time import perf_counter
 from typing import TYPE_CHECKING
 
 import structlog
-from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.ai.factory import get_model_identity
 from app.infra.ai.chat_models import build_user_chat_model
-from app.infra.telemetry.metrics import observe_summary_cache_hit, observe_summary_e2e
-from app.modules.agent.summary.prompts import PROMPT_VERSION, SYSTEM_PROMPT, USER_PROMPT
+from app.infra.telemetry.metrics import (
+    observe_summary_cache_hit,
+    observe_summary_e2e,
+    observe_summary_route_mix,
+)
+from app.modules.agent.summary.graph import get_summary_graph
+from app.modules.agent.summary.prompts import PROMPT_VERSION
 from app.modules.agent.summary import repo
 
 if TYPE_CHECKING:
@@ -21,7 +26,6 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
-_MAX_CONTENT_CHARS = 12000
 _CJK_RATIO_THRESHOLD = 0.15
 
 
@@ -53,39 +57,47 @@ async def generate_summary(
             text = await _translate_to_chinese(text, user)
         return {"summary_text": text, "cached": True}
 
-    # ========== phase 2 准备模型与提示词 ==========
-    model = build_user_chat_model(user) if user else None
-    if model is None:
-        return {"summary_text": "", "cached": False, "error": "model_not_configured"}
-
-    from time import perf_counter
+    # ========== phase 2 执行 LangGraph ==========
     t0 = perf_counter()
+    graph = get_summary_graph()
 
-    content = clean_markdown[:_MAX_CONTENT_CHARS]
-    system_prompt = SYSTEM_PROMPT
-    if language == "zh":
-        system_prompt += "\n\nIMPORTANT: Write the summary in 简体中文."
+    result = await graph.ainvoke({
+        "article_id": article_id,
+        "title": title,
+        "clean_markdown": clean_markdown,
+        "language": language,
+        "user": user,
+        "map_chunks": [],
+        "chunk_summaries": [],
+        "summary_text": "",
+        "compressed_content": "",
+        "article_type": "general",
+        "content_stats": {},
+        "model_tier": "standard",
+        "validation_passed": False,
+        "validation_issues": [],
+        "retry_count": 0,
+    })
 
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=USER_PROMPT.format(title=title, content=content)),
-    ]
-
-    # ========== phase 3 调用模型 ==========
-    try:
-        response = await model.ainvoke(messages)
-        summary_text = (response.content or "").strip()
-    except Exception as exc:
-        logger.exception("summary.llm_failed", article_id=article_id, error=str(exc))
-        return {"summary_text": "", "cached": False, "error": str(exc)[:200]}
+    summary_text = result.get("summary_text", "")
+    article_type = result.get("article_type", "general")
 
     elapsed_ms = round((perf_counter() - t0) * 1000, 2)
     observe_summary_e2e(duration_ms=elapsed_ms)
-    logger.info("summary.generated", article_id=article_id, elapsed_ms=elapsed_ms, length=len(summary_text))
+    observe_summary_route_mix(route=article_type)
+    logger.info(
+        "summary.generated",
+        article_id=article_id,
+        article_type=article_type,
+        elapsed_ms=elapsed_ms,
+        length=len(summary_text),
+        validated=result.get("validation_passed", False),
+    )
 
-    # ========== phase 4 保存缓存 ==========
+    # ========== phase 3 保存缓存 ==========
     if summary_text:
-        provider, model_name = get_model_identity(model)
+        model = build_user_chat_model(user) if user else None
+        provider, model_name = get_model_identity(model) if model else ("unknown", "unknown")
         await repo.save_summary_cache(
             db,
             article_id=article_id,
@@ -149,6 +161,7 @@ async def _translate_to_chinese(text: str, user) -> str:
         model = build_user_chat_model(user)
         if model is None:
             return text
+        from langchain_core.messages import HumanMessage, SystemMessage
         messages = [
             SystemMessage(content="将以下学术摘要翻译成简洁流畅的简体中文。只输出译文。"),
             HumanMessage(content=text),

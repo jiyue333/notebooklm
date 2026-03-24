@@ -91,6 +91,8 @@ class ChunkDraft:
     text: str
     token_count: int = 0
     section_id: str | None = None
+    heading_title: str | None = None
+    contextualized_text: str | None = None
     embedding: list[float] | None = None
 
 

@@ -52,7 +52,7 @@ async def embed_chunks(chunks: list[ChunkDraft]) -> list[ChunkDraft]:
             logger.info("index.embedder_not_configured")
             return chunks
 
-        texts = [c.text for c in chunks]
+        texts = [c.contextualized_text or c.text for c in chunks]
         vectors = await embedder.embed_texts(texts)
         if vectors:
             for chunk, vec in zip(chunks, vectors):

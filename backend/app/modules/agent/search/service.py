@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from time import perf_counter
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,12 @@ from app.core.config import get_settings
 from app.infra.ai.chat_models import build_user_chat_model
 from app.infra.ai.lite_models import build_lite_llm
 from app.infra.cache import get_json, search_session_key, set_json
+from app.infra.telemetry.metrics import (
+    observe_search_e2e,
+    observe_search_empty_slate,
+    observe_search_slate_card_count,
+)
+from app.infra.telemetry.tracing import start_span
 from app.modules.agent.search import repo
 from app.modules.agent.search.graph import run_search_agent
 from app.modules.agent.search.models import SearchResult, SearchSession
@@ -64,23 +71,31 @@ async def start_agent_search(
     await db.commit()
     await db.refresh(search_session)
 
+    t0 = perf_counter()
     try:
-        response = await run_search_agent(
-            chat_model,
-            lite_model,
-            query=query.strip(),
-            notebook_id=notebook_id,
-            exa_api_key=exa_api_key,
-            tavily_api_key=tavily_api_key,
-            mode=mode,
-            notebook_title=notebook_title,
-            existing_article_urls=existing_article_urls,
-            notebook_article_summaries=notebook_article_summaries,
-            preferred_sites=preferred_sites,
-            max_results=max_results,
-            search_session_id=search_session.id,
-        )
+        with start_span("search.agent", attributes={
+            "search.notebook_id": notebook_id,
+            "search.mode": mode,
+            "search.session_id": search_session.id,
+        }):
+            response = await run_search_agent(
+                chat_model,
+                lite_model,
+                query=query.strip(),
+                notebook_id=notebook_id,
+                exa_api_key=exa_api_key,
+                tavily_api_key=tavily_api_key,
+                mode=mode,
+                notebook_title=notebook_title,
+                existing_article_urls=existing_article_urls,
+                notebook_article_summaries=notebook_article_summaries,
+                preferred_sites=preferred_sites,
+                max_results=max_results,
+                search_session_id=search_session.id,
+            )
     except Exception as exc:
+        elapsed_ms = round((perf_counter() - t0) * 1000, 2)
+        observe_search_e2e(mode=mode, duration_ms=elapsed_ms)
         await db.rollback()
         await repo.update_session_status(
             db,
@@ -91,8 +106,10 @@ async def start_agent_search(
             completed_at=datetime.now(UTC),
         )
         await db.commit()
-        logger.exception("search.run_failed", search_session_id=search_session.id)
+        logger.exception("search.run_failed", search_session_id=search_session.id, elapsed_ms=elapsed_ms)
         raise AppError(502, "智能搜索执行失败", code="search_graph_failed")
+
+    elapsed_ms = round((perf_counter() - t0) * 1000, 2)
 
     result_ids = await repo.save_agent_search_results(
         db,
@@ -118,6 +135,20 @@ async def start_agent_search(
         response=response,
         status="completed",
     )
+
+    # ========== metrics ==========
+    observe_search_e2e(mode=mode, duration_ms=elapsed_ms)
+    observe_search_slate_card_count(mode=mode, count=len(response.items))
+    if not response.items:
+        observe_search_empty_slate(mode=mode, reason="no_results")
+    logger.info(
+        "search.completed",
+        search_session_id=search_session.id,
+        mode=mode,
+        elapsed_ms=elapsed_ms,
+        card_count=len(response.items),
+    )
+
     return SearchResponse(**response.model_dump())
 
 

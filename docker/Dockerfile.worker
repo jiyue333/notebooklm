@@ -4,13 +4,24 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
+# Node.js (remark-processor 需要)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get purge -y curl \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app/backend
 
 COPY README.md /app/README.md
 COPY backend /app/backend
+COPY tools/remark-processor /app/tools/remark-processor
 
 RUN python -m pip install --upgrade pip \
     && pip install .
+
+RUN cd /app/tools/remark-processor && npm install --omit=dev
 
 EXPOSE 9101
 

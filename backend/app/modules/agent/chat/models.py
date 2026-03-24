@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+import sqlalchemy as sa
 from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -55,10 +56,15 @@ class ConversationMessage(UUIDPrimaryKeyMixin, Base):
     article_id: Mapped[str | None] = mapped_column(
         ForeignKey("articles.id", ondelete="SET NULL"), nullable=True, comment="关联文章 ID",
     )
-    role: Mapped[str] = mapped_column(String(16), nullable=False, comment="消息角色")  # 角色值："user" | "assistant"
+    role: Mapped[str] = mapped_column(String(16), nullable=False, comment="消息角色")
     route: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="回答路由")
     content: Mapped[str] = mapped_column(Text, nullable=False, comment="消息内容")
     retrieval_snapshot_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True, comment="检索快照 JSON")
+    web_searched: Mapped[bool] = mapped_column(default=False, server_default=sa.text("false"), comment="是否触发联网搜索")
+    retrieval_count: Mapped[int | None] = mapped_column(nullable=True, comment="检索条数")
+    citation_count: Mapped[int | None] = mapped_column(nullable=True, comment="引用条数")
+    latency_ms: Mapped[float | None] = mapped_column(nullable=True, comment="端到端延迟 ms")
+    token_cost: Mapped[int | None] = mapped_column(nullable=True, comment="总 token 消耗")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, comment="创建时间")
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")

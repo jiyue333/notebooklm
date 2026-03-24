@@ -246,6 +246,81 @@ CHAT_RETRIEVAL_RECOMMENDATION_COUNT = Histogram(
     ["route"],
     buckets=RESULT_COUNT_BUCKETS,
 )
+CHAT_WEB_SEARCH = Counter(
+    "notebooklm_chat_web_search_total",
+    "Chat web search triggers by reason",
+    ["route", "reason"],
+)
+CHAT_CITATION_COUNT = Histogram(
+    "notebooklm_chat_citation_count",
+    "Number of verified citations per answer",
+    ["route"],
+    buckets=RESULT_COUNT_BUCKETS,
+)
+CHAT_ANSWER_LENGTH = Histogram(
+    "notebooklm_chat_answer_length",
+    "Answer length in characters",
+    ["route"],
+    buckets=TEXT_LENGTH_BUCKETS,
+)
+CHAT_RERANK_TOP_SCORE = Histogram(
+    "notebooklm_chat_rerank_top_score",
+    "Top rerank score per chat retrieval",
+    [],
+    buckets=QUALITY_SCORE_BUCKETS,
+)
+CHAT_TOKEN_COST = Histogram(
+    "notebooklm_chat_token_cost",
+    "Total token cost per chat answer",
+    ["route"],
+    buckets=(50, 100, 250, 500, 1000, 2000, 4000, 8000, 16000),
+)
+CHAT_ERROR = Counter(
+    "notebooklm_chat_error_total",
+    "Chat pipeline errors by node",
+    ["node"],
+)
+# ── Summary 补充指标 ──────────────────────────────────────────────
+SUMMARY_TOKEN_COST = Histogram(
+    "notebooklm_summary_token_cost",
+    "Total token cost per summary generation",
+    [],
+    buckets=(50, 100, 250, 500, 1000, 2000, 4000, 8000, 16000),
+)
+SUMMARY_MODEL_TIER = Counter(
+    "notebooklm_summary_model_tier_total",
+    "Summary generation model tier distribution",
+    ["tier"],
+)
+SUMMARY_COMPRESSION_RATIO = Histogram(
+    "notebooklm_summary_compression_ratio",
+    "Text compression ratio (compressed / original)",
+    [],
+    buckets=QUALITY_SCORE_BUCKETS,
+)
+SUMMARY_VALIDATION_RESULT = Counter(
+    "notebooklm_summary_validation_result_total",
+    "Summary validation pass/fail counts",
+    ["result"],
+)
+SUMMARY_STRATEGY = Counter(
+    "notebooklm_summary_strategy_total",
+    "Summary strategy distribution (direct vs map_reduce)",
+    ["strategy"],
+)
+# ── Retrieval 指标 ────────────────────────────────────────────────
+RETRIEVAL_STAGE_DURATION = Histogram(
+    "notebooklm_retrieval_stage_duration_ms",
+    "Per-stage latency in hybrid retrieval",
+    ["stage"],
+    buckets=LATENCY_MS_BUCKETS,
+)
+RETRIEVAL_RESULT_COUNT = Histogram(
+    "notebooklm_retrieval_result_count",
+    "Number of results returned per retrieval stage",
+    ["stage"],
+    buckets=RESULT_COUNT_BUCKETS,
+)
 SCHEDULER_ACTION_COUNTER = Counter(
     "notebooklm_scheduler_actions_total",
     "Scheduler actions by category",
@@ -399,6 +474,56 @@ def observe_chat_evidence_coverage(*, route: str, coverage: float) -> None:
 def observe_chat_retrieval(*, route: str, evidence_count: int, recommendation_count: int) -> None:
     CHAT_RETRIEVAL_EVIDENCE_COUNT.labels(route=route).observe(evidence_count)
     CHAT_RETRIEVAL_RECOMMENDATION_COUNT.labels(route=route).observe(recommendation_count)
+
+
+def observe_chat_web_search(*, route: str, reason: str) -> None:
+    CHAT_WEB_SEARCH.labels(route=route, reason=reason).inc()
+
+
+def observe_chat_citation_count(*, route: str, count: int) -> None:
+    CHAT_CITATION_COUNT.labels(route=route).observe(count)
+
+
+def observe_chat_answer_length(*, route: str, length: int) -> None:
+    CHAT_ANSWER_LENGTH.labels(route=route).observe(length)
+
+
+def observe_chat_rerank_top_score(*, score: float) -> None:
+    CHAT_RERANK_TOP_SCORE.observe(score)
+
+
+def observe_chat_token_cost(*, route: str, tokens: int) -> None:
+    CHAT_TOKEN_COST.labels(route=route).observe(tokens)
+
+
+def observe_chat_error(*, node: str) -> None:
+    CHAT_ERROR.labels(node=node).inc()
+
+
+def observe_summary_token_cost(*, tokens: int) -> None:
+    SUMMARY_TOKEN_COST.observe(tokens)
+
+
+def observe_summary_model_tier(*, tier: str) -> None:
+    SUMMARY_MODEL_TIER.labels(tier=tier).inc()
+
+
+def observe_summary_compression_ratio(*, ratio: float) -> None:
+    SUMMARY_COMPRESSION_RATIO.observe(ratio)
+
+
+def observe_summary_validation_result(*, passed: bool) -> None:
+    SUMMARY_VALIDATION_RESULT.labels(result="passed" if passed else "failed").inc()
+
+
+def observe_summary_strategy(*, strategy: str) -> None:
+    SUMMARY_STRATEGY.labels(strategy=strategy).inc()
+
+
+def observe_retrieval_stage(*, stage: str, duration_ms: float, count: int = 0) -> None:
+    RETRIEVAL_STAGE_DURATION.labels(stage=stage).observe(duration_ms)
+    if count > 0:
+        RETRIEVAL_RESULT_COUNT.labels(stage=stage).observe(count)
 
 
 def observe_scheduler_action(*, action: str, count: int) -> None:

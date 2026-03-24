@@ -103,6 +103,19 @@ class Settings(BaseSettings):
 
     search_use_llm_task_parser: bool = False
 
+    # ── Summary pipeline ───────────────────────────────────────────
+    summary_map_reduce_threshold_tokens: int = 8000
+    summary_max_retries: int = 2
+    summary_compress_code_blocks: bool = True
+
+    # ── Chat retrieval ─────────────────────────────────────────────
+    chat_dense_top_k: int = 15
+    chat_sparse_top_k: int = 15
+    chat_rerank_top_n: int = 8
+    chat_dense_weight: float = 0.7
+    chat_sparse_weight: float = 0.3
+    chat_web_search_score_threshold: float = 0.3
+
     # ── Ingest document parsing ────────────────────────────────────
     # Tika
     tika_server_url: str = ""

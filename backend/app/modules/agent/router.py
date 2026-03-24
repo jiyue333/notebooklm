@@ -15,7 +15,7 @@ from app.api.deps import current_user_dep, db_session_dep
 from app.api.errors import AppError
 from app.api.response import success_response
 from app.api.sse import build_sse_error_payload, encode_sse_event
-from app.modules.agent.chat.service import send_message
+from app.modules.agent.chat.service import stream_message
 from app.modules.agent.summary.service import list_notebook_summaries
 from app.modules.agent.summary.service import generate_summary
 from app.modules.notebooks import repo as notebooks_repo
@@ -129,7 +129,7 @@ async def chat_stream_endpoint(
 ):
     async def _stream() -> AsyncIterator[str]:
         try:
-            result = await send_message(
+            async for event in stream_message(
                 session,
                 user_id=current_user.id,
                 notebook_id=notebook_id,
@@ -137,18 +137,11 @@ async def chat_stream_endpoint(
                 article_id=payload.articleId,
                 conversation_id=payload.conversationId,
                 user=current_user,
-            )
-
-            answer = result.get("answer_text", "")
-            yield encode_sse_event("token", {"text": answer})
-            yield encode_sse_event("done", {
-                "route": result.get("route", "general"),
-                "routeBadge": result.get("route_badge", "General answer"),
-                "answer": answer,
-                "evidence": result.get("evidence", []),
-                "conversationId": result.get("conversation_id"),
-                "messageId": result.get("message_id"),
-            })
+            ):
+                if event["type"] == "token":
+                    yield encode_sse_event("token", {"text": event["text"]})
+                elif event["type"] == "done":
+                    yield encode_sse_event("done", event["data"])
         except Exception as exc:
             yield build_sse_error_payload(
                 exc, fallback_message="聊天回复失败", fallback_code="chat_failed",
