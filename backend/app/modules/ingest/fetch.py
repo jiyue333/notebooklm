@@ -13,6 +13,11 @@ import structlog
 
 from app.modules.ingest.types import IngestInput, InputType
 
+# 与 detect._EXT_ROUTE 同步：仅这些后缀才信任 URL 路径中的文件名（避免 arXiv id 等带点串）
+_TRUSTED_PATH_EXTS: frozenset[str] = frozenset(
+    (".pdf", ".html", ".htm", ".doc", ".docx", ".ppt", ".pptx", ".png", ".jpg", ".jpeg", ".txt", ".md")
+)
+
 logger = structlog.get_logger(__name__)
 
 _FETCH_TIMEOUT = 30
@@ -52,12 +57,16 @@ async def fetch_content(inp: IngestInput) -> tuple[bytes, str | None]:
 
 
 def _guess_filename(url: str, content_type: str) -> str:
+    """路径最后一段仅在扩展名可信时使用；arXiv 等 `NNNN.NNNNN` 会误判为文件名，需走 MIME。"""
     from urllib.parse import urlparse
+
     path = urlparse(url).path.rstrip("/")
     name = path.rsplit("/", 1)[-1] if "/" in path else ""
 
-    if name and "." in name:
-        return name
+    if name:
+        dot = name.rfind(".")
+        if dot >= 0 and name[dot:].lower() in _TRUSTED_PATH_EXTS:
+            return name
 
     ext_map = {
         "text/html": ".html",

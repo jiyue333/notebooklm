@@ -1,4 +1,4 @@
-"""Phase 1b — Tika MIME 检测 + 路由决策。"""
+"""Phase 1b — MIME 检测 (python-magic) + 路由决策。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import hashlib
 
 import structlog
 
-from app.infra.providers.tika.client import TikaClient, TikaResult
+from app.infra.providers.tika.client import detect_mime_async
 from app.modules.ingest.types import DocRoute, FetchedContent, TikaMetadata
 
 logger = structlog.get_logger(__name__)
@@ -18,12 +18,14 @@ _MIME_ROUTE: list[tuple[str, DocRoute]] = [
     ("application/msword", DocRoute.OFFICE),
     ("application/vnd.openxmlformats-officedocument", DocRoute.OFFICE),
     ("application/vnd.ms-powerpoint", DocRoute.OFFICE),
+    ("application/vnd.ms-excel", DocRoute.OFFICE),
     ("image/png", DocRoute.IMAGE),
     ("image/jpeg", DocRoute.IMAGE),
     ("image/jpg", DocRoute.IMAGE),
     ("image/webp", DocRoute.IMAGE),
     ("text/plain", DocRoute.TEXT),
     ("text/markdown", DocRoute.TEXT),
+    ("text/x-markdown", DocRoute.TEXT),
 ]
 
 _EXT_ROUTE: dict[str, DocRoute] = {
@@ -47,28 +49,17 @@ async def detect_and_route(
     *,
     file_name: str | None = None,
     source_url: str | None = None,
-    tika_client: TikaClient | None = None,
 ) -> FetchedContent:
     """检测 MIME 类型并生成路由决策。"""
 
-    client = tika_client or TikaClient()
-    tika_result = await client.detect(raw_bytes)
-
-    route = _resolve_route(tika_result.mime_type, file_name)
+    mime_type = await detect_mime_async(raw_bytes)
+    route = _resolve_route(mime_type, file_name)
     content_hash = hashlib.sha256(raw_bytes).hexdigest()
-
-    tika_meta = TikaMetadata(
-        mime_type=tika_result.mime_type,
-        language=tika_result.language,
-        title=tika_result.title,
-        author=tika_result.author,
-        page_count=tika_result.page_count,
-    )
 
     return FetchedContent(
         raw_bytes=raw_bytes,
         content_hash=content_hash,
-        tika=tika_meta,
+        tika=TikaMetadata(mime_type=mime_type),
         route=route,
         source_url=source_url,
         file_name=file_name,
@@ -88,7 +79,6 @@ def _resolve_route(mime_type: str, file_name: str | None) -> DocRoute:
         if ext in _EXT_ROUTE:
             return _EXT_ROUTE[ext]
 
-    # 无法判断时默认当 HTML 走 MinerU
     logger.warning("detect.unknown_type", mime=mime_type, file_name=file_name)
     return DocRoute.HTML
 

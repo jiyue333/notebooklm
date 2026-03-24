@@ -117,9 +117,6 @@ class Settings(BaseSettings):
     chat_web_search_score_threshold: float = 0.3
 
     # ── Ingest document parsing ────────────────────────────────────
-    # Tika
-    tika_server_url: str = ""
-
     # MinerU Cloud API
     mineru_api_token: str = ""
     mineru_api_base_url: str = "https://mineru.net/api/v4"
