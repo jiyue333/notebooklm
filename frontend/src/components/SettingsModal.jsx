@@ -198,12 +198,12 @@ const getEmbeddingProviderPreset = (provider) => (
 
 export default function SettingsModal({ onClose }) {
     const navigate = useNavigate();
-    const { theme, setTheme, accentColor, setAccentColor } = useTheme();
+    const { theme, resolvedTheme, setTheme, accentColor, setAccentColor } = useTheme();
     const [activeTab, setActiveTab] = useState('language');
     const [settings, setSettings] = useState(() => ({
         ...createInitialSettings(),
         themeColor: accentColor || 'ocean',
-        colorMode: theme === 'dark' ? 'dark' : 'light',
+        colorMode: theme === 'auto' ? 'auto' : (resolvedTheme === 'dark' ? 'dark' : 'light'),
     }));
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
@@ -249,6 +249,9 @@ export default function SettingsModal({ onClose }) {
                 if (currentSettings.themeColor) {
                     setAccentColor(currentSettings.themeColor);
                 }
+                if (currentSettings.colorMode) {
+                    setTheme(currentSettings.colorMode);
+                }
             } catch (err) {
                 if (!isMounted) return;
                 setFeedback(err.message || '加载设置失败');
@@ -261,7 +264,7 @@ export default function SettingsModal({ onClose }) {
         return () => {
             isMounted = false;
         };
-    }, []);
+    }, [resolvedTheme, setAccentColor, setTheme, theme]);
 
     const update = (key, value) => {
         setFeedback('');
@@ -495,7 +498,10 @@ export default function SettingsModal({ onClose }) {
                 <div className="settings-body">
                     {isLoading ? (
                         <div className="settings-tab-content">
-                            <p className="settings-hint">正在加载设置...</p>
+                            <div className="settings-loading">
+                                <span className="ui-spinner-ring" aria-hidden="true" />
+                                <p className="settings-hint">正在加载设置...</p>
+                            </div>
                         </div>
                     ) : (
                         <>

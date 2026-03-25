@@ -1,34 +1,35 @@
 .notebook-modal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.45);
+    background: var(--overlay-bg);
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 1100;
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
+    z-index: var(--z-overlay);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
 }
 
 .notebook-modal {
-    width: 520px;
+    width: 560px;
     max-width: 92vw;
-    background: var(--card-bg);
-    border-radius: var(--radius-lg, 16px);
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--border-color);
+    background: var(--panel-bg);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--card-shadow-hover);
     overflow: hidden;
+    border: 1px solid var(--border-color);
 }
 
 .notebook-modal-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 18px 20px 14px;
+    padding: var(--space-5) var(--space-6) var(--space-4);
     border-bottom: 1px solid var(--border-color);
 }
 
 .notebook-modal-header h3 {
-    font-size: 1rem;
+    font-size: var(--text-lg);
     font-weight: 700;
     color: var(--title-color);
 }
@@ -37,8 +38,8 @@
     border: none;
     background: transparent;
     color: var(--meta-color);
-    width: 28px;
-    height: 28px;
+    width: 32px;
+    height: 32px;
     border-radius: 50%;
     cursor: pointer;
 }
@@ -49,17 +50,17 @@
 }
 
 .notebook-modal-body {
-    padding: 18px 20px;
+    padding: var(--space-5) var(--space-6);
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: var(--space-4);
 }
 
 .notebook-modal-label {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    font-size: 0.82rem;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
     font-weight: 600;
     color: var(--title-color);
 }
@@ -67,7 +68,7 @@
 .notebook-modal-row {
     display: grid;
     grid-template-columns: 120px 1fr;
-    gap: 12px;
+    gap: var(--space-3);
 }
 
 .notebook-modal-field-sm {
@@ -80,9 +81,8 @@
     border-radius: var(--radius);
     background: var(--hover-bg);
     color: var(--text-color);
-    padding: 10px 12px;
-    font-size: 0.9rem;
-    font-family: inherit;
+    padding: 11px 12px;
+    font-size: var(--text-sm);
     outline: none;
 }
 
@@ -94,10 +94,10 @@
 
 .notebook-modal-color {
     width: 44px;
-    height: 40px;
+    height: 42px;
     padding: 0;
     border: none;
-    border-radius: 10px;
+    border-radius: 12px;
     background: transparent;
     cursor: pointer;
 }
@@ -105,51 +105,52 @@
 .notebook-modal-preview {
     display: flex;
     align-items: center;
-    gap: 12px;
-    min-height: 84px;
+    gap: var(--space-4);
+    min-height: 96px;
     border-radius: var(--radius);
-    padding: 14px 16px;
+    padding: var(--space-4) var(--space-5);
     color: white;
 }
 
 .notebook-modal-preview-emoji {
-    font-size: 2rem;
+    font-size: 2.1rem;
 }
 
 .notebook-modal-preview-meta {
     display: flex;
     flex-direction: column;
+    gap: 4px;
     min-width: 0;
 }
 
 .notebook-modal-preview-title {
-    font-size: 0.92rem;
+    font-size: var(--text-md);
     font-weight: 700;
-    line-height: 1.35;
+    line-height: 1.4;
 }
 
 .notebook-modal-preview-subtitle {
-    font-size: 0.76rem;
-    opacity: 0.82;
+    font-size: var(--text-xs);
+    opacity: 0.84;
 }
 
 .notebook-modal-error {
-    color: #c53a3a;
-    font-size: 0.82rem;
+    color: var(--danger-color);
+    font-size: var(--text-sm);
 }
 
 .notebook-modal-footer {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 16px 20px 20px;
-    gap: 12px;
+    padding: var(--space-4) var(--space-6) var(--space-6);
+    gap: var(--space-3);
 }
 
 .notebook-modal-actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
     margin-left: auto;
 }
 
@@ -159,8 +160,7 @@
     border: none;
     border-radius: var(--radius);
     padding: 10px 16px;
-    font-size: 0.84rem;
-    font-family: inherit;
+    font-size: var(--text-sm);
     cursor: pointer;
 }
 
@@ -175,6 +175,6 @@
 }
 
 .notebook-modal-delete {
-    background: color-mix(in srgb, #c53a3a, transparent 88%);
-    color: #c53a3a;
+    background: color-mix(in srgb, var(--danger-color), transparent 88%);
+    color: var(--danger-color);
 }

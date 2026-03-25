@@ -5,6 +5,10 @@ export default function useEscapeToClose(onClose, enabled = true) {
         if (!enabled || !onClose) return undefined;
 
         const handleKeyDown = (event) => {
+            if (event.defaultPrevented) return;
+            if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+                return;
+            }
             if (event.key === 'Escape') {
                 onClose();
             }
