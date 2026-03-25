@@ -3,6 +3,8 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTheme } from '../contexts/useTheme';
 import { appApi, clearStoredSession, getStoredSession, isAuthError } from '../services/appApi';
 import ReactMarkdown from 'react-markdown';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Document, Page, pdfjs } from 'react-pdf';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -254,6 +256,26 @@ const CHAT_ROUTE_LABELS = {
 const ARTICLE_MARKDOWN_REMARK_PLUGINS = [remarkGfm];
 const ARTICLE_MARKDOWN_REHYPE_PLUGINS = [rehypeRaw, rehypeSlug];
 
+const markdownComponents = {
+    code({ inline, className, children, ...props }) {
+        const match = /language-(\w+)/.exec(className || '');
+        if (inline) {
+            return <code className={className} {...props}>{children}</code>;
+        }
+        return (
+            <SyntaxHighlighter
+                style={oneDark}
+                language={match?.[1] || 'text'}
+                PreTag="div"
+                customStyle={{ borderRadius: '16px', margin: 0, fontSize: '0.86em' }}
+                {...props}
+            >
+                {String(children).replace(/\n$/, '')}
+            </SyntaxHighlighter>
+        );
+    },
+};
+
 const MarkdownDocument = memo(function MarkdownDocument({ content, className }) {
     if (!content?.trim()) {
         return null;
@@ -264,6 +286,7 @@ const MarkdownDocument = memo(function MarkdownDocument({ content, className }) 
             <ReactMarkdown
                 remarkPlugins={ARTICLE_MARKDOWN_REMARK_PLUGINS}
                 rehypePlugins={ARTICLE_MARKDOWN_REHYPE_PLUGINS}
+                components={markdownComponents}
             >
                 {content}
             </ReactMarkdown>
@@ -626,6 +649,8 @@ export default function NotebookPage() {
     const [translationLoading, setTranslationLoading] = useState(false);
     const [translationLanguage, setTranslationLanguage] = useState('');
     const [translationError, setTranslationError] = useState('');
+    const [readerSearchQuery, setReaderSearchQuery] = useState('');
+    const [readerSearchIndex, setReaderSearchIndex] = useState(0);
 
     // Article settings
     const [fontSize, setFontSize] = useState(1.05);
@@ -807,6 +832,18 @@ export default function NotebookPage() {
     const renderedArticleContent = useMemo(() => (
         showTranslation && translationText ? stripFirstH1(translationText) : strippedContent
     ), [showTranslation, translationText, strippedContent]);
+    const readerSearchMatches = useMemo(() => {
+        if (!readerSearchQuery.trim()) return [];
+        const lower = renderedArticleContent.toLowerCase();
+        const keyword = readerSearchQuery.trim().toLowerCase();
+        const matches = [];
+        let cursor = lower.indexOf(keyword);
+        while (cursor !== -1 && matches.length < 100) {
+            matches.push(cursor);
+            cursor = lower.indexOf(keyword, cursor + keyword.length);
+        }
+        return matches;
+    }, [readerSearchQuery, renderedArticleContent]);
 
     // AI Summary
     const handleSummary = async () => {
@@ -1028,7 +1065,23 @@ export default function NotebookPage() {
             setRenderedToc(collectRenderedToc(articleBody));
         });
 
-        return () => window.cancelAnimationFrame(frameId);
+        const container = centerBodyRef.current;
+        const articleBody = getArticleBodyElement(container);
+        if (!container || !articleBody) return () => window.cancelAnimationFrame(frameId);
+
+        const headings = Array.from(articleBody.querySelectorAll('h1, h2, h3, h4'));
+        const syncScrollSpy = () => {
+            const currentHeading = headings.findLast((heading) => heading.getBoundingClientRect().top - container.getBoundingClientRect().top < 96);
+            if (currentHeading?.id) {
+                setChatReadingCursor((prev) => ({ ...prev, sectionId: currentHeading.id }));
+            }
+        };
+        container.addEventListener('scroll', syncScrollSpy);
+
+        return () => {
+            window.cancelAnimationFrame(frameId);
+            container.removeEventListener('scroll', syncScrollSpy);
+        };
     }, [
         articleDisplayBlocked,
         articleRenderMode,
@@ -1497,6 +1550,12 @@ export default function NotebookPage() {
                                 </div>
                             </div>
 
+                            <div className="nb-reader-toolbar">
+                                <input className="input nb-reader-search-input" placeholder="文内搜索..." value={readerSearchQuery} onChange={(event) => { setReaderSearchQuery(event.target.value); setReaderSearchIndex(0); }} />
+                                <span className="nb-reader-search-meta">{readerSearchMatches.length > 0 ? `${Math.min(readerSearchIndex + 1, readerSearchMatches.length)}/${readerSearchMatches.length}` : '0/0'}</span>
+                                <button type="button" className="nb-icon-btn" onClick={() => setReaderSearchIndex((prev) => Math.max(prev - 1, 0))} disabled={!readerSearchMatches.length}>↑</button>
+                                <button type="button" className="nb-icon-btn" onClick={() => setReaderSearchIndex((prev) => Math.min(prev + 1, readerSearchMatches.length - 1))} disabled={!readerSearchMatches.length}>↓</button>
+                            </div>
                             <div className="nb-center-body" ref={centerBodyRef}>
                                 <ArticleContentPane
                                     articleId={selectedArticle.id}

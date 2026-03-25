@@ -1700,3 +1700,20 @@
     min-width: 180px;
     width: 100%;
 }
+
+
+.nb-reader-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px 0;
+}
+
+.nb-reader-search-input {
+    max-width: 320px;
+}
+
+.nb-reader-search-meta {
+    font-size: var(--text-xs);
+    color: var(--meta-color);
+}
