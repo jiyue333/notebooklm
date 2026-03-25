@@ -26,6 +26,8 @@ export default function HomePage() {
     const { showToast } = useToast();
     const [showSettings, setShowSettings] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
+    const [workspaceResults, setWorkspaceResults] = useState([]);
+    const [isSearchingWorkspace, setIsSearchingWorkspace] = useState(false);
     const [user, setUser] = useState(null);
     const [notebooks, setNotebooks] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -78,6 +80,38 @@ export default function HomePage() {
             isMounted = false;
         };
     }, []);
+
+    useEffect(() => {
+        const normalizedQuery = searchQuery.trim();
+        if (!normalizedQuery) {
+            setWorkspaceResults([]);
+            return undefined;
+        }
+
+        let cancelled = false;
+        const timer = window.setTimeout(async () => {
+            try {
+                setIsSearchingWorkspace(true);
+                const items = await appApi.notebooks.searchWorkspace({ query: normalizedQuery });
+                if (!cancelled) {
+                    setWorkspaceResults(items);
+                }
+            } catch (err) {
+                if (!cancelled && !isAuthError(err)) {
+                    setError(err.message || '全局搜索失败');
+                }
+            } finally {
+                if (!cancelled) {
+                    setIsSearchingWorkspace(false);
+                }
+            }
+        }, 220);
+
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timer);
+        };
+    }, [searchQuery]);
 
     const filteredNotebooks = useMemo(() => {
         const normalizedQuery = searchQuery.trim().toLowerCase();
@@ -305,6 +339,42 @@ export default function HomePage() {
                                 </div>
                                 {renderNotebookGrid(recentNotebooks)}
                             </section>
+
+                            {searchQuery.trim() ? (
+                                <section className="home-section">
+                                    <div className="home-section-heading">
+                                        <h2 className="home-section-title">全局搜索结果</h2>
+                                        <span className="home-section-caption">匹配笔记本标题、标签，以及文章标题与正文</span>
+                                    </div>
+                                    {isSearchingWorkspace ? (
+                                        <div className="home-search-result-state"><Spinner inline label="搜索中..." /></div>
+                                    ) : workspaceResults.length > 0 ? (
+                                        <div className="home-search-results">
+                                            {workspaceResults.map((item) => (
+                                                <button
+                                                    key={`${item.type}-${item.notebookId}-${item.articleId || 'root'}`}
+                                                    type="button"
+                                                    className="home-search-result-item"
+                                                    onClick={() => navigate(item.type === 'article' ? `/notebook/${item.notebookId}?articleId=${item.articleId}` : `/notebook/${item.notebookId}`)}
+                                                >
+                                                    <span className="home-search-result-type">{item.type === 'article' ? '文章' : '笔记本'}</span>
+                                                    <span className="home-search-result-title">{item.title}</span>
+                                                    {Array.isArray(item.tags) && item.tags.length > 0 ? (
+                                                        <span className="home-search-result-tags">{item.tags.join(' · ')}</span>
+                                                    ) : null}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <EmptyState
+                                            icon="📚"
+                                            title="全局搜索暂未命中"
+                                            description="当前没有匹配到笔记本或文章内容，你可以继续输入更具体的关键词。"
+                                            compact
+                                        />
+                                    )}
+                                </section>
+                            ) : null}
 
                             {otherNotebooks.length > 0 ? (
                                 <section className="home-section">
