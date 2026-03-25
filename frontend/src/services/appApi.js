@@ -341,6 +341,21 @@ const mockProvider = {
         return { success: true };
     },
 
+    async forgotPassword({ email }) {
+        await wait(200);
+        return { sent: true, resetToken: `mock-reset-${email}` };
+    },
+
+    async resetPassword() {
+        await wait(200);
+        return { success: true };
+    },
+
+    async startOAuth({ provider }) {
+        await wait(120);
+        return { provider, enabled: false, reason: `${provider} OAuth 暂未配置` };
+    },
+
     async getCurrentUser() {
         await wait(120);
         const session = getStoredSession();
@@ -1112,6 +1127,21 @@ const backendProvider = {
         return { success: true };
     },
 
+    async forgotPassword({ email }) {
+        const payload = await request('/auth/forgot-password', { method: 'POST', body: { email } });
+        return payload.item;
+    },
+
+    async resetPassword({ token, newPassword, confirmPassword }) {
+        await request('/auth/reset-password', { method: 'POST', body: { token, newPassword, confirmPassword } });
+        return { success: true };
+    },
+
+    async startOAuth({ provider }) {
+        const payload = await request('/auth/oauth/start', { method: 'POST', body: { provider } });
+        return payload.item;
+    },
+
     async getCurrentUser() {
         const payload = await request('/auth/me');
         return payload.user;
@@ -1372,6 +1402,9 @@ export const appApi = {
         register: provider.register,
         logout: provider.logout,
         getCurrentUser: provider.getCurrentUser,
+        forgotPassword: provider.forgotPassword,
+        resetPassword: provider.resetPassword,
+        startOAuth: provider.startOAuth,
     },
     notebooks: {
         list: provider.listNotebooks,

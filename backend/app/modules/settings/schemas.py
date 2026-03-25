@@ -31,6 +31,7 @@ class SettingsUpdateRequest(BaseModel):
 
 class ProfileUpdateRequest(BaseModel):
     username: str = Field(min_length=1, max_length=255)
+    avatarUrl: str | None = Field(default=None, max_length=2048)
 
 
 class PasswordUpdateRequest(BaseModel):

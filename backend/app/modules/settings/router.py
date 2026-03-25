@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_user_dep, db_session_dep
 from app.api.response import success_response
-from app.modules.auth.account_service import update_password, update_profile
+from app.modules.auth.account_service import update_avatar, update_password, update_profile
 from app.modules.settings.schemas import (
     PasswordUpdateRequest,
     ProfileUpdateRequest,
@@ -43,6 +43,8 @@ async def update_profile_endpoint(
     session: AsyncSession = Depends(db_session_dep),
 ):
     item = await update_profile(session, user=current_user, username=payload.username)
+    if payload.avatarUrl is not None:
+        item = await update_avatar(session, user=current_user, avatar_url=payload.avatarUrl)
     return success_response(item=item)
 
 

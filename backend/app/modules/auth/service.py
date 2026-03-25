@@ -117,3 +117,46 @@ async def get_user_by_token(session: AsyncSession, token: str) -> User:
     if user is None:
         raise AppError(401, "登录状态已失效，请重新登录", code="invalid_token")
     return user
+
+
+
+async def request_password_reset(session: AsyncSession, *, email: str) -> str | None:
+    normalized_email = _normalize_email(email)
+    user = await repo.get_user_by_email(session, normalized_email)
+    if user is None:
+        return None
+    raw_token = generate_session_token()
+    await repo.create_password_reset_token(
+        session,
+        user_id=user.id,
+        token_hash=hash_session_token(raw_token),
+        expires_at=build_token_expiry(),
+        created_at=datetime.now(UTC),
+    )
+    await session.commit()
+    return raw_token
+
+
+async def reset_password_with_token(session: AsyncSession, *, token: str, new_password: str, confirm_password: str) -> None:
+    if new_password != confirm_password:
+        raise AppError(422, "两次输入的新密码不一致", code="password_confirmation_mismatch")
+    token_row = await repo.get_password_reset_token(session, token_hash=hash_session_token(token), now=datetime.now(UTC))
+    if token_row is None:
+        raise AppError(404, "重置链接无效或已过期", code="reset_token_invalid")
+    user = await repo.get_user_by_id(session, token_row.user_id)
+    if user is None:
+        raise AppError(404, "未找到对应用户", code="user_not_found")
+    user.password_hash = hash_password(new_password)
+    await repo.delete_password_reset_token(session, token_hash=hash_session_token(token))
+    await session.commit()
+
+
+def build_oauth_entry(provider: str) -> dict:
+    provider_name = provider.strip().lower()
+    if provider_name not in {"google", "github"}:
+        raise AppError(422, "不支持的 OAuth Provider", code="oauth_provider_unsupported")
+    return {
+        "provider": provider_name,
+        "enabled": False,
+        "reason": "当前环境未配置 OAuth provider 凭证，入口已预留。",
+    }

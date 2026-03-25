@@ -76,3 +76,26 @@ async def create_user(
 
 async def revoke_token(session: AsyncSession, token_hash: str) -> None:
     await session.execute(delete(AuthToken).where(AuthToken.token_hash == token_hash))
+
+
+
+async def create_password_reset_token(session: AsyncSession, *, user_id: str, token_hash: str, expires_at: datetime, created_at: datetime):
+    from app.modules.auth.models import PasswordResetToken
+
+    token = PasswordResetToken(user_id=user_id, token_hash=token_hash, expires_at=expires_at, created_at=created_at)
+    session.add(token)
+    await session.flush()
+    return token
+
+
+async def get_password_reset_token(session: AsyncSession, *, token_hash: str, now: datetime):
+    from app.modules.auth.models import PasswordResetToken
+
+    result = await session.execute(select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash, PasswordResetToken.expires_at > now))
+    return result.scalar_one_or_none()
+
+
+async def delete_password_reset_token(session: AsyncSession, *, token_hash: str) -> None:
+    from app.modules.auth.models import PasswordResetToken
+
+    await session.execute(delete(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash))

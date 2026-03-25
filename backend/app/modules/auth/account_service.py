@@ -38,3 +38,12 @@ async def update_password(
 
     user.password_hash = hash_password(new_password)
     await session.commit()
+
+
+
+async def update_avatar(session: AsyncSession, *, user: User, avatar_url: str) -> dict:
+    user.avatar_url = avatar_url
+    await session.commit()
+    await session.refresh(user)
+    await invalidate_settings_view_cache(user_id=user.id)
+    return build_user_view(user).model_dump()
