@@ -160,11 +160,13 @@ const createManualSourceArticle = ({ sourceType, url, title, content }) => ({
     toc: [],
 });
 
-const createNotebookRecord = ({ title, emoji = '📒', color = '#8B7355' }) => ({
+const createNotebookRecord = ({ title, emoji = '📒', color = '#8B7355', tags = [] }) => ({
     id: generateId('nb'),
     title: title?.trim() || 'Untitled notebook',
     emoji,
     color,
+    tags,
+    lastOpenedAt: new Date().toISOString(),
     date: formatNotebookDate(),
     sourceCount: 0,
     articles: [],
@@ -251,8 +253,11 @@ const summarizeNotebook = (notebook) => ({
     title: notebook.title,
     emoji: notebook.emoji,
     color: notebook.color,
+    tags: notebook.tags || [],
     date: notebook.date,
     sourceCount: notebook.articles?.length ?? notebook.sourceCount ?? 0,
+    lastOpenedAt: notebook.lastOpenedAt || null,
+    lastOpenedLabel: notebook.lastOpenedAt ? '刚刚' : '',
 });
 
 const buildNotebookDetail = (notebookId) => {
@@ -347,16 +352,33 @@ const mockProvider = {
 
     async listNotebooks({ query = '' } = {}) {
         await wait(180);
-        const items = mockState.notebooks.map(summarizeNotebook);
+        const items = mockState.notebooks
+            .slice()
+            .sort((left, right) => new Date(right.lastOpenedAt || 0).getTime() - new Date(left.lastOpenedAt || 0).getTime())
+            .map(summarizeNotebook);
         if (!query.trim()) return items;
 
         const normalized = query.trim().toLowerCase();
-        return items.filter((item) => item.title.toLowerCase().includes(normalized));
+        return items.filter((item) => item.title.toLowerCase().includes(normalized) || (item.tags || []).some((tag) => tag.toLowerCase().includes(normalized)));
     },
 
+
+    async searchWorkspace({ query }) {
+        await wait(160);
+        const normalized = query.trim().toLowerCase();
+        if (!normalized) return [];
+        const notebookHits = mockState.notebooks
+            .filter((item) => item.title.toLowerCase().includes(normalized) || (item.tags || []).some((tag) => tag.toLowerCase().includes(normalized)))
+            .map((item) => ({ type: 'notebook', notebookId: item.id, title: item.title, tags: item.tags || [] }));
+        const articleHits = mockState.notebooks.flatMap((notebook) => (notebook.articles || [])
+            .filter((article) => article.title.toLowerCase().includes(normalized) || (article.content || '').toLowerCase().includes(normalized))
+            .map((article) => ({ type: 'article', notebookId: notebook.id, articleId: article.id, title: article.title }))
+        );
+        return [...notebookHits, ...articleHits].slice(0, 20);
+    },
     async createNotebook(payload = {}) {
         await wait(220);
-        const notebook = createNotebookRecord(payload);
+        const notebook = createNotebookRecord({ ...payload, tags: payload.tags || [] });
         mockState.notebooks.unshift(notebook);
         mockState.notesByNotebookId[notebook.id] = [];
         return buildNotebookDetail(notebook.id);
@@ -378,6 +400,8 @@ const mockProvider = {
 
     async getNotebookDetail(notebookId) {
         await wait(180);
+        const notebook = getNotebookRecord(notebookId);
+        notebook.lastOpenedAt = new Date().toISOString();
         return buildNotebookDetail(notebookId);
     },
 
@@ -1088,6 +1112,12 @@ const backendProvider = {
         return payload.items;
     },
 
+
+    async searchWorkspace({ query }) {
+        const payload = await request(`/notebooks/workspace-search?query=${encodeURIComponent(query)}`);
+        return payload.items || [];
+    },
+
     async createNotebook(notebook) {
         const payload = await request('/notebooks', {
             method: 'POST',
@@ -1310,6 +1340,7 @@ export const appApi = {
     },
     notebooks: {
         list: provider.listNotebooks,
+        searchWorkspace: provider.searchWorkspace,
         create: provider.createNotebook,
         update: provider.updateNotebook,
         remove: provider.deleteNotebook,
