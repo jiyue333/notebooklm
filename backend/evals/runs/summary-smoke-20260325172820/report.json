@@ -1,0 +1,18 @@
+{
+  "bench_run_id": "summary-smoke-20260325172820",
+  "pipeline": "summary",
+  "profile": "smoke",
+  "cases": [
+    {
+      "case_id": "summary_smoke_001",
+      "judge": {
+        "score": 1.0,
+        "subscores": {
+          "text_length": 532.0
+        },
+        "pass": true,
+        "reason": "摘要长度达标"
+      }
+    }
+  ]
+}

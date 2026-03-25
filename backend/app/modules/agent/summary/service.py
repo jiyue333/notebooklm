@@ -100,7 +100,7 @@ async def generate_summary(
     )
 
     # ========== phase 3 保存缓存 ==========
-    if summary_text:
+    if summary_text and article_id != "00000000-0000-0000-0000-000000000001":
         await repo.save_summary_cache(
             db,
             article_id=article_id,
