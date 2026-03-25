@@ -40,6 +40,8 @@ const themeColors = [
 
 const createInitialSettings = () => ({
     outputLanguage: '简体中文',
+    customSystemPrompt: '',
+    answerLengthPreference: 'adaptive',
     themeColor: 'ocean',
     colorMode: 'light',
     modelProviderSelection: DEFAULT_PROVIDER_VALUE,
@@ -352,7 +354,11 @@ export default function SettingsModal({ onClose }) {
 
     const buildSettingsPayload = () => {
         if (activeTab === 'language') {
-            return { outputLanguage: settings.outputLanguage };
+            return {
+                outputLanguage: settings.outputLanguage,
+                customSystemPrompt: settings.customSystemPrompt,
+                answerLengthPreference: settings.answerLengthPreference,
+            };
         }
         if (activeTab === 'appearance') {
             return { themeColor: settings.themeColor, colorMode: settings.colorMode };
@@ -519,6 +525,23 @@ export default function SettingsModal({ onClose }) {
                                                 {outputLanguages.map((lang) => (
                                                     <option key={lang} value={lang}>{lang}</option>
                                                 ))}
+                                            </select>
+                                            <span className="settings-select-arrow">▾</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="settings-section">
+                                        <label className="settings-section-title">自定义系统 Prompt</label>
+                                        <textarea className="settings-input" rows={4} value={settings.customSystemPrompt} onChange={(event) => update('customSystemPrompt', event.target.value)} placeholder="例如：请始终使用简体中文，回答保持简洁" />
+                                    </div>
+
+                                    <div className="settings-section">
+                                        <label className="settings-section-title">回答长度偏好</label>
+                                        <div className="settings-select-wrapper">
+                                            <select className="settings-select" value={settings.answerLengthPreference} onChange={(event) => update('answerLengthPreference', event.target.value)}>
+                                                <option value="concise">简洁</option>
+                                                <option value="detailed">详细</option>
+                                                <option value="adaptive">自适应</option>
                                             </select>
                                             <span className="settings-select-arrow">▾</span>
                                         </div>

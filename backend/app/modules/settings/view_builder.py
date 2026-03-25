@@ -31,6 +31,8 @@ def build_settings_view(user: User) -> dict:
         "outputLanguage": merged["outputLanguage"],
         "themeColor": merged["themeColor"],
         "colorMode": merged["colorMode"],
+        "customSystemPrompt": merged.get("customSystemPrompt", ""),
+        "answerLengthPreference": merged.get("answerLengthPreference", "adaptive"),
         "modelProvider": chat_provider,
         "modelName": merged["modelName"],
         "apiUrl": merged["apiUrl"],

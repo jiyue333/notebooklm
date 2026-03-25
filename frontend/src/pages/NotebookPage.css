@@ -1717,3 +1717,44 @@
     font-size: var(--text-xs);
     color: var(--meta-color);
 }
+
+
+.nb-chat-sessions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.nb-chat-session-new,
+.nb-chat-session-switch,
+.nb-chat-session-delete {
+    border: none;
+    background: var(--hover-bg);
+    color: var(--text-color);
+    cursor: pointer;
+}
+
+.nb-chat-session-item {
+    display: flex;
+    gap: 8px;
+}
+
+.nb-chat-session-switch {
+    flex: 1;
+    border-radius: 12px;
+    padding: 8px 10px;
+    text-align: left;
+}
+
+.nb-chat-session-item.active .nb-chat-session-switch {
+    color: var(--accent-color);
+    background: color-mix(in srgb, var(--accent-color), transparent 90%);
+}
+
+.nb-chat-session-delete,
+.nb-chat-session-new {
+    border-radius: 12px;
+    padding: 8px 10px;
+}

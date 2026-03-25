@@ -48,7 +48,6 @@ def analyze_content(state: SummaryGraphState) -> dict[str, Any]:
     t0 = perf_counter()
     text = state["clean_markdown"]
 
-    code_blocks = len(re.findall(r"```", text)) // 2
     total_chars = len(text)
     code_chars = sum(
         len(m.group(0)) for m in re.finditer(r"```\w*\n.*?```", text, re.DOTALL)
@@ -58,7 +57,6 @@ def analyze_content(state: SummaryGraphState) -> dict[str, Any]:
     image_count = len(re.findall(r"!\[", text))
     token_count = max(1, total_chars // 4)
 
-    title_lower = state.get("title", "").lower()
     text_lower = text[:3000].lower()
 
     if code_ratio > 0.30:

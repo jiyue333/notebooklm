@@ -1281,6 +1281,16 @@ const backendProvider = {
         });
     },
 
+    async listConversations({ notebookId }) {
+        const payload = await request(`/notebooks/${notebookId}/conversations`);
+        return payload.items || [];
+    },
+
+    async deleteConversation({ notebookId, conversationId }) {
+        await request(`/notebooks/${notebookId}/conversations/${conversationId}`, { method: 'DELETE' });
+        return { success: true };
+    },
+
     async generateSummary({ notebookId, articleId }) {
         return backendProvider.streamSummary({ notebookId, articleId });
     },
@@ -1383,6 +1393,8 @@ export const appApi = {
         update: provider.updateSettings,
         updateProfile: provider.updateProfile,
         updatePassword: provider.updatePassword,
+        listConversations: provider.listConversations,
+        deleteConversation: provider.deleteConversation,
     },
     ai: {
         generateSummary: provider.generateSummary,

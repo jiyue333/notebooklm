@@ -639,6 +639,7 @@ export default function NotebookPage() {
     const [summaryLoading, setSummaryLoading] = useState(false);
     const [showAiChat, setShowAiChat] = useState(false);
     const [chatScope, setChatScope] = useState('article');
+    const [chatSessions, setChatSessions] = useState([]);
     const [chatMessages, setChatMessages] = useState([]);
     const [chatConversationId, setChatConversationId] = useState(null);
     const [chatInput, setChatInput] = useState('');
@@ -905,10 +906,17 @@ export default function NotebookPage() {
         }
     };
 
-    const handleToggleChat = () => {
-        setShowAiChat(!showAiChat);
-        if (!showAiChat) setSourceExpanded(false);
-        if (!selectedArticle) setChatScope('notebook');
+    const handleToggleChat = async () => {
+        const nextValue = !showAiChat;
+        setShowAiChat(nextValue);
+        if (nextValue) {
+            setSourceExpanded(false);
+            if (!selectedArticle) setChatScope('notebook');
+            try {
+                const sessions = await appApi.settings.listConversations({ notebookId: notebook.id });
+                setChatSessions(sessions);
+            } catch {}
+        }
     };
 
     const handleSendChat = async () => {
@@ -963,6 +971,13 @@ export default function NotebookPage() {
                 },
             });
             setChatConversationId(result.conversationId || chatConversationId);
+            setChatSessions((prev) => {
+                const nextSessionId = result.conversationId || chatConversationId;
+                if (!nextSessionId) return prev;
+                const existing = prev.find((item) => item.id === nextSessionId);
+                const nextSession = { id: nextSessionId, title: prompt.slice(0, 24), messages: [] };
+                return existing ? prev : [nextSession, ...prev];
+            });
             setChatMessages((prev) => prev.map((msg) => (
                 msg.id === pendingAssistantId
                     ? {
@@ -1604,6 +1619,17 @@ export default function NotebookPage() {
                                     <button className="nb-icon-btn-sm" onClick={clearChat} title="清空对话">{I.deleteChat}</button>
                                     <button className="nb-icon-btn-sm" onClick={() => setShowAiChat(false)} title="关闭">{I.close}</button>
                                 </div>
+                            </div>
+                            <div className="nb-chat-sessions">
+                                <button type="button" className="nb-chat-session-new" onClick={() => { setChatConversationId(null); setChatMessages([]); }}>新建对话</button>
+                                {chatSessions.map((session) => (
+                                    <div key={session.id} className={`nb-chat-session-item ${chatConversationId === session.id ? 'active' : ''}`}>
+                                        <button type="button" className="nb-chat-session-switch" onClick={() => { setChatConversationId(session.id); setChatMessages((session.messages || []).map((message, index) => ({ id: `${session.id}-${index}`, role: message.role, content: message.content || '' }))); }}>
+                                            {session.title}
+                                        </button>
+                                        <button type="button" className="nb-chat-session-delete" onClick={async () => { await appApi.settings.deleteConversation({ notebookId: notebook.id, conversationId: session.id }); setChatSessions((prev) => prev.filter((item) => item.id !== session.id)); if (chatConversationId === session.id) { setChatConversationId(null); setChatMessages([]); } }}>✕</button>
+                                    </div>
+                                ))}
                             </div>
                             <div className="nb-chat-messages">
                                 {chatMessages.length === 0 && (

@@ -17,7 +17,6 @@ from app.infra.telemetry.metrics import (
     observe_chat_error,
     observe_chat_retrieval,
     observe_chat_route_mix,
-    observe_chat_token_cost,
 )
 from app.infra.telemetry.tracing import start_span
 from app.modules.agent.chat import repo
@@ -33,7 +32,7 @@ from app.modules.agent.chat.prompts import (
     ANSWER_USER_GENERAL,
     ANSWER_USER_GROUNDED,
 )
-from app.modules.agent.chat.state import ChatGraphState, RetrievalPlanSpec
+from app.modules.agent.chat.state import RetrievalPlanSpec
 from app.modules.notebooks import repo as notebooks_repo
 
 logger = structlog.get_logger(__name__)
@@ -348,3 +347,51 @@ def _error_done(code: str) -> dict:
         "evidence": [],
         "error": code,
     }
+
+
+def build_conversation_view(conversation, messages: list[dict] | None = None) -> dict:
+    return {
+        'id': conversation.id,
+        'title': conversation.title or '新对话',
+        'currentArticleId': conversation.current_article_id,
+        'updatedAt': conversation.updated_at.isoformat() if conversation.updated_at else None,
+        'lastMessageAt': conversation.last_message_at.isoformat() if conversation.last_message_at else None,
+        'messages': messages or [],
+    }
+
+
+async def list_notebook_conversations(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    notebook_id: str,
+) -> list[dict]:
+    conversations = await repo.list_conversations(db, user_id=user_id, notebook_id=notebook_id)
+    items: list[dict] = []
+    for conversation in conversations:
+        recent_messages = await repo.list_recent_messages(db, conversation_id=conversation.id, limit=12)
+        items.append(build_conversation_view(
+            conversation,
+            messages=[{
+                'id': message.id,
+                'role': message.role,
+                'content': message.content,
+                'route': message.route,
+                'createdAt': message.created_at.isoformat(),
+            } for message in recent_messages],
+        ))
+    return items
+
+
+async def remove_notebook_conversation(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    notebook_id: str,
+    conversation_id: str,
+) -> None:
+    conversation = await repo.get_conversation(db, conversation_id=conversation_id, user_id=user_id)
+    if conversation is None or conversation.notebook_id != notebook_id:
+        raise ValueError('conversation_not_found')
+    await repo.delete_conversation(db, conversation_id=conversation_id, user_id=user_id)
+    await db.commit()
