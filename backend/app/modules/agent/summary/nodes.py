@@ -302,9 +302,10 @@ async def validate_summary(state: SummaryGraphState) -> dict[str, Any]:
     except Exception as exc:
         logger.debug("summary.validate_parse_failed", error=str(exc)[:120])
 
-    observe_summary_stage(stage="validate", status="ok", duration_ms=_ms(t0))
-    observe_summary_validation_result(passed=True)
-    return {"validation_passed": True, "validation_issues": [], "retry_count": retry_count}
+    observe_summary_stage(stage="validate", status="error", duration_ms=_ms(t0))
+    observe_summary_validation_result(passed=False)
+    observe_summary_judge_reject(reason="invalid_judge_output")
+    return {"validation_passed": False, "validation_issues": ["invalid_judge_output"], "retry_count": retry_count}
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────
