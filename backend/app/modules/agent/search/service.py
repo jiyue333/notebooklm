@@ -59,7 +59,7 @@ async def start_agent_search(
         notebook_id=notebook_id,
         query=query.strip(),
         mode=mode,
-        execution_mode="sync",
+        execution_mode="queued" if mode == "deep" else "sync",
         provider_request_json={
             "query": query.strip(),
             "mode": mode,
@@ -78,6 +78,14 @@ async def start_agent_search(
             "search.mode": mode,
             "search.session_id": search_session.id,
         }):
+            if mode == "deep":
+                await repo.update_session_status(
+                    db,
+                    search_session=search_session,
+                    status="partial",
+                    result_count=0,
+                )
+                await db.commit()
             response = await run_search_agent(
                 chat_model,
                 lite_model,
@@ -178,7 +186,7 @@ async def get_search_session(
         raise AppError(404, "未找到对应搜索会话", code="search_session_not_found")
 
     results: list[SearchResult] = []
-    if search_session.status == "completed":
+    if search_session.status in {"completed", "partial"}:
         results = await repo.list_search_results(db, search_session_id=search_session.id)
 
     response = _build_response_from_results(search_session, results)
@@ -227,6 +235,7 @@ def _result_to_card(result: SearchResult) -> SearchResultCardView:
         domain=result.domain or "",
         sourceName=result.domain or "",
         sourceTypeBadge=payload.get("source_type_badge", ""),
+        faviconUrl=result.favicon_url,
         authorityBadge=payload.get("authority_badge"),
         publishedAt=result.published_at,
         description=result.description or "",

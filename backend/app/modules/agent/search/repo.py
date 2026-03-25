@@ -169,6 +169,7 @@ async def save_agent_search_results(
             author=_sanitize_text(card.get("author")),
             published_at=_coerce_datetime(card.get("publishedAt") or card.get("published_at")),
             domain=card.get("sourceName") or card.get("source_name") or card.get("domain", ""),
+            favicon_url=card.get("faviconUrl") or card.get("favicon_url"),
             display_rank=card.get("displayRank") or card.get("display_rank", 0),
             raw_payload_json=_sanitize_json({
                 "source_type_badge": card.get("sourceTypeBadge") or card.get("source_type_badge", ""),
