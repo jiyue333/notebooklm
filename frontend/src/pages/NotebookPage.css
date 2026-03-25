@@ -1680,3 +1680,23 @@
         grid-template-columns: minmax(0, 1fr);
     }
 }
+
+
+.nb-chat-textarea {
+    resize: none;
+    min-height: 72px;
+    padding-top: 10px;
+}
+
+.nb-topbar-title-trigger,
+.nb-toolbar-title-trigger {
+    min-width: 0;
+    color: inherit;
+    font-weight: inherit;
+}
+
+.nb-topbar-title-input,
+.nb-toolbar-title-input {
+    min-width: 180px;
+    width: 100%;
+}

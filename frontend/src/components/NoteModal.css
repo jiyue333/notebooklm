@@ -304,3 +304,66 @@
     opacity: 0.9;
     box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-color), transparent 40%);
 }
+
+.note-modal-toolbar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.note-modal-tool-btn {
+    border: none;
+    background: var(--hover-bg);
+    color: var(--text-color);
+    border-radius: 999px;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: var(--text-xs);
+}
+
+.note-modal-split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.note-modal-pane {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.note-modal-pane + .note-modal-pane {
+    border-left: 1px solid var(--border-color);
+}
+
+.note-modal-pane-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 18px 0;
+    color: var(--meta-color);
+    font-size: var(--text-xs);
+    font-weight: 700;
+}
+
+.note-modal-pane-header svg {
+    width: 14px;
+    height: 14px;
+}
+
+.note-modal-preview-pane {
+    background: color-mix(in srgb, var(--hover-bg), transparent 30%);
+}
+
+@media (max-width: 900px) {
+    .note-modal-split {
+        grid-template-columns: 1fr;
+    }
+
+    .note-modal-pane + .note-modal-pane {
+        border-left: none;
+        border-top: 1px solid var(--border-color);
+    }
+}

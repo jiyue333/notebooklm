@@ -11,15 +11,41 @@ const Ic = {
     del: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" /></svg>,
 };
 
+const TOOLBAR_ACTIONS = [
+    { label: 'H1', token: '# ' },
+    { label: 'H2', token: '## ' },
+    { label: '加粗', token: '**文本**' },
+    { label: '列表', token: '- 列表项' },
+    { label: '链接', token: '[链接文本](https://example.com)' },
+    { label: '代码块', token: '```\n代码\n```' },
+];
+
 export default function NoteModal({ note, onClose, onSave, onDelete }) {
     const [title, setTitle] = useState(note?.title || '');
     const [content, setContent] = useState(note?.content || '');
-    const [mode, setMode] = useState(note?.id ? 'preview' : 'edit'); // 'edit' | 'preview'
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState('');
     const savingRef = useRef(false);
+    const editorRef = useRef(null);
 
     useEscapeToClose(onClose, !isSaving);
+
+    const insertSnippet = (snippet) => {
+        const textarea = editorRef.current;
+        if (!textarea) {
+            setContent((prev) => `${prev}${prev ? '\n' : ''}${snippet}`);
+            return;
+        }
+        const start = textarea.selectionStart ?? content.length;
+        const end = textarea.selectionEnd ?? content.length;
+        const nextValue = `${content.slice(0, start)}${snippet}${content.slice(end)}`;
+        setContent(nextValue);
+        requestAnimationFrame(() => {
+            const cursor = start + snippet.length;
+            textarea.focus();
+            textarea.setSelectionRange(cursor, cursor);
+        });
+    };
 
     const handleSave = async () => {
         if (savingRef.current) return;
@@ -58,65 +84,61 @@ export default function NoteModal({ note, onClose, onSave, onDelete }) {
     };
 
     return (
-        <div className="note-modal-overlay" onClick={(e) => { if (!isSaving && e.target === e.currentTarget) onClose(); }}>
+        <div className="note-modal-overlay" onClick={(event) => { if (!isSaving && event.target === event.currentTarget) onClose(); }}>
             <div className="note-modal">
                 <div className="note-modal-header">
                     <input
                         className="note-modal-title-input"
                         value={title}
-                        onChange={(e) => setTitle(e.target.value)}
+                        onChange={(event) => setTitle(event.target.value)}
                         placeholder="笔记标题..."
-                        readOnly={mode === 'preview'}
                     />
                     <div className="note-modal-actions">
-                        <button
-                            className={`note-modal-tab ${mode === 'edit' ? 'active' : ''}`}
-                            onClick={() => setMode('edit')}
-                            title="编辑"
-                            disabled={isSaving}
-                        >
-                            {Ic.edit}
-                            <span>编辑</span>
-                        </button>
-                        <button
-                            className={`note-modal-tab ${mode === 'preview' ? 'active' : ''}`}
-                            onClick={() => setMode('preview')}
-                            title="预览"
-                            disabled={isSaving}
-                        >
-                            {Ic.preview}
-                            <span>预览</span>
-                        </button>
-                        {note?.id && (
+                        {note?.id ? (
                             <button className="note-modal-del-btn" onClick={handleDelete} title="删除笔记" disabled={isSaving}>
                                 {Ic.del}
                             </button>
-                        )}
+                        ) : null}
                         <button className="note-modal-close-btn" onClick={onClose} title="关闭" disabled={isSaving}>
                             {Ic.close}
                         </button>
                     </div>
                 </div>
-                <div className="note-modal-body">
-                    {mode === 'edit' ? (
+                <div className="note-modal-toolbar">
+                    {TOOLBAR_ACTIONS.map((action) => (
+                        <button key={action.label} type="button" className="note-modal-tool-btn" onClick={() => insertSnippet(action.token)}>
+                            {action.label}
+                        </button>
+                    ))}
+                </div>
+                <div className="note-modal-body note-modal-split">
+                    <div className="note-modal-pane">
+                        <div className="note-modal-pane-header">
+                            {Ic.edit}<span>编辑</span>
+                        </div>
                         <textarea
+                            ref={editorRef}
                             className="note-modal-editor"
                             value={content}
-                            onChange={(e) => setContent(e.target.value)}
+                            onChange={(event) => setContent(event.target.value)}
                             placeholder="在这里输入笔记内容... 支持 Markdown 格式"
-                            autoFocus={mode === 'edit'}
+                            autoFocus
                         />
-                    ) : (
+                    </div>
+                    <div className="note-modal-pane note-modal-preview-pane">
+                        <div className="note-modal-pane-header">
+                            {Ic.preview}<span>实时预览</span>
+                        </div>
                         <div className="note-modal-preview">
                             {content ? (
                                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
                             ) : (
-                                <p className="note-modal-empty">暂无内容，切换到编辑模式开始写作</p>
+                                <p className="note-modal-empty">开始输入后，这里会实时显示预览效果</p>
                             )}
                         </div>
-                    )}
+                    </div>
                 </div>
-                {error && <div className="note-modal-empty">{error}</div>}
+                {error ? <div className="note-modal-empty">{error}</div> : null}
                 <div className="note-modal-footer">
                     <button className="note-modal-cancel-btn" onClick={onClose} disabled={isSaving}>取消</button>
                     <button className="note-modal-save-btn" onClick={handleSave} disabled={isSaving}>

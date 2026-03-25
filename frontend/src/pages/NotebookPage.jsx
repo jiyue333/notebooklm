@@ -615,6 +615,7 @@ export default function NotebookPage() {
     const [summaryText, setSummaryText] = useState('');
     const [summaryLoading, setSummaryLoading] = useState(false);
     const [showAiChat, setShowAiChat] = useState(false);
+    const [chatScope, setChatScope] = useState('article');
     const [chatMessages, setChatMessages] = useState([]);
     const [chatConversationId, setChatConversationId] = useState(null);
     const [chatInput, setChatInput] = useState('');
@@ -870,6 +871,7 @@ export default function NotebookPage() {
     const handleToggleChat = () => {
         setShowAiChat(!showAiChat);
         if (!showAiChat) setSourceExpanded(false);
+        if (!selectedArticle) setChatScope('notebook');
     };
 
     const handleSendChat = async () => {
@@ -909,7 +911,7 @@ export default function NotebookPage() {
         try {
             const result = await appApi.ai.streamAssistant({
                 notebookId: notebook.id,
-                articleId: selectedArticle?.id,
+                articleId: chatScope === 'article' ? selectedArticle?.id : null,
                 conversationId: chatConversationId,
                 message: prompt,
                 readingCursor: chatReadingCursor,
@@ -1243,6 +1245,12 @@ export default function NotebookPage() {
         setNotebook((prev) => ({ ...prev, ...detail }));
     }, [notebook?.id]);
 
+    useEffect(() => {
+        if (notebook && notebook.articles.length === 0 && !showAddSource) {
+            setShowAddSource(true);
+        }
+    }, [notebook, showAddSource]);
+
     if (isPageLoading) {
         return (
             <div className="notebook-page">
@@ -1365,6 +1373,23 @@ export default function NotebookPage() {
                                     </button>
                                     <button
                                         type="button"
+                                        className="nb-context-menu-item"
+                                        onClick={() => window.open(`/notebook/${notebook.id}?articleId=${articleContextMenu.articleId}`, '_blank', 'noopener,noreferrer')}
+                                    >
+                                        新标签页打开
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="nb-context-menu-item"
+                                        onClick={async () => {
+                                            await navigator.clipboard.writeText(`${window.location.origin}/notebook/${notebook.id}?articleId=${articleContextMenu.articleId}`);
+                                            setArticleContextMenu(null);
+                                        }}
+                                    >
+                                        复制链接
+                                    </button>
+                                    <button
+                                        type="button"
                                         className="nb-context-menu-item danger"
                                         onClick={() => openDeleteArticleModal(articleContextMenu.articleId, articleContextMenu.articleTitle)}
                                     >
@@ -1400,7 +1425,7 @@ export default function NotebookPage() {
                                 </div>
                                 <div className="nb-toolbar-left">
                                     <div className="nb-toolbar-title-row">
-                                        <h2 className="nb-toolbar-title">{selectedArticle.title}</h2>
+                                        <InlineEditableText value={selectedArticle.title} className="nb-toolbar-title-trigger" inputClassName="nb-toolbar-title-input" onSave={async (nextTitle) => { const detail = await appApi.sources.updateArticle({ notebookId: notebook.id, articleId: selectedArticle.id, title: nextTitle }); syncNotebookState(detail); }} />
                                         {selectedArticle.sourceUrl ? (
                                             <a
                                                 href={selectedArticle.sourceUrl}
@@ -1438,9 +1463,9 @@ export default function NotebookPage() {
                                     </button>
                                     <button
                                         className={`nb-icon-btn ${showAiChat ? 'active' : ''}`}
-                                        title={articleAiBlocked ? '正文准备完成后才可针对文章问答' : 'AI 助手'}
+                                        title={selectedArticle && articleAiBlocked ? '正文准备完成后才可针对文章问答' : 'AI 助手'}
                                         onClick={handleToggleChat}
-                                        disabled={articleAiBlocked}
+                                        disabled={selectedArticle ? articleAiBlocked : false}
                                     >
                                         {I.chat}
                                     </button>
@@ -1526,9 +1551,10 @@ export default function NotebookPage() {
                                     <div className="nb-chat-welcome">
                                         <div className="nb-chat-welcome-icon">{I.sparkle}</div>
                                         <p className="nb-chat-welcome-title">有什么想问的?</p>
-                                        <p className="nb-chat-welcome-hint">已加载当前文章内容，你可以提问、讨论或请求分析</p>
+                                        <p className="nb-chat-welcome-hint">{chatScope === 'article' ? '已加载当前文章内容，你可以提问、讨论或请求分析' : '当前使用 notebook 级对话，可以围绕整个研究空间提问。'}</p>
                                         <div className="nb-chat-quick-actions">
                                             <button onClick={() => setChatInput('创建详细摘要')}>创建详细摘要</button>
+                                            <button onClick={() => setChatScope((current) => current === 'article' ? 'notebook' : 'article')}>{chatScope === 'article' ? '切换为 notebook 对话' : '切换为文章对话'}</button>
                                         </div>
                                     </div>
                                 )}
@@ -1591,7 +1617,7 @@ export default function NotebookPage() {
                             </div>
                             <div className="nb-chat-input-area">
                                 <div className="nb-chat-input-wrapper">
-                                    <input className="nb-chat-input" placeholder="输入你的问题..." value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendChat()} />
+                                    <textarea className="nb-chat-input nb-chat-textarea" placeholder={chatScope === 'article' ? '针对当前文章提问...' : '针对整个 notebook 提问...'} value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendChat(); } }} rows={3} />
                                     <button className="nb-chat-send-btn" onClick={handleSendChat} disabled={!chatInput.trim() || isChatStreaming}>{I.send}</button>
                                 </div>
                             </div>
