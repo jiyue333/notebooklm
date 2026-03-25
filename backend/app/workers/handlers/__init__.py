@@ -102,11 +102,13 @@ async def process_article_ingest(job_id: str) -> None:
                 notebook_id=article.notebook_id,
                 article_id=article.id,
             )
+            notebook = await notebooks_repo.get_notebook(session, user_id=article.user_id, notebook_id=article.notebook_id)
             ingest_input = IngestInput(
                 input_type=input_type,
                 notebook_id=article.notebook_id,
                 user_id=article.user_id,
                 title=article.title,
+                notebook_title=notebook.title if notebook else '',
                 source_url=article.source_url,
                 file_name=article.file_name,
                 file_mime=article.file_mime,

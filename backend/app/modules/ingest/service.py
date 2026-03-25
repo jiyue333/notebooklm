@@ -33,6 +33,7 @@ async def ingest(
         existing_dedupe_keys=existing_dedupe_keys,
         mineru_batch_id=mineru_batch_id,
         mineru_data_id=mineru_data_id,
+        notebook_title=ingest_input.notebook_title,
         user=user,
     )
 
