@@ -11,7 +11,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.ingest.pipeline import run_pipeline
-from app.modules.ingest.types import ChunkDraft, IngestInput, IngestResult
+from app.modules.ingest.types import IngestInput, IngestResult
 
 logger = structlog.get_logger(__name__)
 

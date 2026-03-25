@@ -97,8 +97,11 @@ async def translate_article_endpoint(
     article = await notebooks_repo.get_article(session, user_id=current_user.id, notebook_id=notebook_id, article_id=article_id)
     if article is None or not article.clean_markdown:
         raise AppError(404, "未找到对应文章", code="article_not_found")
-    target_language = payload.targetLanguage or current_user.settings_json.get('outputLanguage') or '中文'
-    result = await stream_message.__globals__['build_user_chat_model'](current_user).ainvoke([
+    target_language = payload.targetLanguage or (getattr(current_user, 'settings_json', {}) or {}).get('outputLanguage') or '中文'
+    model = stream_message.__globals__['build_user_chat_model'](current_user)
+    if model is None:
+        raise AppError(422, '请先配置聊天模型', code='model_config_required')
+    result = await model.ainvoke([
         SystemMessage(content=f"请把下列文章翻译为{target_language}，保持原有 Markdown 段落结构。只输出译文。"),
         HumanMessage(content=article.clean_markdown[:16000]),
     ])
@@ -141,12 +144,13 @@ async def summary_stream_endpoint(
                 )
                 return
 
+            output_language = (getattr(current_user, "settings_json", {}) or {}).get("outputLanguage") or "中文"
             result = await generate_summary(
                 session,
                 article_id=article.id,
                 title=article.title,
                 clean_markdown=article.clean_markdown,
-                language="zh",
+                language=output_language,
                 user=current_user,
             )
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
 
@@ -81,7 +81,7 @@ async def create_search_session(
         mode_label=_MODE_LABELS.get(mode, "Research"),
         result_count=0,
         created_at=ts,
-        expires_at=ts.replace(day=ts.day + 1) if ts.day < 28 else ts,
+        expires_at=ts + timedelta(days=1),
     )
     session.add(search_session)
     await session.flush()
@@ -162,7 +162,7 @@ async def save_agent_search_results(
             search_session_id=search_session_id,
             provider_result_id=None,
             raw_url=url,
-            canonical_url=url,
+            canonical_url=url.split("?")[0].split("#")[0] if url else url,
             url_hash=url_hash,
             title=_sanitize_text(card.get("title", "")) or "Untitled",
             description=_sanitize_text(card.get("description")),

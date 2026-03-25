@@ -11,6 +11,7 @@ import structlog
 from app.core.config import get_settings
 from app.infra.telemetry.metrics import observe_chat_error, observe_chat_stage, observe_chat_web_search
 from app.modules.agent.chat.state import ChatGraphState
+from app.modules.settings.runtime import resolve_search_api_key, resolve_tavily_api_key
 
 logger = structlog.get_logger(__name__)
 
@@ -58,7 +59,7 @@ async def web_search_broker_node(state: ChatGraphState) -> dict[str, Any]:
 
     # ========== 搜索执行 ==========
     try:
-        web_results = await _execute_search(query)
+        web_results = await _execute_search(query, state.get("user"))
     except Exception as exc:
         logger.warning("chat.web_search_execute_failed", error=str(exc)[:200])
         observe_chat_error(node="web_search_broker")
@@ -75,13 +76,13 @@ async def web_search_broker_node(state: ChatGraphState) -> dict[str, Any]:
     }
 
 
-async def _execute_search(query: str) -> list[dict]:
+async def _execute_search(query: str, user=None) -> list[dict]:
     """优先 Tavily → fallback Exa。"""
 
     settings = get_settings()
 
     # 尝试 Tavily
-    tavily_key = settings.tavily_default_api_key
+    tavily_key, _ = resolve_tavily_api_key(settings)
     if tavily_key:
         try:
             from app.infra.providers.tavily.search_client import TavilySearchClient, TavilySearchRequest
@@ -102,7 +103,7 @@ async def _execute_search(query: str) -> list[dict]:
             logger.warning("chat.tavily_search_failed", error=str(exc)[:200])
 
     # 尝试 Exa
-    exa_key = settings.exa_default_api_key
+    exa_key, _ = resolve_search_api_key(user, settings) if user else (settings.exa_default_api_key, "default")
     if exa_key:
         try:
             from app.infra.providers.exa.search_client import ExaSearchClient, ExaSearchRequest

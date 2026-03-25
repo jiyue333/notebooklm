@@ -61,6 +61,7 @@ async def run_pipeline(
     existing_dedupe_keys: set[str] | None = None,
     mineru_batch_id: str | None = None,
     mineru_data_id: str | None = None,
+    notebook_title: str = "",
     user=None,
 ) -> IngestResult:
     timings: dict[str, float] = {}
@@ -160,9 +161,6 @@ async def run_pipeline(
     t0 = perf_counter()
     chunks = build_chunks(remark.clean_markdown)
     # ====== step 1 notebook 标题需由调用方传入，pipeline 内无法获取 ======
-    notebook_title = ""
-    if hasattr(ingest_input, "_notebook_title"):
-        notebook_title = ingest_input._notebook_title or ""
     chunks = await contextualize_chunks(
         chunks,
         notebook_title=notebook_title,
