@@ -1177,6 +1177,13 @@ const backendProvider = {
         return { success: true };
     },
 
+    async exportNote(notebookId, noteId) {
+        const response = await fetch(buildUrl(`/notebooks/${notebookId}/notes/${noteId}/export`), {
+            headers: { ...(getStoredSession()?.token ? { Authorization: `Bearer ${getStoredSession().token}` } : {}) },
+        });
+        return response.text();
+    },
+
     async getSearchSession({ notebookId, searchSessionId }) {
         const payload = await request(`/notebooks/${notebookId}/search-sessions/${searchSessionId}`);
         return normalizeSearchPayload(payload);
@@ -1377,6 +1384,7 @@ export const appApi = {
     notes: {
         save: provider.saveNote,
         remove: provider.deleteNote,
+        exportNote: provider.exportNote,
     },
     sources: {
         search: provider.searchSources,

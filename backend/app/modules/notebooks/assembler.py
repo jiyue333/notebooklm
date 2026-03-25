@@ -39,6 +39,7 @@ def build_note_view(note: Note) -> dict:
         'type': note.note_type,
         'sources': note.source_count,
         'time': format_relative_time(note.updated_at),
+        'tags': getattr(note, 'tags_json', None) or [],
     }
 
 

@@ -20,9 +20,10 @@ const TOOLBAR_ACTIONS = [
     { label: '代码块', token: '```\n代码\n```' },
 ];
 
-export default function NoteModal({ note, onClose, onSave, onDelete }) {
+export default function NoteModal({ note, onClose, onSave, onDelete, onExport }) {
     const [title, setTitle] = useState(note?.title || '');
     const [content, setContent] = useState(note?.content || '');
+    const [tagsText, setTagsText] = useState(Array.isArray(note?.tags) ? note.tags.join(', ') : '');
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState('');
     const savingRef = useRef(false);
@@ -53,7 +54,7 @@ export default function NoteModal({ note, onClose, onSave, onDelete }) {
             savingRef.current = true;
             setIsSaving(true);
             setError('');
-            await onSave({ ...note, title: title.trim() || '无标题笔记', content });
+            await onSave({ ...note, title: title.trim() || '无标题笔记', content, tags: tagsText.split(',').map((item) => item.trim()).filter(Boolean) });
             onClose();
         } catch (err) {
             setError(err.message || '保存笔记失败');
@@ -94,6 +95,9 @@ export default function NoteModal({ note, onClose, onSave, onDelete }) {
                         placeholder="笔记标题..."
                     />
                     <div className="note-modal-actions">
+                        {note?.id && onExport ? (
+                            <button className="note-modal-tab" onClick={() => onExport(note.id)} title="导出 Markdown">导出</button>
+                        ) : null}
                         {note?.id ? (
                             <button className="note-modal-del-btn" onClick={handleDelete} title="删除笔记" disabled={isSaving}>
                                 {Ic.del}
@@ -105,6 +109,7 @@ export default function NoteModal({ note, onClose, onSave, onDelete }) {
                     </div>
                 </div>
                 <div className="note-modal-toolbar">
+                    <input className="note-modal-tag-input" value={tagsText} onChange={(event) => setTagsText(event.target.value)} placeholder="标签：如 调研, 摘要, 引用" />
                     {TOOLBAR_ACTIONS.map((action) => (
                         <button key={action.label} type="button" className="note-modal-tool-btn" onClick={() => insertSnippet(action.token)}>
                             {action.label}

@@ -659,6 +659,7 @@ export default function NotebookPage() {
 
     // Notes state
     const [notes, setNotes] = useState([]);
+    const [noteFilterTag, setNoteFilterTag] = useState('');
     const [noteModalData, setNoteModalData] = useState(null); // null = closed, object = open
 
 
@@ -1266,6 +1267,17 @@ export default function NotebookPage() {
         setNoteModalData(note);
     };
 
+    const exportNote = async (noteId) => {
+        if (!notebook) return;
+        const markdown = await appApi.notes.exportNote(notebook.id, noteId);
+        const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${noteId}.md`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+    };
+
     const handleSaveNote = async (updatedNote) => {
         if (!notebook) return null;
         const savedNote = await appApi.notes.save(notebook.id, updatedNote);
@@ -1740,8 +1752,11 @@ export default function NotebookPage() {
                                     <button type="button" className="nb-panel-collapse" onClick={() => setLayoutMode('reader')}>收起右栏</button>
                                 </div>
                                 <div className="nb-panel-body nb-notes-body">
+                                    <div className="nb-notes-filter">
+                                        <input className="input" placeholder="按标签筛选笔记" value={noteFilterTag} onChange={(event) => setNoteFilterTag(event.target.value)} />
+                                    </div>
                                     <div className="nb-notes-list">
-                                        {notes.map(note => (
+                                        {notes.filter((note) => !noteFilterTag || (note.tags || []).includes(noteFilterTag)).map(note => (
                                             <div key={note.id} className="nb-note-card">
                                                 <div className="nb-note-card-inner" onClick={() => openExistingNote(note)}>
                                                     <div className="nb-note-card-icon">{I.edit}</div>
@@ -1783,6 +1798,7 @@ export default function NotebookPage() {
                     onClose={() => setNoteModalData(null)}
                     onSave={handleSaveNote}
                     onDelete={handleDeleteNote}
+                    onExport={exportNote}
                 />
             )}
             {sourceActionModal && (

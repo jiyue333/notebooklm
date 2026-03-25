@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_user_dep, db_session_dep
 from app.api.response import success_response
 from app.modules.notes.schemas import NoteUpsertRequest
-from app.modules.notes.service import delete_note, save_note
+from app.modules.notes.service import delete_note, export_note_markdown, save_note
 
 router = APIRouter(tags=["notes"])
 
@@ -27,6 +28,7 @@ async def create_note_endpoint(
         content=payload.content,
         note_type=payload.type,
         sources=payload.sources,
+        tags=payload.tags,
     )
     return success_response(item=item)
 
@@ -48,6 +50,7 @@ async def update_note_endpoint(
         content=payload.content,
         note_type=payload.type,
         sources=payload.sources,
+        tags=payload.tags,
     )
     return success_response(item=item)
 
@@ -61,3 +64,19 @@ async def delete_note_endpoint(
 ):
     await delete_note(session, user_id=current_user.id, notebook_id=notebook_id, note_id=note_id)
     return {"success": True}
+
+
+
+@router.get("/notebooks/{notebook_id}/notes/{note_id}/export")
+async def export_note_endpoint(
+    notebook_id: str,
+    note_id: str,
+    current_user=Depends(current_user_dep),
+    session: AsyncSession = Depends(db_session_dep),
+):
+    filename, content = await export_note_markdown(session, user_id=current_user.id, notebook_id=notebook_id, note_id=note_id)
+    return Response(
+        content=content,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
