@@ -30,6 +30,7 @@ def build_chat_model(
     temperature: float = DEFAULT_TEMPERATURE,
     max_retries: int = DEFAULT_MAX_RETRIES,
     timeout: float | None = None,
+    max_output_tokens: int | None = None,
     reasoning: bool | str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> BaseChatModel:
@@ -43,12 +44,17 @@ def build_chat_model(
     if provider == PROVIDER_OLLAMA:
         from langchain_ollama import ChatOllama
 
+        kwargs: dict[str, Any] = {
+            "model": model_name,
+            "base_url": base_url,
+            "temperature": temperature,
+            "reasoning": reasoning,
+            "metadata": shared_metadata,
+        }
+        if max_output_tokens is not None:
+            kwargs["num_predict"] = max_output_tokens
         return ChatOllama(
-            model=model_name,
-            base_url=base_url,
-            temperature=temperature,
-            reasoning=reasoning,
-            metadata=shared_metadata,
+            **kwargs,
         )
 
     if provider == PROVIDER_ANTHROPIC:
@@ -62,6 +68,8 @@ def build_chat_model(
             "timeout": timeout,
             "metadata": shared_metadata,
         }
+        if max_output_tokens is not None:
+            kwargs["max_tokens"] = max_output_tokens
         if base_url:
             kwargs["base_url"] = base_url
         return ChatAnthropic(**kwargs)
@@ -77,6 +85,8 @@ def build_chat_model(
             "request_timeout": timeout,
             "metadata": shared_metadata,
         }
+        if max_output_tokens is not None:
+            kwargs["max_output_tokens"] = max_output_tokens
         if base_url:
             kwargs["client_options"] = {"api_endpoint": base_url}
         return ChatGoogleGenerativeAI(**kwargs)
@@ -88,6 +98,7 @@ def build_chat_model(
         api_key=SecretStr(api_key) if api_key else None,
         base_url=base_url,
         temperature=temperature,
+        max_tokens=max_output_tokens,
         max_retries=max_retries,
         timeout=timeout,
         # LangChain docs recommend disabling stream usage metadata when

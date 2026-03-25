@@ -32,5 +32,6 @@ def build_lite_llm(settings: Settings | None = None) -> BaseChatModel | None:
         base_url=s.lite_llm_base_url,
         api_key=api_key,
         timeout=float(s.lite_llm_timeout),
+        max_output_tokens=s.lite_llm_max_tokens,
         metadata={"config_scope": "lite_llm"},
     )

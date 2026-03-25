@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.api.errors import AppError
+from app.core.config import get_settings
 from app.infra.ai.factory import build_chat_model
 from app.modules.settings.runtime import resolve_chat_runtime_config
 
@@ -17,7 +18,8 @@ def get_user_generation_settings(user) -> dict:
 
 
 def build_user_chat_model(user):
-    runtime_config = resolve_chat_runtime_config(user)
+    settings = get_settings()
+    runtime_config = resolve_chat_runtime_config(user, settings)
     if not runtime_config.is_configured:
         return None
     return build_chat_model(
@@ -25,6 +27,7 @@ def build_user_chat_model(user):
         model_name=runtime_config.model_name,
         base_url=runtime_config.api_url,
         api_key=runtime_config.api_key,
+        max_output_tokens=settings.chat_max_tokens,
         metadata={"key_source": runtime_config.key_source},
     )
 

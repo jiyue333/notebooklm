@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     default_chat_provider: str = PROVIDER_OLLAMA
     default_chat_model_name: str = "qwen3.5:0.8b"
     default_chat_api_url: str = "http://127.0.0.1:11434"
+    chat_max_tokens: int | None = Field(default=None, ge=1)
     default_search_provider: str = PROVIDER_EXA
     default_embedding_provider: str = PROVIDER_OLLAMA
     default_embedding_model_name: str = "qwen3-embedding:0.6b"
@@ -94,6 +95,7 @@ class Settings(BaseSettings):
     lite_llm_base_url: str = "https://a-ocnfniawgw.cn-shanghai.fcapp.run"
     lite_llm_model: str = "claude-haiku-4-5-20251001"
     lite_llm_timeout: int = 60  # scoring 15 items can be slow; increase if score_fallback occurs
+    lite_llm_max_tokens: int | None = Field(default=None, ge=1)
 
     rerank_model: str = "Qwen3-Reranker-8B"
     rerank_model_api_url: str = "https://router.tumuer.me/v1"
