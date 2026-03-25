@@ -279,3 +279,42 @@ async def upload_sources_endpoint(
     await invalidate_notebook_detail_cache(user_id=current_user.id, notebook_id=notebook_id)
     item = await get_notebook_detail(session, user_id=current_user.id, notebook_id=notebook_id)
     return success_response(item=item)
+
+
+@router.post("/notebooks/{notebook_id}/articles/{article_id}/retry")
+async def retry_article_endpoint(
+    notebook_id: str,
+    article_id: str,
+    current_user=Depends(current_user_dep),
+    session: AsyncSession = Depends(db_session_dep),
+):
+    article = await notebooks_repo.get_article(
+        session,
+        user_id=current_user.id,
+        notebook_id=notebook_id,
+        article_id=article_id,
+    )
+    if article is None:
+        raise AppError(404, "未找到对应文章", code="article_not_found")
+
+    now = datetime.now(UTC)
+    article.parse_status = "queued"
+    article.parse_error_tag = None
+    article.parse_error_message = None
+    article.chunk_status = "not_started"
+    article.index_status = "not_started"
+
+    job = await jobs_repo.create_article_ingest_job(
+        session,
+        article_id=article.id,
+        search_session_id=None,
+        dedupe_key=f"retry-ingest:{article.id}:{int(now.timestamp())}",
+        payload_json={"articleId": article.id},
+        created_at=now,
+    )
+    await session.commit()
+    await job_publisher.publish_jobs(session, [job])
+    await session.commit()
+    await invalidate_notebook_detail_cache(user_id=current_user.id, notebook_id=notebook_id)
+    item = await get_notebook_detail(session, user_id=current_user.id, notebook_id=notebook_id)
+    return success_response(item=item)

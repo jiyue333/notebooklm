@@ -10,6 +10,8 @@ import rehypeSlug from 'rehype-slug';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import SettingsModal from '../components/SettingsModal';
+import InlineEditableText from '../components/common/InlineEditableText';
+import ErrorBanner from '../components/common/ErrorBanner';
 import AddSourceModal from '../components/AddSourceModal';
 import SourcePanel from '../components/SourcePanel';
 import NoteModal from '../components/NoteModal';
@@ -592,6 +594,7 @@ export default function NotebookPage() {
     const [selectedArticle, setSelectedArticle] = useState(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [showSettings, setShowSettings] = useState(false);
+    const [layoutMode, setLayoutMode] = useState('triple');
     const [showAddSource, setShowAddSource] = useState(false);
     const [sourceExpanded, setSourceExpanded] = useState(false);
     const [showArticleMenu, setShowArticleMenu] = useState(false);
@@ -631,11 +634,6 @@ export default function NotebookPage() {
     const [notes, setNotes] = useState([]);
     const [noteModalData, setNoteModalData] = useState(null); // null = closed, object = open
 
-    // Layout resizers — same default for visual alignment, but independent dragging
-    const [leftWidth, onLeftResize] = useResizer('horizontal', 300, 200, 450);
-    const [rightWidth, onRightResize] = useResizer('horizontal', 360, 260, 560, true);
-    const [leftTopH, onLeftSplit] = useResizer('vertical', 440, 120, 650);
-    const [rightTopH, onRightSplit] = useResizer('vertical', 440, 120, 650);
 
     const redirectToLogin = useCallback(() => {
         clearStoredSession();
@@ -1222,11 +1220,38 @@ export default function NotebookPage() {
         syncNotebookState(detail);
     }, [syncNotebookState]);
 
+    const handleRetryArticle = useCallback(async (articleId) => {
+        if (!notebook?.id) return;
+        try {
+            setArticleActionPendingId(articleId);
+            const detail = await appApi.sources.retryArticle({ notebookId: notebook.id, articleId });
+            syncNotebookState(detail);
+        } catch (err) {
+            if (isAuthError(err)) {
+                redirectToLogin();
+                return;
+            }
+            setPageError(err.message || '重试来源失败');
+        } finally {
+            setArticleActionPendingId(null);
+        }
+    }, [notebook?.id, redirectToLogin, syncNotebookState]);
+
+    const handleRenameNotebook = useCallback(async (nextTitle) => {
+        if (!notebook?.id) return;
+        const detail = await appApi.notebooks.update(notebook.id, { title: nextTitle });
+        setNotebook((prev) => ({ ...prev, ...detail }));
+    }, [notebook?.id]);
+
     if (isPageLoading) {
         return (
             <div className="notebook-page">
                 <div className="nb-empty-center">
-                    <h3>正在加载笔记本...</h3>
+                    <div className="nb-skeleton-group">
+                        <div className="nb-skeleton-line short" />
+                        <div className="nb-skeleton-line" />
+                        <div className="nb-skeleton-line medium" />
+                    </div>
                 </div>
             </div>
         );
@@ -1236,8 +1261,7 @@ export default function NotebookPage() {
         return (
             <div className="notebook-page">
                 <div className="nb-empty-center">
-                    <h3>加载失败</h3>
-                    <p>{pageError || '未找到对应的笔记本'}</p>
+                    <ErrorBanner title="加载失败" message={pageError || '未找到对应的笔记本'} actionLabel="重试" onAction={() => window.location.reload()} />
                 </div>
             </div>
         );
@@ -1251,7 +1275,12 @@ export default function NotebookPage() {
                     <button className="nb-icon-btn" onClick={() => navigate('/home')} title="返回">{I.back}</button>
                     <div className="nb-topbar-title">
                         <span className="nb-topbar-emoji">{notebook.emoji}</span>
-                        <h1>{notebook.title}</h1>
+                        <InlineEditableText
+                            value={notebook.title}
+                            className="nb-topbar-title-trigger"
+                            inputClassName="nb-topbar-title-input"
+                            onSave={handleRenameNotebook}
+                        />
                     </div>
                 </div>
                 <div className="nb-topbar-right">
@@ -1262,13 +1291,15 @@ export default function NotebookPage() {
             </header>
 
             {/* Main Layout */}
-            <div className="nb-layout">
+            <div className="nb-layout" data-layout={layoutMode}>
                 {/* ====== LEFT COLUMN ====== */}
-                <div className="nb-left" style={{ width: leftWidth }}>
-                    <div className="nb-panel nb-left-top" style={{ height: leftTopH }}>
+                {layoutMode !== 'reader' ? (
+                <div className="nb-left">
+                    <div className="nb-panel nb-left-top">
                         <div className="nb-panel-header">
                             <span className="nb-panel-icon">{I.toc}</span>
                             <span className="nb-panel-title">文章目录</span>
+                            <button type="button" className="nb-panel-collapse" onClick={() => setLayoutMode('reader')}>收起侧栏</button>
                         </div>
                         <div className="nb-panel-body nb-list-panel-body">
                             {toc.length > 0 ? (
@@ -1284,8 +1315,6 @@ export default function NotebookPage() {
                             )}
                         </div>
                     </div>
-
-                    <div className="nb-resizer nb-resizer-h" onMouseDown={onLeftSplit} />
 
                     <div className="nb-panel nb-left-bottom" style={{ flex: 1 }}>
                         <div className="nb-panel-header">
@@ -1306,6 +1335,12 @@ export default function NotebookPage() {
                                         >
                                             <span className="nb-article-icon">{getArticleIcon(article.type)}</span>
                                             <span className="nb-article-title-text">{article.title}</span>
+                                            <span className={`nb-status-pill ${article.parseStatus === 'failed' ? 'failed' : (article.contentReady ? 'ready' : 'processing')}`}>
+                                                {article.parseStatus === 'failed' ? '失败' : (article.contentReady ? '就绪' : '解析中')}
+                                            </span>
+                                            {article.parseStatus === 'failed' ? (
+                                                <button type="button" className="nb-article-retry" onClick={(event) => { event.stopPropagation(); void handleRetryArticle(article.id); }}>重试</button>
+                                            ) : null}
                                             {articleActionPendingId === article.id ? (
                                                 <span className="nb-article-action-state">处理中</span>
                                             ) : null}
@@ -1340,14 +1375,29 @@ export default function NotebookPage() {
                         </div>
                     </div>
                 </div>
-
-                <div className="nb-resizer nb-resizer-v" onMouseDown={onLeftResize} />
+                ) : null}
 
                 {/* ====== CENTER COLUMN ====== */}
                 <div className="nb-center">
                     {selectedArticle ? (
                         <>
                             <div className="nb-article-toolbar">
+                                <div className="nb-layout-toggle-group">
+                                    {[
+                                        { id: 'triple', label: '三栏' },
+                                        { id: 'focus', label: '双栏' },
+                                        { id: 'reader', label: '阅读' },
+                                    ].map((item) => (
+                                        <button
+                                            key={item.id}
+                                            type="button"
+                                            className={`nb-layout-toggle ${layoutMode === item.id ? 'active' : ''}`}
+                                            onClick={() => setLayoutMode(item.id)}
+                                        >
+                                            {item.label}
+                                        </button>
+                                    ))}
+                                </div>
                                 <div className="nb-toolbar-left">
                                     <div className="nb-toolbar-title-row">
                                         <h2 className="nb-toolbar-title">{selectedArticle.title}</h2>
@@ -1459,10 +1509,9 @@ export default function NotebookPage() {
                     )}
                 </div>
 
-                <div className="nb-resizer nb-resizer-v" onMouseDown={onRightResize} />
-
                 {/* ====== RIGHT COLUMN ====== */}
-                <div className="nb-right" style={{ width: rightWidth }}>
+                {layoutMode !== 'reader' ? (
+                <div className="nb-right">
                     {showAiChat ? (
                         <div className="nb-panel nb-right-full nb-chat-panel">
                             <div className="nb-panel-header nb-chat-header">
@@ -1571,14 +1620,13 @@ export default function NotebookPage() {
                                 />
                             </div>
 
-                            <div className="nb-resizer nb-resizer-h" onMouseDown={onRightSplit} />
-
                             {/* Notes Panel */}
                             <div className="nb-panel nb-right-bottom" style={{ flex: 1 }}>
                                 <div className="nb-panel-header">
                                     <span className="nb-panel-icon">{I.note}</span>
                                     <span className="nb-panel-title">笔记</span>
                                     <span className="nb-panel-badge">{notes.length}</span>
+                                    <button type="button" className="nb-panel-collapse" onClick={() => setLayoutMode('reader')}>收起右栏</button>
                                 </div>
                                 <div className="nb-panel-body nb-notes-body">
                                     <div className="nb-notes-list">
@@ -1607,6 +1655,7 @@ export default function NotebookPage() {
                         </>
                     )}
                 </div>
+                ) : null}
             </div>
 
             {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}

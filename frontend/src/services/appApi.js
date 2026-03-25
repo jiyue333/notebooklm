@@ -580,6 +580,17 @@ const mockProvider = {
         return buildNotebookDetail(notebookId);
     },
 
+    async retryArticleSource({ notebookId, articleId }) {
+        await wait(280);
+        const notebook = getNotebookRecord(notebookId);
+        const article = (notebook.articles || []).find((item) => item.id === articleId);
+        if (!article) throw new Error('未找到对应来源文章');
+        article.parseStatus = 'queued';
+        article.processingHint = '已重新加入解析队列，请稍后查看。';
+        article.contentReady = false;
+        return buildNotebookDetail(notebookId);
+    },
+
     async getSettings() {
         await wait(120);
         return buildSettingsView(mockState.user, mockState.settings);
@@ -1225,6 +1236,13 @@ const backendProvider = {
         return payload.item;
     },
 
+    async retryArticleSource({ notebookId, articleId }) {
+        const payload = await request(`/notebooks/${notebookId}/articles/${articleId}/retry`, {
+            method: 'POST',
+        });
+        return payload.item;
+    },
+
     async getSettings() {
         const payload = await request('/settings');
         return payload.item;
@@ -1358,6 +1376,7 @@ export const appApi = {
         uploadFiles: provider.uploadFiles,
         updateArticle: provider.updateArticleSource,
         deleteArticle: provider.deleteArticleSource,
+        retryArticle: provider.retryArticleSource,
     },
     settings: {
         get: provider.getSettings,
