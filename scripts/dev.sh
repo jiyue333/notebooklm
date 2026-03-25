@@ -88,6 +88,34 @@ ensure_backend_sync() {
   fi
 }
 
+# 本机动态库：python-magic 依赖 libmagic。设置 SKIP_NATIVE_LIB_SETUP=1 可跳过。
+ensure_libmagic() {
+  [[ "${SKIP_NATIVE_LIB_SETUP:-}" == "1" ]] && return 0
+  local py_bin
+  py_bin="$(resolve_backend_python)"
+  if "$py_bin" -c 'import magic; magic.from_buffer(b"\x89PNG\r\n\x1a\n", mime=True)' 2>/dev/null; then
+    return 0
+  fi
+  case "$(uname -s)" in
+    Darwin)
+      if command -v brew >/dev/null 2>&1; then
+        echo "[dev] 安装 libmagic（python-magic / MIME 检测，Homebrew）..."
+        HOMEBREW_NO_AUTO_UPDATE=1 brew install libmagic
+      else
+        echo "[dev] 未检测到 Homebrew；MIME 将使用代码回退。可选: brew install libmagic" >&2
+      fi
+      ;;
+    Linux)
+      if command -v apt-get >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+        echo "[dev] 安装 libmagic1（python-magic，apt）..."
+        sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libmagic1
+      else
+        echo "[dev] 需要系统包 libmagic1 时请执行: sudo apt-get install -y libmagic1" >&2
+      fi
+      ;;
+  esac
+}
+
 start_detached_process() {
   local workdir="$1"
   local log_file="$2"
@@ -414,6 +442,7 @@ ensure_dev_prerequisites() {
   fi
 
   ensure_backend_sync
+  ensure_libmagic
 }
 
 usage() {
@@ -425,6 +454,9 @@ Usage:
   ./scripts/dev.sh status
   ./scripts/dev.sh logs [backend|worker|scheduler|frontend|all]
   ./scripts/dev.sh restart
+
+环境变量:
+  SKIP_NATIVE_LIB_SETUP=1  跳过本机 libmagic 检测/安装（依赖代码回退）
 EOF
 }
 

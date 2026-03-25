@@ -17,7 +17,6 @@ docker/rocketmq/broker/store/
 docker/rocketmq/namesrv/logs/
 logs/
 note.md
-plan.md
 .DS_Store
 pro.md
 chain.md
