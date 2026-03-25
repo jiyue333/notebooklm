@@ -1763,3 +1763,16 @@
 .nb-notes-filter {
     padding: 0 0 12px;
 }
+
+
+.nb-reading-progress {
+    height: 4px;
+    width: 100%;
+    background: color-mix(in srgb, var(--hover-bg), transparent 10%);
+}
+
+.nb-reading-progress-bar {
+    height: 100%;
+    background: var(--accent-color);
+    transition: width 120ms ease;
+}

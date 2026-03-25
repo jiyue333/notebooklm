@@ -656,6 +656,7 @@ export default function NotebookPage() {
     // Article settings
     const [fontSize, setFontSize] = useState(1.05);
     const [pageWidth, setPageWidth] = useState(720);
+    const [readingProgress, setReadingProgress] = useState(0);
 
     // Notes state
     const [notes, setNotes] = useState([]);
@@ -1091,8 +1092,11 @@ export default function NotebookPage() {
             if (currentHeading?.id) {
                 setChatReadingCursor((prev) => ({ ...prev, sectionId: currentHeading.id }));
             }
+            const maxScroll = Math.max(container.scrollHeight - container.clientHeight, 1);
+            setReadingProgress(Math.round((container.scrollTop / maxScroll) * 100));
         };
         container.addEventListener('scroll', syncScrollSpy);
+        syncScrollSpy();
 
         return () => {
             window.cancelAnimationFrame(frameId);
@@ -1577,6 +1581,7 @@ export default function NotebookPage() {
                                 </div>
                             </div>
 
+                            <div className="nb-reading-progress"><div className="nb-reading-progress-bar" style={{ width: `${readingProgress}%` }} /></div>
                             <div className="nb-reader-toolbar">
                                 <input className="input nb-reader-search-input" placeholder="文内搜索..." value={readerSearchQuery} onChange={(event) => { setReaderSearchQuery(event.target.value); setReaderSearchIndex(0); }} />
                                 <span className="nb-reader-search-meta">{readerSearchMatches.length > 0 ? `${Math.min(readerSearchIndex + 1, readerSearchMatches.length)}/${readerSearchMatches.length}` : '0/0'}</span>
