@@ -210,6 +210,7 @@ export default function SettingsModal({ onClose }) {
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
     const [feedback, setFeedback] = useState('');
+    const [avatarFile, setAvatarFile] = useState(null);
     const modelProviderOptions = getModelProviderOptions(settings);
     const embeddingProviderOptions = getEmbeddingProviderOptions(settings);
     const searchProviderOptions = getSearchProviderOptions(settings);
@@ -407,7 +408,10 @@ export default function SettingsModal({ onClose }) {
             setFeedback('');
 
             if (activeTab === 'account') {
-                const profile = await appApi.settings.updateProfile({ username: settings.username });
+                let profile = await appApi.settings.updateProfile({ username: settings.username });
+                if (avatarFile) {
+                    profile = await appApi.settings.uploadAvatar(avatarFile);
+                }
                 setSettings((prev) => ({
                     ...prev,
                     username: profile.name || prev.username,
@@ -822,6 +826,12 @@ export default function SettingsModal({ onClose }) {
                                             value={settings.username}
                                             onChange={(event) => update('username', event.target.value)}
                                         />
+                                    </div>
+
+                                    <div className="settings-section">
+                                        <label className="settings-section-title">头像上传</label>
+                                        <input type="file" accept="image/*" className="settings-input" onChange={(event) => setAvatarFile(event.target.files?.[0] || null)} />
+                                        <p className="settings-hint">当前环境使用 data URL 方式保存头像，适合作为本地与开发态闭环。</p>
                                     </div>
 
                                     <div className="settings-section">

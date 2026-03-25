@@ -1318,6 +1318,20 @@ const backendProvider = {
         });
     },
 
+    async uploadAvatar(file) {
+        const dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
+        const payload = await request('/account/profile', {
+            method: 'PATCH',
+            body: { avatarUrl: dataUrl, username: getStoredSession()?.user?.name || 'user' },
+        });
+        return payload.item;
+    },
+
     async listConversations({ notebookId }) {
         const payload = await request(`/notebooks/${notebookId}/conversations`);
         return payload.items || [];
