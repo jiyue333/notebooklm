@@ -26,42 +26,6 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 ).toString();
 
 /* ============================================
-   Resizer Hook
-   ============================================ */
-function useResizer(direction, initialSize, minSize, maxSize, inverted = false) {
-    const [size, setSize] = useState(initialSize);
-    const sizeRef = useRef(initialSize);
-
-    useEffect(() => {
-        sizeRef.current = size;
-    }, [size]);
-
-    const onMouseDown = useCallback((e) => {
-        e.preventDefault();
-        const startPos = direction === 'horizontal' ? e.clientX : e.clientY;
-        const startSize = sizeRef.current;
-        document.body.style.cursor = direction === 'horizontal' ? 'col-resize' : 'row-resize';
-        document.body.style.userSelect = 'none';
-
-        const onMouseMove = (ev) => {
-            const currentPos = direction === 'horizontal' ? ev.clientX : ev.clientY;
-            const delta = inverted ? (startPos - currentPos) : (currentPos - startPos);
-            setSize(Math.min(maxSize, Math.max(minSize, startSize + delta)));
-        };
-        const onMouseUp = () => {
-            document.body.style.cursor = '';
-            document.body.style.userSelect = '';
-            document.removeEventListener('mousemove', onMouseMove);
-            document.removeEventListener('mouseup', onMouseUp);
-        };
-        document.addEventListener('mousemove', onMouseMove);
-        document.addEventListener('mouseup', onMouseUp);
-    }, [direction, minSize, maxSize, inverted]);
-
-    return [size, onMouseDown, setSize];
-}
-
-/* ============================================
    Strip first h1 from markdown
    ============================================ */
 function stripFirstH1(markdown) {
@@ -1737,7 +1701,7 @@ export default function NotebookPage() {
                         </div>
                     ) : (
                         <>
-                            <div className="nb-panel nb-right-top" style={{ height: rightTopH }}>
+                            <div className="nb-panel nb-right-top">
                                 <SourcePanel
                                     notebookId={notebook.id}
                                     searchQuery={searchQuery}
