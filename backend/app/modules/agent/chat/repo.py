@@ -79,6 +79,15 @@ async def append_message(
     )
     session.add(msg)
     await session.flush()
+
+    conversation = await session.get(Conversation, conversation_id)
+    if conversation is not None:
+        now = msg.created_at
+        conversation.updated_at = now
+        conversation.last_message_at = now
+        if article_id is not None:
+            conversation.current_article_id = article_id
+        await session.flush()
     return msg
 
 
@@ -99,3 +108,31 @@ async def list_recent_messages(
     return rows
 
 
+
+
+async def list_conversations(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    notebook_id: str,
+) -> list[Conversation]:
+    result = await session.execute(
+        select(Conversation)
+        .where(Conversation.user_id == user_id, Conversation.notebook_id == notebook_id)
+        .order_by(Conversation.last_message_at.desc().nullslast(), Conversation.updated_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def delete_conversation(
+    session: AsyncSession,
+    *,
+    conversation_id: str,
+    user_id: str,
+) -> bool:
+    conversation = await get_conversation(session, conversation_id=conversation_id, user_id=user_id)
+    if conversation is None:
+        return False
+    await session.delete(conversation)
+    await session.flush()
+    return True

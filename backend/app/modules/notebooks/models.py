@@ -27,6 +27,8 @@ class Notebook(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False, comment="笔记本标题")
     emoji: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="笔记本图标")
     color: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="笔记本主题色")
+    tags_json: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True, comment="笔记本标签 JSON")
+    last_opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="最近打开时间")
 
     user: Mapped["User"] = relationship(back_populates="notebooks")
     notes: Mapped[list["Note"]] = relationship(

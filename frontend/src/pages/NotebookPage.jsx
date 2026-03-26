@@ -3,6 +3,8 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTheme } from '../contexts/useTheme';
 import { appApi, clearStoredSession, getStoredSession, isAuthError } from '../services/appApi';
 import ReactMarkdown from 'react-markdown';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Document, Page, pdfjs } from 'react-pdf';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -10,6 +12,8 @@ import rehypeSlug from 'rehype-slug';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import SettingsModal from '../components/SettingsModal';
+import InlineEditableText from '../components/common/InlineEditableText';
+import ErrorBanner from '../components/common/ErrorBanner';
 import AddSourceModal from '../components/AddSourceModal';
 import SourcePanel from '../components/SourcePanel';
 import NoteModal from '../components/NoteModal';
@@ -252,6 +256,26 @@ const CHAT_ROUTE_LABELS = {
 const ARTICLE_MARKDOWN_REMARK_PLUGINS = [remarkGfm];
 const ARTICLE_MARKDOWN_REHYPE_PLUGINS = [rehypeRaw, rehypeSlug];
 
+const markdownComponents = {
+    code({ inline, className, children, ...props }) {
+        const match = /language-(\w+)/.exec(className || '');
+        if (inline) {
+            return <code className={className} {...props}>{children}</code>;
+        }
+        return (
+            <SyntaxHighlighter
+                style={oneDark}
+                language={match?.[1] || 'text'}
+                PreTag="div"
+                customStyle={{ borderRadius: '16px', margin: 0, fontSize: '0.86em' }}
+                {...props}
+            >
+                {String(children).replace(/\n$/, '')}
+            </SyntaxHighlighter>
+        );
+    },
+};
+
 const MarkdownDocument = memo(function MarkdownDocument({ content, className }) {
     if (!content?.trim()) {
         return null;
@@ -262,6 +286,7 @@ const MarkdownDocument = memo(function MarkdownDocument({ content, className }) 
             <ReactMarkdown
                 remarkPlugins={ARTICLE_MARKDOWN_REMARK_PLUGINS}
                 rehypePlugins={ARTICLE_MARKDOWN_REHYPE_PLUGINS}
+                components={markdownComponents}
             >
                 {content}
             </ReactMarkdown>
@@ -592,6 +617,7 @@ export default function NotebookPage() {
     const [selectedArticle, setSelectedArticle] = useState(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [showSettings, setShowSettings] = useState(false);
+    const [layoutMode, setLayoutMode] = useState('triple');
     const [showAddSource, setShowAddSource] = useState(false);
     const [sourceExpanded, setSourceExpanded] = useState(false);
     const [showArticleMenu, setShowArticleMenu] = useState(false);
@@ -612,6 +638,8 @@ export default function NotebookPage() {
     const [summaryText, setSummaryText] = useState('');
     const [summaryLoading, setSummaryLoading] = useState(false);
     const [showAiChat, setShowAiChat] = useState(false);
+    const [chatScope, setChatScope] = useState('article');
+    const [chatSessions, setChatSessions] = useState([]);
     const [chatMessages, setChatMessages] = useState([]);
     const [chatConversationId, setChatConversationId] = useState(null);
     const [chatInput, setChatInput] = useState('');
@@ -622,20 +650,19 @@ export default function NotebookPage() {
     const [translationLoading, setTranslationLoading] = useState(false);
     const [translationLanguage, setTranslationLanguage] = useState('');
     const [translationError, setTranslationError] = useState('');
+    const [readerSearchQuery, setReaderSearchQuery] = useState('');
+    const [readerSearchIndex, setReaderSearchIndex] = useState(0);
 
     // Article settings
     const [fontSize, setFontSize] = useState(1.05);
     const [pageWidth, setPageWidth] = useState(720);
+    const [readingProgress, setReadingProgress] = useState(0);
 
     // Notes state
     const [notes, setNotes] = useState([]);
+    const [noteFilterTag, setNoteFilterTag] = useState('');
     const [noteModalData, setNoteModalData] = useState(null); // null = closed, object = open
 
-    // Layout resizers — same default for visual alignment, but independent dragging
-    const [leftWidth, onLeftResize] = useResizer('horizontal', 300, 200, 450);
-    const [rightWidth, onRightResize] = useResizer('horizontal', 360, 260, 560, true);
-    const [leftTopH, onLeftSplit] = useResizer('vertical', 440, 120, 650);
-    const [rightTopH, onRightSplit] = useResizer('vertical', 440, 120, 650);
 
     const redirectToLogin = useCallback(() => {
         clearStoredSession();
@@ -808,6 +835,18 @@ export default function NotebookPage() {
     const renderedArticleContent = useMemo(() => (
         showTranslation && translationText ? stripFirstH1(translationText) : strippedContent
     ), [showTranslation, translationText, strippedContent]);
+    const readerSearchMatches = useMemo(() => {
+        if (!readerSearchQuery.trim()) return [];
+        const lower = renderedArticleContent.toLowerCase();
+        const keyword = readerSearchQuery.trim().toLowerCase();
+        const matches = [];
+        let cursor = lower.indexOf(keyword);
+        while (cursor !== -1 && matches.length < 100) {
+            matches.push(cursor);
+            cursor = lower.indexOf(keyword, cursor + keyword.length);
+        }
+        return matches;
+    }, [readerSearchQuery, renderedArticleContent]);
 
     // AI Summary
     const handleSummary = async () => {
@@ -869,9 +908,17 @@ export default function NotebookPage() {
         }
     };
 
-    const handleToggleChat = () => {
-        setShowAiChat(!showAiChat);
-        if (!showAiChat) setSourceExpanded(false);
+    const handleToggleChat = async () => {
+        const nextValue = !showAiChat;
+        setShowAiChat(nextValue);
+        if (nextValue) {
+            setSourceExpanded(false);
+            if (!selectedArticle) setChatScope('notebook');
+            try {
+                const sessions = await appApi.settings.listConversations({ notebookId: notebook.id });
+                setChatSessions(sessions);
+            } catch {}
+        }
     };
 
     const handleSendChat = async () => {
@@ -911,7 +958,7 @@ export default function NotebookPage() {
         try {
             const result = await appApi.ai.streamAssistant({
                 notebookId: notebook.id,
-                articleId: selectedArticle?.id,
+                articleId: chatScope === 'article' ? selectedArticle?.id : null,
                 conversationId: chatConversationId,
                 message: prompt,
                 readingCursor: chatReadingCursor,
@@ -926,6 +973,13 @@ export default function NotebookPage() {
                 },
             });
             setChatConversationId(result.conversationId || chatConversationId);
+            setChatSessions((prev) => {
+                const nextSessionId = result.conversationId || chatConversationId;
+                if (!nextSessionId) return prev;
+                const existing = prev.find((item) => item.id === nextSessionId);
+                const nextSession = { id: nextSessionId, title: prompt.slice(0, 24), messages: [] };
+                return existing ? prev : [nextSession, ...prev];
+            });
             setChatMessages((prev) => prev.map((msg) => (
                 msg.id === pendingAssistantId
                     ? {
@@ -1028,7 +1082,26 @@ export default function NotebookPage() {
             setRenderedToc(collectRenderedToc(articleBody));
         });
 
-        return () => window.cancelAnimationFrame(frameId);
+        const container = centerBodyRef.current;
+        const articleBody = getArticleBodyElement(container);
+        if (!container || !articleBody) return () => window.cancelAnimationFrame(frameId);
+
+        const headings = Array.from(articleBody.querySelectorAll('h1, h2, h3, h4'));
+        const syncScrollSpy = () => {
+            const currentHeading = headings.findLast((heading) => heading.getBoundingClientRect().top - container.getBoundingClientRect().top < 96);
+            if (currentHeading?.id) {
+                setChatReadingCursor((prev) => ({ ...prev, sectionId: currentHeading.id }));
+            }
+            const maxScroll = Math.max(container.scrollHeight - container.clientHeight, 1);
+            setReadingProgress(Math.round((container.scrollTop / maxScroll) * 100));
+        };
+        container.addEventListener('scroll', syncScrollSpy);
+        syncScrollSpy();
+
+        return () => {
+            window.cancelAnimationFrame(frameId);
+            container.removeEventListener('scroll', syncScrollSpy);
+        };
     }, [
         articleDisplayBlocked,
         articleRenderMode,
@@ -1198,6 +1271,17 @@ export default function NotebookPage() {
         setNoteModalData(note);
     };
 
+    const exportNote = async (noteId) => {
+        if (!notebook) return;
+        const markdown = await appApi.notes.exportNote(notebook.id, noteId);
+        const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${noteId}.md`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+    };
+
     const handleSaveNote = async (updatedNote) => {
         if (!notebook) return null;
         const savedNote = await appApi.notes.save(notebook.id, updatedNote);
@@ -1222,11 +1306,44 @@ export default function NotebookPage() {
         syncNotebookState(detail);
     }, [syncNotebookState]);
 
+    const handleRetryArticle = useCallback(async (articleId) => {
+        if (!notebook?.id) return;
+        try {
+            setArticleActionPendingId(articleId);
+            const detail = await appApi.sources.retryArticle({ notebookId: notebook.id, articleId });
+            syncNotebookState(detail);
+        } catch (err) {
+            if (isAuthError(err)) {
+                redirectToLogin();
+                return;
+            }
+            setPageError(err.message || '重试来源失败');
+        } finally {
+            setArticleActionPendingId(null);
+        }
+    }, [notebook?.id, redirectToLogin, syncNotebookState]);
+
+    const handleRenameNotebook = useCallback(async (nextTitle) => {
+        if (!notebook?.id) return;
+        const detail = await appApi.notebooks.update(notebook.id, { title: nextTitle });
+        setNotebook((prev) => ({ ...prev, ...detail }));
+    }, [notebook?.id]);
+
+    useEffect(() => {
+        if (notebook && notebook.articles.length === 0 && !showAddSource) {
+            setShowAddSource(true);
+        }
+    }, [notebook, showAddSource]);
+
     if (isPageLoading) {
         return (
             <div className="notebook-page">
                 <div className="nb-empty-center">
-                    <h3>正在加载笔记本...</h3>
+                    <div className="nb-skeleton-group">
+                        <div className="nb-skeleton-line short" />
+                        <div className="nb-skeleton-line" />
+                        <div className="nb-skeleton-line medium" />
+                    </div>
                 </div>
             </div>
         );
@@ -1236,8 +1353,7 @@ export default function NotebookPage() {
         return (
             <div className="notebook-page">
                 <div className="nb-empty-center">
-                    <h3>加载失败</h3>
-                    <p>{pageError || '未找到对应的笔记本'}</p>
+                    <ErrorBanner title="加载失败" message={pageError || '未找到对应的笔记本'} actionLabel="重试" onAction={() => window.location.reload()} />
                 </div>
             </div>
         );
@@ -1251,7 +1367,12 @@ export default function NotebookPage() {
                     <button className="nb-icon-btn" onClick={() => navigate('/home')} title="返回">{I.back}</button>
                     <div className="nb-topbar-title">
                         <span className="nb-topbar-emoji">{notebook.emoji}</span>
-                        <h1>{notebook.title}</h1>
+                        <InlineEditableText
+                            value={notebook.title}
+                            className="nb-topbar-title-trigger"
+                            inputClassName="nb-topbar-title-input"
+                            onSave={handleRenameNotebook}
+                        />
                     </div>
                 </div>
                 <div className="nb-topbar-right">
@@ -1262,13 +1383,15 @@ export default function NotebookPage() {
             </header>
 
             {/* Main Layout */}
-            <div className="nb-layout">
+            <div className="nb-layout" data-layout={layoutMode}>
                 {/* ====== LEFT COLUMN ====== */}
-                <div className="nb-left" style={{ width: leftWidth }}>
-                    <div className="nb-panel nb-left-top" style={{ height: leftTopH }}>
+                {layoutMode !== 'reader' ? (
+                <div className="nb-left">
+                    <div className="nb-panel nb-left-top">
                         <div className="nb-panel-header">
                             <span className="nb-panel-icon">{I.toc}</span>
                             <span className="nb-panel-title">文章目录</span>
+                            <button type="button" className="nb-panel-collapse" onClick={() => setLayoutMode('reader')}>收起侧栏</button>
                         </div>
                         <div className="nb-panel-body nb-list-panel-body">
                             {toc.length > 0 ? (
@@ -1284,8 +1407,6 @@ export default function NotebookPage() {
                             )}
                         </div>
                     </div>
-
-                    <div className="nb-resizer nb-resizer-h" onMouseDown={onLeftSplit} />
 
                     <div className="nb-panel nb-left-bottom" style={{ flex: 1 }}>
                         <div className="nb-panel-header">
@@ -1306,6 +1427,12 @@ export default function NotebookPage() {
                                         >
                                             <span className="nb-article-icon">{getArticleIcon(article.type)}</span>
                                             <span className="nb-article-title-text">{article.title}</span>
+                                            <span className={`nb-status-pill ${article.parseStatus === 'failed' ? 'failed' : (article.contentReady ? 'ready' : 'processing')}`}>
+                                                {article.parseStatus === 'failed' ? '失败' : (article.contentReady ? '就绪' : '解析中')}
+                                            </span>
+                                            {article.parseStatus === 'failed' ? (
+                                                <button type="button" className="nb-article-retry" onClick={(event) => { event.stopPropagation(); void handleRetryArticle(article.id); }}>重试</button>
+                                            ) : null}
                                             {articleActionPendingId === article.id ? (
                                                 <span className="nb-article-action-state">处理中</span>
                                             ) : null}
@@ -1330,6 +1457,23 @@ export default function NotebookPage() {
                                     </button>
                                     <button
                                         type="button"
+                                        className="nb-context-menu-item"
+                                        onClick={() => window.open(`/notebook/${notebook.id}?articleId=${articleContextMenu.articleId}`, '_blank', 'noopener,noreferrer')}
+                                    >
+                                        新标签页打开
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="nb-context-menu-item"
+                                        onClick={async () => {
+                                            await navigator.clipboard.writeText(`${window.location.origin}/notebook/${notebook.id}?articleId=${articleContextMenu.articleId}`);
+                                            setArticleContextMenu(null);
+                                        }}
+                                    >
+                                        复制链接
+                                    </button>
+                                    <button
+                                        type="button"
                                         className="nb-context-menu-item danger"
                                         onClick={() => openDeleteArticleModal(articleContextMenu.articleId, articleContextMenu.articleTitle)}
                                     >
@@ -1340,17 +1484,32 @@ export default function NotebookPage() {
                         </div>
                     </div>
                 </div>
-
-                <div className="nb-resizer nb-resizer-v" onMouseDown={onLeftResize} />
+                ) : null}
 
                 {/* ====== CENTER COLUMN ====== */}
                 <div className="nb-center">
                     {selectedArticle ? (
                         <>
                             <div className="nb-article-toolbar">
+                                <div className="nb-layout-toggle-group">
+                                    {[
+                                        { id: 'triple', label: '三栏' },
+                                        { id: 'focus', label: '双栏' },
+                                        { id: 'reader', label: '阅读' },
+                                    ].map((item) => (
+                                        <button
+                                            key={item.id}
+                                            type="button"
+                                            className={`nb-layout-toggle ${layoutMode === item.id ? 'active' : ''}`}
+                                            onClick={() => setLayoutMode(item.id)}
+                                        >
+                                            {item.label}
+                                        </button>
+                                    ))}
+                                </div>
                                 <div className="nb-toolbar-left">
                                     <div className="nb-toolbar-title-row">
-                                        <h2 className="nb-toolbar-title">{selectedArticle.title}</h2>
+                                        <InlineEditableText value={selectedArticle.title} className="nb-toolbar-title-trigger" inputClassName="nb-toolbar-title-input" onSave={async (nextTitle) => { const detail = await appApi.sources.updateArticle({ notebookId: notebook.id, articleId: selectedArticle.id, title: nextTitle }); syncNotebookState(detail); }} />
                                         {selectedArticle.sourceUrl ? (
                                             <a
                                                 href={selectedArticle.sourceUrl}
@@ -1388,9 +1547,9 @@ export default function NotebookPage() {
                                     </button>
                                     <button
                                         className={`nb-icon-btn ${showAiChat ? 'active' : ''}`}
-                                        title={articleAiBlocked ? '正文准备完成后才可针对文章问答' : 'AI 助手'}
+                                        title={selectedArticle && articleAiBlocked ? '正文准备完成后才可针对文章问答' : 'AI 助手'}
                                         onClick={handleToggleChat}
-                                        disabled={articleAiBlocked}
+                                        disabled={selectedArticle ? articleAiBlocked : false}
                                     >
                                         {I.chat}
                                     </button>
@@ -1422,6 +1581,13 @@ export default function NotebookPage() {
                                 </div>
                             </div>
 
+                            <div className="nb-reading-progress"><div className="nb-reading-progress-bar" style={{ width: `${readingProgress}%` }} /></div>
+                            <div className="nb-reader-toolbar">
+                                <input className="input nb-reader-search-input" placeholder="文内搜索..." value={readerSearchQuery} onChange={(event) => { setReaderSearchQuery(event.target.value); setReaderSearchIndex(0); }} />
+                                <span className="nb-reader-search-meta">{readerSearchMatches.length > 0 ? `${Math.min(readerSearchIndex + 1, readerSearchMatches.length)}/${readerSearchMatches.length}` : '0/0'}</span>
+                                <button type="button" className="nb-icon-btn" onClick={() => setReaderSearchIndex((prev) => Math.max(prev - 1, 0))} disabled={!readerSearchMatches.length}>↑</button>
+                                <button type="button" className="nb-icon-btn" onClick={() => setReaderSearchIndex((prev) => Math.min(prev + 1, readerSearchMatches.length - 1))} disabled={!readerSearchMatches.length}>↓</button>
+                            </div>
                             <div className="nb-center-body" ref={centerBodyRef}>
                                 <ArticleContentPane
                                     articleId={selectedArticle.id}
@@ -1459,10 +1625,9 @@ export default function NotebookPage() {
                     )}
                 </div>
 
-                <div className="nb-resizer nb-resizer-v" onMouseDown={onRightResize} />
-
                 {/* ====== RIGHT COLUMN ====== */}
-                <div className="nb-right" style={{ width: rightWidth }}>
+                {layoutMode !== 'reader' ? (
+                <div className="nb-right">
                     {showAiChat ? (
                         <div className="nb-panel nb-right-full nb-chat-panel">
                             <div className="nb-panel-header nb-chat-header">
@@ -1472,14 +1637,26 @@ export default function NotebookPage() {
                                     <button className="nb-icon-btn-sm" onClick={() => setShowAiChat(false)} title="关闭">{I.close}</button>
                                 </div>
                             </div>
+                            <div className="nb-chat-sessions">
+                                <button type="button" className="nb-chat-session-new" onClick={() => { setChatConversationId(null); setChatMessages([]); }}>新建对话</button>
+                                {chatSessions.map((session) => (
+                                    <div key={session.id} className={`nb-chat-session-item ${chatConversationId === session.id ? 'active' : ''}`}>
+                                        <button type="button" className="nb-chat-session-switch" onClick={() => { setChatConversationId(session.id); setChatMessages((session.messages || []).map((message, index) => ({ id: `${session.id}-${index}`, role: message.role, content: message.content || '' }))); }}>
+                                            {session.title}
+                                        </button>
+                                        <button type="button" className="nb-chat-session-delete" onClick={async () => { await appApi.settings.deleteConversation({ notebookId: notebook.id, conversationId: session.id }); setChatSessions((prev) => prev.filter((item) => item.id !== session.id)); if (chatConversationId === session.id) { setChatConversationId(null); setChatMessages([]); } }}>✕</button>
+                                    </div>
+                                ))}
+                            </div>
                             <div className="nb-chat-messages">
                                 {chatMessages.length === 0 && (
                                     <div className="nb-chat-welcome">
                                         <div className="nb-chat-welcome-icon">{I.sparkle}</div>
                                         <p className="nb-chat-welcome-title">有什么想问的?</p>
-                                        <p className="nb-chat-welcome-hint">已加载当前文章内容，你可以提问、讨论或请求分析</p>
+                                        <p className="nb-chat-welcome-hint">{chatScope === 'article' ? '已加载当前文章内容，你可以提问、讨论或请求分析' : '当前使用 notebook 级对话，可以围绕整个研究空间提问。'}</p>
                                         <div className="nb-chat-quick-actions">
                                             <button onClick={() => setChatInput('创建详细摘要')}>创建详细摘要</button>
+                                            <button onClick={() => setChatScope((current) => current === 'article' ? 'notebook' : 'article')}>{chatScope === 'article' ? '切换为 notebook 对话' : '切换为文章对话'}</button>
                                         </div>
                                     </div>
                                 )}
@@ -1542,7 +1719,7 @@ export default function NotebookPage() {
                             </div>
                             <div className="nb-chat-input-area">
                                 <div className="nb-chat-input-wrapper">
-                                    <input className="nb-chat-input" placeholder="输入你的问题..." value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendChat()} />
+                                    <textarea className="nb-chat-input nb-chat-textarea" placeholder={chatScope === 'article' ? '针对当前文章提问...' : '针对整个 notebook 提问...'} value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendChat(); } }} rows={3} />
                                     <button className="nb-chat-send-btn" onClick={handleSendChat} disabled={!chatInput.trim() || isChatStreaming}>{I.send}</button>
                                 </div>
                             </div>
@@ -1571,18 +1748,20 @@ export default function NotebookPage() {
                                 />
                             </div>
 
-                            <div className="nb-resizer nb-resizer-h" onMouseDown={onRightSplit} />
-
                             {/* Notes Panel */}
                             <div className="nb-panel nb-right-bottom" style={{ flex: 1 }}>
                                 <div className="nb-panel-header">
                                     <span className="nb-panel-icon">{I.note}</span>
                                     <span className="nb-panel-title">笔记</span>
                                     <span className="nb-panel-badge">{notes.length}</span>
+                                    <button type="button" className="nb-panel-collapse" onClick={() => setLayoutMode('reader')}>收起右栏</button>
                                 </div>
                                 <div className="nb-panel-body nb-notes-body">
+                                    <div className="nb-notes-filter">
+                                        <input className="input" placeholder="按标签筛选笔记" value={noteFilterTag} onChange={(event) => setNoteFilterTag(event.target.value)} />
+                                    </div>
                                     <div className="nb-notes-list">
-                                        {notes.map(note => (
+                                        {notes.filter((note) => !noteFilterTag || (note.tags || []).includes(noteFilterTag)).map(note => (
                                             <div key={note.id} className="nb-note-card">
                                                 <div className="nb-note-card-inner" onClick={() => openExistingNote(note)}>
                                                     <div className="nb-note-card-icon">{I.edit}</div>
@@ -1607,6 +1786,7 @@ export default function NotebookPage() {
                         </>
                     )}
                 </div>
+                ) : null}
             </div>
 
             {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
@@ -1623,6 +1803,7 @@ export default function NotebookPage() {
                     onClose={() => setNoteModalData(null)}
                     onSave={handleSaveNote}
                     onDelete={handleDeleteNote}
+                    onExport={exportNote}
                 />
             )}
             {sourceActionModal && (

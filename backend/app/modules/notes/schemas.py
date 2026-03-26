@@ -8,3 +8,4 @@ class NoteUpsertRequest(BaseModel):
     content: str | None = None
     type: str | None = Field(default=None, max_length=64)
     sources: int | None = Field(default=None, ge=0)
+    tags: list[str] | None = None

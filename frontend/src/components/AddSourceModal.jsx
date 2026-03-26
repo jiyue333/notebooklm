@@ -69,7 +69,7 @@ export default function AddSourceModal({ notebookId, onClose, onImported }) {
             const detail = await appApi.sources.create({
                 notebookId,
                 sourceType: 'text',
-                title: textTitle.trim() || '粘贴文字来源',
+                title: textTitle.trim() || normalizedText.split('\n').find(Boolean)?.slice(0, 32) || '粘贴文字来源',
                 content: normalizedText,
             });
             onImported?.(detail);

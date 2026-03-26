@@ -40,6 +40,8 @@ const themeColors = [
 
 const createInitialSettings = () => ({
     outputLanguage: '简体中文',
+    customSystemPrompt: '',
+    answerLengthPreference: 'adaptive',
     themeColor: 'ocean',
     colorMode: 'light',
     modelProviderSelection: DEFAULT_PROVIDER_VALUE,
@@ -198,16 +200,17 @@ const getEmbeddingProviderPreset = (provider) => (
 
 export default function SettingsModal({ onClose }) {
     const navigate = useNavigate();
-    const { theme, setTheme, accentColor, setAccentColor } = useTheme();
+    const { theme, resolvedTheme, setTheme, accentColor, setAccentColor } = useTheme();
     const [activeTab, setActiveTab] = useState('language');
     const [settings, setSettings] = useState(() => ({
         ...createInitialSettings(),
         themeColor: accentColor || 'ocean',
-        colorMode: theme === 'dark' ? 'dark' : 'light',
+        colorMode: theme === 'auto' ? 'auto' : (resolvedTheme === 'dark' ? 'dark' : 'light'),
     }));
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
     const [feedback, setFeedback] = useState('');
+    const [avatarFile, setAvatarFile] = useState(null);
     const modelProviderOptions = getModelProviderOptions(settings);
     const embeddingProviderOptions = getEmbeddingProviderOptions(settings);
     const searchProviderOptions = getSearchProviderOptions(settings);
@@ -249,6 +252,9 @@ export default function SettingsModal({ onClose }) {
                 if (currentSettings.themeColor) {
                     setAccentColor(currentSettings.themeColor);
                 }
+                if (currentSettings.colorMode) {
+                    setTheme(currentSettings.colorMode);
+                }
             } catch (err) {
                 if (!isMounted) return;
                 setFeedback(err.message || '加载设置失败');
@@ -261,7 +267,7 @@ export default function SettingsModal({ onClose }) {
         return () => {
             isMounted = false;
         };
-    }, []);
+    }, [resolvedTheme, setAccentColor, setTheme, theme]);
 
     const update = (key, value) => {
         setFeedback('');
@@ -349,7 +355,11 @@ export default function SettingsModal({ onClose }) {
 
     const buildSettingsPayload = () => {
         if (activeTab === 'language') {
-            return { outputLanguage: settings.outputLanguage };
+            return {
+                outputLanguage: settings.outputLanguage,
+                customSystemPrompt: settings.customSystemPrompt,
+                answerLengthPreference: settings.answerLengthPreference,
+            };
         }
         if (activeTab === 'appearance') {
             return { themeColor: settings.themeColor, colorMode: settings.colorMode };
@@ -398,7 +408,10 @@ export default function SettingsModal({ onClose }) {
             setFeedback('');
 
             if (activeTab === 'account') {
-                const profile = await appApi.settings.updateProfile({ username: settings.username });
+                let profile = await appApi.settings.updateProfile({ username: settings.username });
+                if (avatarFile) {
+                    profile = await appApi.settings.uploadAvatar(avatarFile);
+                }
                 setSettings((prev) => ({
                     ...prev,
                     username: profile.name || prev.username,
@@ -495,7 +508,10 @@ export default function SettingsModal({ onClose }) {
                 <div className="settings-body">
                     {isLoading ? (
                         <div className="settings-tab-content">
-                            <p className="settings-hint">正在加载设置...</p>
+                            <div className="settings-loading">
+                                <span className="ui-spinner-ring" aria-hidden="true" />
+                                <p className="settings-hint">正在加载设置...</p>
+                            </div>
                         </div>
                     ) : (
                         <>
@@ -513,6 +529,23 @@ export default function SettingsModal({ onClose }) {
                                                 {outputLanguages.map((lang) => (
                                                     <option key={lang} value={lang}>{lang}</option>
                                                 ))}
+                                            </select>
+                                            <span className="settings-select-arrow">▾</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="settings-section">
+                                        <label className="settings-section-title">自定义系统 Prompt</label>
+                                        <textarea className="settings-input" rows={4} value={settings.customSystemPrompt} onChange={(event) => update('customSystemPrompt', event.target.value)} placeholder="例如：请始终使用简体中文，回答保持简洁" />
+                                    </div>
+
+                                    <div className="settings-section">
+                                        <label className="settings-section-title">回答长度偏好</label>
+                                        <div className="settings-select-wrapper">
+                                            <select className="settings-select" value={settings.answerLengthPreference} onChange={(event) => update('answerLengthPreference', event.target.value)}>
+                                                <option value="concise">简洁</option>
+                                                <option value="detailed">详细</option>
+                                                <option value="adaptive">自适应</option>
                                             </select>
                                             <span className="settings-select-arrow">▾</span>
                                         </div>
@@ -793,6 +826,12 @@ export default function SettingsModal({ onClose }) {
                                             value={settings.username}
                                             onChange={(event) => update('username', event.target.value)}
                                         />
+                                    </div>
+
+                                    <div className="settings-section">
+                                        <label className="settings-section-title">头像上传</label>
+                                        <input type="file" accept="image/*" className="settings-input" onChange={(event) => setAvatarFile(event.target.files?.[0] || null)} />
+                                        <p className="settings-hint">当前环境使用 data URL 方式保存头像，适合作为本地与开发态闭环。</p>
                                     </div>
 
                                     <div className="settings-section">

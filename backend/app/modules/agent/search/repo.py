@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
 
@@ -81,7 +81,7 @@ async def create_search_session(
         mode_label=_MODE_LABELS.get(mode, "Research"),
         result_count=0,
         created_at=ts,
-        expires_at=ts.replace(day=ts.day + 1) if ts.day < 28 else ts,
+        expires_at=ts + timedelta(days=1),
     )
     session.add(search_session)
     await session.flush()
@@ -162,13 +162,14 @@ async def save_agent_search_results(
             search_session_id=search_session_id,
             provider_result_id=None,
             raw_url=url,
-            canonical_url=url,
+            canonical_url=url.split("?")[0].split("#")[0] if url else url,
             url_hash=url_hash,
             title=_sanitize_text(card.get("title", "")) or "Untitled",
             description=_sanitize_text(card.get("description")),
             author=_sanitize_text(card.get("author")),
             published_at=_coerce_datetime(card.get("publishedAt") or card.get("published_at")),
             domain=card.get("sourceName") or card.get("source_name") or card.get("domain", ""),
+            favicon_url=card.get("faviconUrl") or card.get("favicon_url"),
             display_rank=card.get("displayRank") or card.get("display_rank", 0),
             raw_payload_json=_sanitize_json({
                 "source_type_badge": card.get("sourceTypeBadge") or card.get("source_type_badge", ""),

@@ -60,3 +60,23 @@ class AuthToken(UUIDPrimaryKeyMixin, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, comment="创建时间")
 
     user: Mapped[User] = relationship(back_populates="tokens")
+
+
+class PasswordResetToken(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "password_reset_tokens"  # type: ignore[assignment]
+    __table_args__ = {"comment": "密码重置令牌表"}
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True, comment="所属用户 ID")
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True, comment="重置令牌哈希")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, comment="过期时间")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, comment="创建时间")
+
+
+class OAuthAccount(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "oauth_accounts"  # type: ignore[assignment]
+    __table_args__ = {"comment": "OAuth 账户表"}
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True, comment="所属用户 ID")
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, comment="OAuth Provider")
+    provider_user_id: Mapped[str] = mapped_column(String(255), nullable=False, comment="Provider 用户 ID")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, comment="创建时间")

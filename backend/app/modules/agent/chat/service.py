@@ -14,26 +14,16 @@ from app.infra.ai.chat_models import build_user_chat_model
 from app.infra.telemetry.metrics import (
     observe_chat_answer_length,
     observe_chat_e2e,
-    observe_chat_error,
     observe_chat_retrieval,
     observe_chat_route_mix,
-    observe_chat_token_cost,
 )
-from app.infra.telemetry.tracing import start_span
 from app.modules.agent.chat import repo
-from app.modules.agent.chat.nodes import (
-    citation_verifier_node,
-    query_router_node,
-    retrieval_engine_node,
-    retrieval_planner_node,
-    web_search_broker_node,
-)
+from app.modules.agent.chat.graph import get_chat_graph
 from app.modules.agent.chat.prompts import (
     ANSWER_SYSTEMS,
     ANSWER_USER_GENERAL,
     ANSWER_USER_GROUNDED,
 )
-from app.modules.agent.chat.state import ChatGraphState, RetrievalPlanSpec
 from app.modules.notebooks import repo as notebooks_repo
 
 logger = structlog.get_logger(__name__)
@@ -84,7 +74,8 @@ async def stream_message(
         for msg in await repo.list_recent_messages(db, conversation_id=conversation.id, limit=6)
     ]
 
-    state: dict = {
+    graph = get_chat_graph()
+    state = await graph.ainvoke({
         "query": question,
         "notebook_id": notebook_id,
         "article_id": article_id,
@@ -97,7 +88,7 @@ async def stream_message(
         "retrieval_scope": "none",
         "output_mode": "concise",
         "tools_needed": [],
-        "retrieval_plan": RetrievalPlanSpec(),
+        "retrieval_plan": None,
         "local_evidence": [],
         "need_web_search": False,
         "web_search_reason": "not_needed",
@@ -106,58 +97,21 @@ async def stream_message(
         "raw_citations": [],
         "verified_citations": [],
         "trace_log": {},
-    }
-
-    # ========== phase 3 运行前置节点 ==========
-    try:
-        with start_span("chat.agent", attributes={"chat.notebook_id": notebook_id}):
-            state.update(await query_router_node(state))
-            state.update(await retrieval_planner_node(state))
-
-            plan: RetrievalPlanSpec = state.get("retrieval_plan", RetrievalPlanSpec())
-            if plan.strategy != "skip":
-                state.update(await retrieval_engine_node(state))
-
-            state.update(await web_search_broker_node(state))
-    except Exception as exc:
-        logger.exception("chat.pre_answer_failed", error=str(exc))
-        observe_chat_error(node="pre_answer")
+    })
 
     route = state.get("route", "general")
 
-    # ========== phase 4 流式生成回答 ==========
-    messages = _build_answer_messages(state)
-    full_answer = ""
-
-    try:
-        async for chunk in model.astream(messages):
-            token = chunk.content if hasattr(chunk, "content") else ""
-            if token:
-                full_answer += token
-                yield {"type": "token", "text": token}
-    except Exception as exc:
-        logger.exception("chat.answer_stream_failed", error=str(exc)[:200])
-        observe_chat_error(node="answer_generator")
-        if not full_answer:
-            full_answer = f"抱歉，生成回答时出错了：{str(exc)[:100]}"
-            yield {"type": "token", "text": full_answer}
-
-    observe_chat_answer_length(route=route, length=len(full_answer))
-
-    # ========== phase 5 引用校验 ==========
-    state["answer_text"] = full_answer
-    state["raw_citations"] = _extract_citations(full_answer)
-
-    try:
-        state.update(await citation_verifier_node(state))
-    except Exception as exc:
-        logger.warning("chat.citation_verify_failed", error=str(exc)[:200])
+    full_answer = state.get("answer_text", "")
+    for chunk in [full_answer[i:i + 48] for i in range(0, len(full_answer), 48)]:
+        if chunk:
+            yield {"type": "token", "text": chunk}
 
     verified_citations = state.get("verified_citations", [])
     trace_log = state.get("trace_log", {})
     need_web_search = state.get("need_web_search", False)
     local_evidence = state.get("local_evidence", [])
     elapsed_ms = round((perf_counter() - t0) * 1000, 2)
+    observe_chat_answer_length(route=route, length=len(full_answer))
 
     # ========== phase 6 持久化 ==========
     assistant_msg = await repo.append_message(
@@ -348,3 +302,51 @@ def _error_done(code: str) -> dict:
         "evidence": [],
         "error": code,
     }
+
+
+def build_conversation_view(conversation, messages: list[dict] | None = None) -> dict:
+    return {
+        'id': conversation.id,
+        'title': conversation.title or '新对话',
+        'currentArticleId': conversation.current_article_id,
+        'updatedAt': conversation.updated_at.isoformat() if conversation.updated_at else None,
+        'lastMessageAt': conversation.last_message_at.isoformat() if conversation.last_message_at else None,
+        'messages': messages or [],
+    }
+
+
+async def list_notebook_conversations(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    notebook_id: str,
+) -> list[dict]:
+    conversations = await repo.list_conversations(db, user_id=user_id, notebook_id=notebook_id)
+    items: list[dict] = []
+    for conversation in conversations:
+        recent_messages = await repo.list_recent_messages(db, conversation_id=conversation.id, limit=12)
+        items.append(build_conversation_view(
+            conversation,
+            messages=[{
+                'id': message.id,
+                'role': message.role,
+                'content': message.content,
+                'route': message.route,
+                'createdAt': message.created_at.isoformat(),
+            } for message in recent_messages],
+        ))
+    return items
+
+
+async def remove_notebook_conversation(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    notebook_id: str,
+    conversation_id: str,
+) -> None:
+    conversation = await repo.get_conversation(db, conversation_id=conversation_id, user_id=user_id)
+    if conversation is None or conversation.notebook_id != notebook_id:
+        raise ValueError('conversation_not_found')
+    await repo.delete_conversation(db, conversation_id=conversation_id, user_id=user_id)
+    await db.commit()

@@ -22,15 +22,16 @@ from app.modules.notebooks.service import (
     get_notebook_detail,
     invalidate_notebook_detail_cache,
     list_notebooks,
+    search_workspace,
     update_notebook,
 )
 
-router = APIRouter(prefix="/notebooks", tags=["notebooks"])
+router = APIRouter(prefix='/notebooks', tags=['notebooks'])
 
 
-@router.get("")
+@router.get('')
 async def list_notebooks_endpoint(
-    query: str = Query(default=""),
+    query: str = Query(default=''),
     current_user=Depends(current_user_dep),
     session: AsyncSession = Depends(db_session_dep),
 ):
@@ -38,7 +39,17 @@ async def list_notebooks_endpoint(
     return success_response(items=items)
 
 
-@router.post("")
+@router.get('/workspace-search')
+async def search_workspace_endpoint(
+    query: str = Query(min_length=1),
+    current_user=Depends(current_user_dep),
+    session: AsyncSession = Depends(db_session_dep),
+):
+    items = await search_workspace(session, user_id=current_user.id, query=query)
+    return success_response(items=items)
+
+
+@router.post('')
 async def create_notebook_endpoint(
     payload: NotebookCreateRequest,
     current_user=Depends(current_user_dep),
@@ -50,11 +61,12 @@ async def create_notebook_endpoint(
         title=payload.title,
         emoji=payload.emoji,
         color=payload.color,
+        tags=payload.tags,
     )
     return success_response(item=item)
 
 
-@router.get("/{notebook_id}")
+@router.get('/{notebook_id}')
 async def get_notebook_detail_endpoint(
     notebook_id: str,
     current_user=Depends(current_user_dep),
@@ -64,7 +76,7 @@ async def get_notebook_detail_endpoint(
     return success_response(item=item)
 
 
-@router.patch("/{notebook_id}")
+@router.patch('/{notebook_id}')
 async def update_notebook_endpoint(
     notebook_id: str,
     payload: NotebookUpdateRequest,
@@ -78,23 +90,22 @@ async def update_notebook_endpoint(
         title=payload.title,
         emoji=payload.emoji,
         color=payload.color,
+        tags=payload.tags,
     )
     return success_response(item=item)
 
 
-@router.delete("/{notebook_id}")
+@router.delete('/{notebook_id}')
 async def delete_notebook_endpoint(
     notebook_id: str,
     current_user=Depends(current_user_dep),
     session: AsyncSession = Depends(db_session_dep),
 ):
     await delete_notebook(session, user_id=current_user.id, notebook_id=notebook_id)
-    return {"success": True}
+    return {'success': True}
 
 
-# ── Article file access ────────────────────────────────────────────────────
-
-@router.get("/{notebook_id}/articles/{article_id}/file")
+@router.get('/{notebook_id}/articles/{article_id}/file')
 async def get_article_file_endpoint(
     notebook_id: str,
     article_id: str,
@@ -109,19 +120,19 @@ async def get_article_file_endpoint(
         article_id=article_id,
     )
     if article is None:
-        raise AppError(404, "未找到对应文章", code="article_not_found")
+        raise AppError(404, '未找到对应文章', code='article_not_found')
     if not article.file_storage_key:
-        raise AppError(404, "文章没有原始文件", code="article_file_not_found")
+        raise AppError(404, '文章没有原始文件', code='article_file_not_found')
     if not stored_file_exists(article.file_storage_key):
-        raise AppError(404, "原始文件不存在", code="article_file_not_found")
+        raise AppError(404, '原始文件不存在', code='article_file_not_found')
     if proxy:
         file_bytes = load_file_bytes(article.file_storage_key)
         headers = {}
         if article.file_name:
-            headers["Content-Disposition"] = f'inline; filename="{article.file_name}"'
+            headers['Content-Disposition'] = f'inline; filename="{article.file_name}"'
         return Response(
             content=file_bytes,
-            media_type=article.file_mime or "application/octet-stream",
+            media_type=article.file_mime or 'application/octet-stream',
             headers=headers,
         )
     presigned_url = build_presigned_get_url(article.file_storage_key)
@@ -130,14 +141,12 @@ async def get_article_file_endpoint(
     file_path = resolve_storage_path(article.file_storage_key)
     return FileResponse(
         path=file_path,
-        media_type=article.file_mime or "application/octet-stream",
+        media_type=article.file_mime or 'application/octet-stream',
         filename=article.file_name or file_path.name,
     )
 
 
-# ── Article rename ─────────────────────────────────────────────────────────
-
-@router.patch("/{notebook_id}/articles/{article_id}")
+@router.patch('/{notebook_id}/articles/{article_id}')
 async def update_article_endpoint(
     notebook_id: str,
     article_id: str,
@@ -152,7 +161,7 @@ async def update_article_endpoint(
         article_id=article_id,
     )
     if article is None:
-        raise AppError(404, "未找到对应文章", code="article_not_found")
+        raise AppError(404, '未找到对应文章', code='article_not_found')
     article.title = payload.title.strip()
     await session.commit()
     await invalidate_notebook_detail_cache(user_id=current_user.id, notebook_id=notebook_id)
@@ -160,9 +169,7 @@ async def update_article_endpoint(
     return success_response(item=item)
 
 
-# ── Article delete ─────────────────────────────────────────────────────────
-
-@router.delete("/{notebook_id}/articles/{article_id}")
+@router.delete('/{notebook_id}/articles/{article_id}')
 async def delete_article_endpoint(
     notebook_id: str,
     article_id: str,
@@ -176,7 +183,7 @@ async def delete_article_endpoint(
         article_id=article_id,
     )
     if article is None:
-        raise AppError(404, "未找到对应文章", code="article_not_found")
+        raise AppError(404, '未找到对应文章', code='article_not_found')
     if article.file_storage_key and stored_file_exists(article.file_storage_key):
         delete_stored_file(article.file_storage_key)
     await notebooks_repo.delete_article(session, article)

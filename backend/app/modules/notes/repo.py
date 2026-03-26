@@ -40,6 +40,7 @@ async def create_note(
     content_markdown: str,
     note_type: str,
     source_count: int,
+    tags_json: list[str] | None = None,
 ) -> Note:
     note = Note(
         notebook_id=notebook_id,
@@ -47,6 +48,7 @@ async def create_note(
         content_markdown=content_markdown,
         note_type=note_type,
         source_count=source_count,
+        tags_json=tags_json,
     )
     session.add(note)
     await session.flush()

@@ -1,0 +1,1 @@
+{"case_id":"ingest_smoke_001","input_type":"text","title":"Ingest smoke text","content":"# Smoke\n\nThis is a short ingest smoke case for markdown normalization.","expected":{"min_chunks":1},"tags":["ingest","smoke"]}

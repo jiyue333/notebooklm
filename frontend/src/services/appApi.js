@@ -160,11 +160,13 @@ const createManualSourceArticle = ({ sourceType, url, title, content }) => ({
     toc: [],
 });
 
-const createNotebookRecord = ({ title, emoji = '📒', color = '#8B7355' }) => ({
+const createNotebookRecord = ({ title, emoji = '📒', color = '#8B7355', tags = [] }) => ({
     id: generateId('nb'),
     title: title?.trim() || 'Untitled notebook',
     emoji,
     color,
+    tags,
+    lastOpenedAt: new Date().toISOString(),
     date: formatNotebookDate(),
     sourceCount: 0,
     articles: [],
@@ -251,8 +253,11 @@ const summarizeNotebook = (notebook) => ({
     title: notebook.title,
     emoji: notebook.emoji,
     color: notebook.color,
+    tags: notebook.tags || [],
     date: notebook.date,
     sourceCount: notebook.articles?.length ?? notebook.sourceCount ?? 0,
+    lastOpenedAt: notebook.lastOpenedAt || null,
+    lastOpenedLabel: notebook.lastOpenedAt ? '刚刚' : '',
 });
 
 const buildNotebookDetail = (notebookId) => {
@@ -336,6 +341,21 @@ const mockProvider = {
         return { success: true };
     },
 
+    async forgotPassword({ email }) {
+        await wait(200);
+        return { sent: true, resetToken: `mock-reset-${email}` };
+    },
+
+    async resetPassword() {
+        await wait(200);
+        return { success: true };
+    },
+
+    async startOAuth({ provider }) {
+        await wait(120);
+        return { provider, enabled: false, reason: `${provider} OAuth 暂未配置` };
+    },
+
     async getCurrentUser() {
         await wait(120);
         const session = getStoredSession();
@@ -347,16 +367,33 @@ const mockProvider = {
 
     async listNotebooks({ query = '' } = {}) {
         await wait(180);
-        const items = mockState.notebooks.map(summarizeNotebook);
+        const items = mockState.notebooks
+            .slice()
+            .sort((left, right) => new Date(right.lastOpenedAt || 0).getTime() - new Date(left.lastOpenedAt || 0).getTime())
+            .map(summarizeNotebook);
         if (!query.trim()) return items;
 
         const normalized = query.trim().toLowerCase();
-        return items.filter((item) => item.title.toLowerCase().includes(normalized));
+        return items.filter((item) => item.title.toLowerCase().includes(normalized) || (item.tags || []).some((tag) => tag.toLowerCase().includes(normalized)));
     },
 
+
+    async searchWorkspace({ query }) {
+        await wait(160);
+        const normalized = query.trim().toLowerCase();
+        if (!normalized) return [];
+        const notebookHits = mockState.notebooks
+            .filter((item) => item.title.toLowerCase().includes(normalized) || (item.tags || []).some((tag) => tag.toLowerCase().includes(normalized)))
+            .map((item) => ({ type: 'notebook', notebookId: item.id, title: item.title, tags: item.tags || [] }));
+        const articleHits = mockState.notebooks.flatMap((notebook) => (notebook.articles || [])
+            .filter((article) => article.title.toLowerCase().includes(normalized) || (article.content || '').toLowerCase().includes(normalized))
+            .map((article) => ({ type: 'article', notebookId: notebook.id, articleId: article.id, title: article.title }))
+        );
+        return [...notebookHits, ...articleHits].slice(0, 20);
+    },
     async createNotebook(payload = {}) {
         await wait(220);
-        const notebook = createNotebookRecord(payload);
+        const notebook = createNotebookRecord({ ...payload, tags: payload.tags || [] });
         mockState.notebooks.unshift(notebook);
         mockState.notesByNotebookId[notebook.id] = [];
         return buildNotebookDetail(notebook.id);
@@ -378,6 +415,8 @@ const mockProvider = {
 
     async getNotebookDetail(notebookId) {
         await wait(180);
+        const notebook = getNotebookRecord(notebookId);
+        notebook.lastOpenedAt = new Date().toISOString();
         return buildNotebookDetail(notebookId);
     },
 
@@ -553,6 +592,17 @@ const mockProvider = {
         const notebook = getNotebookRecord(notebookId);
         notebook.articles = (notebook.articles || []).filter((item) => item.id !== articleId);
         notebook.sourceCount = notebook.articles.length;
+        return buildNotebookDetail(notebookId);
+    },
+
+    async retryArticleSource({ notebookId, articleId }) {
+        await wait(280);
+        const notebook = getNotebookRecord(notebookId);
+        const article = (notebook.articles || []).find((item) => item.id === articleId);
+        if (!article) throw new Error('未找到对应来源文章');
+        article.parseStatus = 'queued';
+        article.processingHint = '已重新加入解析队列，请稍后查看。';
+        article.contentReady = false;
         return buildNotebookDetail(notebookId);
     },
 
@@ -1077,6 +1127,21 @@ const backendProvider = {
         return { success: true };
     },
 
+    async forgotPassword({ email }) {
+        const payload = await request('/auth/forgot-password', { method: 'POST', body: { email } });
+        return payload.item;
+    },
+
+    async resetPassword({ token, newPassword, confirmPassword }) {
+        await request('/auth/reset-password', { method: 'POST', body: { token, newPassword, confirmPassword } });
+        return { success: true };
+    },
+
+    async startOAuth({ provider }) {
+        const payload = await request('/auth/oauth/start', { method: 'POST', body: { provider } });
+        return payload.item;
+    },
+
     async getCurrentUser() {
         const payload = await request('/auth/me');
         return payload.user;
@@ -1086,6 +1151,12 @@ const backendProvider = {
         const queryString = query ? `?query=${encodeURIComponent(query)}` : '';
         const payload = await request(`/notebooks${queryString}`);
         return payload.items;
+    },
+
+
+    async searchWorkspace({ query }) {
+        const payload = await request(`/notebooks/workspace-search?query=${encodeURIComponent(query)}`);
+        return payload.items || [];
     },
 
     async createNotebook(notebook) {
@@ -1134,6 +1205,13 @@ const backendProvider = {
             method: 'DELETE',
         });
         return { success: true };
+    },
+
+    async exportNote(notebookId, noteId) {
+        const response = await fetch(buildUrl(`/notebooks/${notebookId}/notes/${noteId}/export`), {
+            headers: { ...(getStoredSession()?.token ? { Authorization: `Bearer ${getStoredSession().token}` } : {}) },
+        });
+        return response.text();
     },
 
     async getSearchSession({ notebookId, searchSessionId }) {
@@ -1195,6 +1273,13 @@ const backendProvider = {
         return payload.item;
     },
 
+    async retryArticleSource({ notebookId, articleId }) {
+        const payload = await request(`/notebooks/${notebookId}/articles/${articleId}/retry`, {
+            method: 'POST',
+        });
+        return payload.item;
+    },
+
     async getSettings() {
         const payload = await request('/settings');
         return payload.item;
@@ -1231,6 +1316,30 @@ const backendProvider = {
             method: 'POST',
             body: passwordPayload,
         });
+    },
+
+    async uploadAvatar(file) {
+        const dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
+        const payload = await request('/account/profile', {
+            method: 'PATCH',
+            body: { avatarUrl: dataUrl, username: getStoredSession()?.user?.name || 'user' },
+        });
+        return payload.item;
+    },
+
+    async listConversations({ notebookId }) {
+        const payload = await request(`/notebooks/${notebookId}/conversations`);
+        return payload.items || [];
+    },
+
+    async deleteConversation({ notebookId, conversationId }) {
+        await request(`/notebooks/${notebookId}/conversations/${conversationId}`, { method: 'DELETE' });
+        return { success: true };
     },
 
     async generateSummary({ notebookId, articleId }) {
@@ -1307,9 +1416,13 @@ export const appApi = {
         register: provider.register,
         logout: provider.logout,
         getCurrentUser: provider.getCurrentUser,
+        forgotPassword: provider.forgotPassword,
+        resetPassword: provider.resetPassword,
+        startOAuth: provider.startOAuth,
     },
     notebooks: {
         list: provider.listNotebooks,
+        searchWorkspace: provider.searchWorkspace,
         create: provider.createNotebook,
         update: provider.updateNotebook,
         remove: provider.deleteNotebook,
@@ -1318,6 +1431,7 @@ export const appApi = {
     notes: {
         save: provider.saveNote,
         remove: provider.deleteNote,
+        exportNote: provider.exportNote,
     },
     sources: {
         search: provider.searchSources,
@@ -1327,12 +1441,15 @@ export const appApi = {
         uploadFiles: provider.uploadFiles,
         updateArticle: provider.updateArticleSource,
         deleteArticle: provider.deleteArticleSource,
+        retryArticle: provider.retryArticleSource,
     },
     settings: {
         get: provider.getSettings,
         update: provider.updateSettings,
         updateProfile: provider.updateProfile,
         updatePassword: provider.updatePassword,
+        listConversations: provider.listConversations,
+        deleteConversation: provider.deleteConversation,
     },
     ai: {
         generateSummary: provider.generateSummary,

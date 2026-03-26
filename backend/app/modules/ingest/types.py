@@ -23,6 +23,7 @@ class IngestInput:
     notebook_id: str
     user_id: str
     title: str = ""
+    notebook_title: str = ""
     source_url: str | None = None
     file_bytes: bytes | None = None
     file_name: str | None = None

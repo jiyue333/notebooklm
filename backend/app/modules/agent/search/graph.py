@@ -909,6 +909,7 @@ def _build_response_payload(
             matchedPreferredSite=preferred_match,
             duplicateRisk=candidate.duplicate_risk,
             selectedReasonTags=candidate.selected_reason_tags,
+            faviconUrl=f"https://www.google.com/s2/favicons?domain={candidate.domain}&sz=64" if candidate.domain else None,
             displayRank=idx,
         ))
     return SearchResponsePayload(

@@ -83,6 +83,7 @@ class SearchResultCardView(BaseModel):
     matchedPreferredSite: str | None = None
     duplicateRisk: bool = False
     selectedReasonTags: list[str] = Field(default_factory=list)
+    faviconUrl: str | None = None
     displayRank: int = 0
 
 

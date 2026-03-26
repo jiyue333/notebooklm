@@ -375,3 +375,13 @@
 .settings-logout-btn:hover {
     opacity: 0.9;
 }
+
+
+.settings-loading {
+    min-height: 180px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+}

@@ -755,3 +755,24 @@
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
 }
+
+
+.sp-sort-select {
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: var(--panel-bg);
+    color: var(--text-color);
+    padding: 6px 10px;
+    font-size: var(--text-xs);
+}
+
+.sp-result-item-selectable {
+    cursor: pointer;
+}
+
+.sp-result-favicon {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}

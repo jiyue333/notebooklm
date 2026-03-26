@@ -5,7 +5,7 @@
 .add-source-overlay {
     position: fixed;
     inset: 0;
-    background: transparent;
+    background: var(--overlay-bg);
     z-index: 1000;
     display: flex;
     align-items: center;
@@ -26,7 +26,6 @@
     box-shadow: var(--card-shadow);
     overflow: auto;
     padding: 32px 36px;
-    resize: both;
 }
 
 .add-source-close {

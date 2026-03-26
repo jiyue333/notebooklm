@@ -1,1 +1,1 @@
-"""Notebook module placeholders."""
+"""笔记本领域模块。"""

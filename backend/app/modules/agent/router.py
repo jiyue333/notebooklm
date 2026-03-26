@@ -6,6 +6,7 @@ from typing import AsyncIterator, Literal
 from urllib.parse import urlparse
 
 import structlog
+from langchain_core.messages import HumanMessage, SystemMessage
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -15,7 +16,7 @@ from app.api.deps import current_user_dep, db_session_dep
 from app.api.errors import AppError
 from app.api.response import success_response
 from app.api.sse import build_sse_error_payload, encode_sse_event
-from app.modules.agent.chat.service import stream_message
+from app.modules.agent.chat.service import list_notebook_conversations, remove_notebook_conversation, stream_message
 from app.modules.agent.summary.service import list_notebook_summaries
 from app.modules.agent.summary.service import generate_summary
 from app.modules.notebooks import repo as notebooks_repo
@@ -59,6 +60,53 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
 
 
+class TranslateRequest(BaseModel):
+    targetLanguage: str | None = None
+
+
+
+
+@router.get("/notebooks/{notebook_id}/conversations")
+async def list_conversations_endpoint(
+    notebook_id: str,
+    current_user=Depends(current_user_dep),
+    session: AsyncSession = Depends(db_session_dep),
+):
+    return success_response(items=await list_notebook_conversations(session, user_id=current_user.id, notebook_id=notebook_id))
+
+
+@router.delete("/notebooks/{notebook_id}/conversations/{conversation_id}")
+async def delete_conversation_endpoint(
+    notebook_id: str,
+    conversation_id: str,
+    current_user=Depends(current_user_dep),
+    session: AsyncSession = Depends(db_session_dep),
+):
+    await remove_notebook_conversation(session, user_id=current_user.id, notebook_id=notebook_id, conversation_id=conversation_id)
+    return {"success": True}
+
+
+@router.post("/notebooks/{notebook_id}/articles/{article_id}/translate")
+async def translate_article_endpoint(
+    notebook_id: str,
+    article_id: str,
+    payload: TranslateRequest,
+    current_user=Depends(current_user_dep),
+    session: AsyncSession = Depends(db_session_dep),
+):
+    article = await notebooks_repo.get_article(session, user_id=current_user.id, notebook_id=notebook_id, article_id=article_id)
+    if article is None or not article.clean_markdown:
+        raise AppError(404, "未找到对应文章", code="article_not_found")
+    target_language = payload.targetLanguage or (getattr(current_user, 'settings_json', {}) or {}).get('outputLanguage') or '中文'
+    model = stream_message.__globals__['build_user_chat_model'](current_user)
+    if model is None:
+        raise AppError(422, '请先配置聊天模型', code='model_config_required')
+    result = await model.ainvoke([
+        SystemMessage(content=f"请把下列文章翻译为{target_language}，保持原有 Markdown 段落结构。只输出译文。"),
+        HumanMessage(content=article.clean_markdown[:16000]),
+    ])
+    return success_response(item={"translatedContent": (result.content or '').strip(), "targetLanguage": target_language})
+
 @router.post("/notebooks/{notebook_id}/ai/events")
 async def ai_event_endpoint(
     notebook_id: str,
@@ -96,12 +144,13 @@ async def summary_stream_endpoint(
                 )
                 return
 
+            output_language = (getattr(current_user, "settings_json", {}) or {}).get("outputLanguage") or "中文"
             result = await generate_summary(
                 session,
                 article_id=article.id,
                 title=article.title,
                 clean_markdown=article.clean_markdown,
-                language="zh",
+                language=output_language,
                 user=current_user,
             )
 

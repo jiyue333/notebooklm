@@ -44,11 +44,16 @@ async def generate_summary(
     # ========== phase 1 检查缓存 ==========
     content_hash = hashlib.sha256(clean_markdown.encode()).hexdigest()
 
+    model = build_user_chat_model(user) if user else None
+    provider, model_name = get_model_identity(model) if model else ("unknown", "unknown")
     cached = await repo.get_cached_summary(
         db,
         article_id=article_id,
         content_hash=content_hash,
         prompt_version=PROMPT_VERSION,
+        model_provider=provider,
+        model_name=str(model_name),
+        output_language=language,
     )
     if cached:
         observe_summary_cache_hit()
@@ -95,9 +100,7 @@ async def generate_summary(
     )
 
     # ========== phase 3 保存缓存 ==========
-    if summary_text:
-        model = build_user_chat_model(user) if user else None
-        provider, model_name = get_model_identity(model) if model else ("unknown", "unknown")
+    if summary_text and article_id != "00000000-0000-0000-0000-000000000001":
         await repo.save_summary_cache(
             db,
             article_id=article_id,

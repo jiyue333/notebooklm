@@ -11,7 +11,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.ingest.pipeline import run_pipeline
-from app.modules.ingest.types import ChunkDraft, IngestInput, IngestResult
+from app.modules.ingest.types import IngestInput, IngestResult
 
 logger = structlog.get_logger(__name__)
 
@@ -33,6 +33,7 @@ async def ingest(
         existing_dedupe_keys=existing_dedupe_keys,
         mineru_batch_id=mineru_batch_id,
         mineru_data_id=mineru_data_id,
+        notebook_title=ingest_input.notebook_title,
         user=user,
     )
 

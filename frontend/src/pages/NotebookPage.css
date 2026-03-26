@@ -142,7 +142,6 @@
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
-    border-right: 1px solid var(--border-color);
     overflow: hidden;
     min-height: 0;
     min-width: 0;
@@ -162,7 +161,6 @@
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
-    border-left: 1px solid var(--border-color);
     overflow: hidden;
     min-height: 0;
     min-width: 0;
@@ -174,6 +172,7 @@
     flex-direction: column;
     overflow: hidden;
     min-height: 0;
+    background: transparent;
 }
 
 .nb-panel-header {
@@ -220,52 +219,26 @@
 }
 
 /* ---- Resizers ---- */
-.nb-resizer {
-    position: relative;
-    flex-shrink: 0;
-    z-index: 10;
-    background: transparent;
+.nb-layout[data-layout='triple'] {
+    grid-template-columns: 280px minmax(0, 1fr) 360px;
 }
 
-.nb-resizer-v {
-    width: 6px;
-    margin-left: -3px;
-    cursor: col-resize;
+.nb-layout[data-layout='focus'] {
+    grid-template-columns: 280px minmax(0, 1fr);
 }
 
-.nb-resizer-h {
-    height: 6px;
-    margin-top: -3px;
-    cursor: row-resize;
+.nb-layout[data-layout='reader'] {
+    grid-template-columns: minmax(0, 1fr);
 }
 
-.nb-resizer::after {
-    content: '';
-    position: absolute;
-    border-radius: 2px;
-    background: var(--accent-color);
-    opacity: 0;
-    transition: opacity 0.2s;
+.nb-layout {
+    display: grid;
+    gap: var(--space-4);
+    padding: var(--space-4);
 }
 
-.nb-resizer-v::after {
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 3px;
-    height: 40px;
-}
-
-.nb-resizer-h::after {
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    height: 3px;
-    width: 40px;
-}
-
-.nb-resizer:hover::after {
-    opacity: 0.4;
+.nb-layout .nb-resizer {
+    display: none;
 }
 
 /* ---- TOC List ---- */
@@ -1027,7 +1000,6 @@
 }
 
 .nb-article-content tbody td:not(:last-child) {
-    border-right: 1px solid var(--border-color);
 }
 
 .nb-article-content tbody tr:last-child td {
@@ -1603,4 +1575,204 @@
 
 .nb-chat-send-btn:hover:not(:disabled) {
     opacity: 0.85;
+}
+
+
+.nb-layout-toggle-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px;
+    border-radius: 999px;
+    background: var(--hover-bg);
+}
+
+.nb-layout-toggle {
+    border: none;
+    background: transparent;
+    color: var(--meta-color);
+    padding: 6px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+    font-size: var(--text-xs);
+    font-weight: 700;
+}
+
+.nb-layout-toggle.active {
+    background: var(--panel-bg);
+    color: var(--accent-color);
+    box-shadow: var(--card-shadow);
+}
+
+.nb-panel-collapse {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: none;
+    background: transparent;
+    color: var(--meta-color);
+    cursor: pointer;
+    font-size: var(--text-xs);
+}
+
+.nb-status-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: var(--text-xs);
+    font-weight: 700;
+    margin-left: auto;
+}
+
+.nb-status-pill.ready {
+    color: var(--success-color);
+    background: color-mix(in srgb, var(--success-color), transparent 88%);
+}
+
+.nb-status-pill.processing {
+    color: var(--warning-color);
+    background: color-mix(in srgb, var(--warning-color), transparent 88%);
+}
+
+.nb-status-pill.failed {
+    color: var(--danger-color);
+    background: color-mix(in srgb, var(--danger-color), transparent 88%);
+}
+
+.nb-article-retry {
+    border: none;
+    background: transparent;
+    color: var(--danger-color);
+    cursor: pointer;
+    font-size: var(--text-xs);
+    margin-left: 8px;
+}
+
+.nb-skeleton-group {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+}
+
+.nb-skeleton-line {
+    height: 14px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--hover-bg), transparent 10%), color-mix(in srgb, var(--panel-bg), white 10%), color-mix(in srgb, var(--hover-bg), transparent 10%));
+    background-size: 200% 100%;
+    animation: uiShimmer 1.4s linear infinite;
+}
+
+.nb-skeleton-line.short { width: 42%; }
+.nb-skeleton-line.medium { width: 68%; }
+
+@keyframes uiShimmer {
+    from { background-position: 200% 0; }
+    to { background-position: -200% 0; }
+}
+
+@media (max-width: 1100px) {
+    .nb-layout[data-layout='triple'],
+    .nb-layout[data-layout='focus'] {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+
+.nb-chat-textarea {
+    resize: none;
+    min-height: 72px;
+    padding-top: 10px;
+}
+
+.nb-topbar-title-trigger,
+.nb-toolbar-title-trigger {
+    min-width: 0;
+    color: inherit;
+    font-weight: inherit;
+}
+
+.nb-topbar-title-input,
+.nb-toolbar-title-input {
+    min-width: 180px;
+    width: 100%;
+}
+
+
+.nb-reader-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px 0;
+}
+
+.nb-reader-search-input {
+    max-width: 320px;
+}
+
+.nb-reader-search-meta {
+    font-size: var(--text-xs);
+    color: var(--meta-color);
+}
+
+
+.nb-chat-sessions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.nb-chat-session-new,
+.nb-chat-session-switch,
+.nb-chat-session-delete {
+    border: none;
+    background: var(--hover-bg);
+    color: var(--text-color);
+    cursor: pointer;
+}
+
+.nb-chat-session-item {
+    display: flex;
+    gap: 8px;
+}
+
+.nb-chat-session-switch {
+    flex: 1;
+    border-radius: 12px;
+    padding: 8px 10px;
+    text-align: left;
+}
+
+.nb-chat-session-item.active .nb-chat-session-switch {
+    color: var(--accent-color);
+    background: color-mix(in srgb, var(--accent-color), transparent 90%);
+}
+
+.nb-chat-session-delete,
+.nb-chat-session-new {
+    border-radius: 12px;
+    padding: 8px 10px;
+}
+
+
+.nb-notes-filter {
+    padding: 0 0 12px;
+}
+
+
+.nb-reading-progress {
+    height: 4px;
+    width: 100%;
+    background: color-mix(in srgb, var(--hover-bg), transparent 10%);
+}
+
+.nb-reading-progress-bar {
+    height: 100%;
+    background: var(--accent-color);
+    transition: width 120ms ease;
 }

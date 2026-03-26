@@ -1,0 +1,1 @@
+{"case_id":"summary_smoke_001","title":"Summary smoke article","content":"# Summary Smoke\n\nresearch notebook system helps users collect, read, summarize and discuss documents.\n\n## Key Point\n\nThe system should preserve important facts and avoid hallucinations.","language":"中文","expected":{"min_chars":20},"tags":["summary","smoke"]}

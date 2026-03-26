@@ -1,5 +1,6 @@
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { ThemeProvider } from './contexts/ThemeContext';
+import { ToastProvider } from './components/common/ToastProvider';
 import { getStoredSession } from './services/appApi';
 import LoginPage from './pages/LoginPage';
 import HomePage from './pages/HomePage';
@@ -25,15 +26,17 @@ function SessionEntryRedirect() {
 function App() {
   return (
     <ThemeProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/home" element={<RequireSession><HomePage /></RequireSession>} />
-          <Route path="/notebook/:id" element={<RequireSession><NotebookPage /></RequireSession>} />
-          <Route path="/" element={<SessionEntryRedirect />} />
-          <Route path="*" element={<SessionEntryRedirect />} />
-        </Routes>
-      </BrowserRouter>
+      <ToastProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/home" element={<RequireSession><HomePage /></RequireSession>} />
+            <Route path="/notebook/:id" element={<RequireSession><NotebookPage /></RequireSession>} />
+            <Route path="/" element={<SessionEntryRedirect />} />
+            <Route path="*" element={<SessionEntryRedirect />} />
+          </Routes>
+        </BrowserRouter>
+      </ToastProvider>
     </ThemeProvider>
   );
 }

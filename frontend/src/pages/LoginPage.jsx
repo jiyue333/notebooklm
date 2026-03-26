@@ -16,6 +16,7 @@ export default function LoginPage() {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
     const [notice, setNotice] = useState('');
+    const [resetToken, setResetToken] = useState('');
 
     const resetMessages = () => {
         setError('');
@@ -146,9 +147,30 @@ export default function LoginPage() {
         setError('');
     };
 
-    const handleOAuthClick = (providerName) => {
-        setNotice(`${providerName} 登录入口已预留，后端 OAuth 还未接入。`);
+    const handleOAuthClick = async (providerName) => {
+        const result = await appApi.auth.startOAuth({ provider: providerName.toLowerCase() });
+        setNotice(result.reason || `${providerName} 登录暂不可用`);
         setError('');
+    };
+
+    const handleForgotPassword = async () => {
+        if (!EMAIL_PATTERN.test(normalizedEmail)) {
+            setError('请输入有效的邮箱地址');
+            return;
+        }
+        const result = await appApi.auth.forgotPassword({ email: normalizedEmail });
+        setResetToken(result.resetToken || '');
+        setNotice(result.sent ? '已生成重置口令（开发环境展示）' : '未找到该邮箱对应账号');
+    };
+
+    const handleResetPassword = async () => {
+        if (!resetToken || !password || !confirmPassword) {
+            setError('请填写重置口令与新密码');
+            return;
+        }
+        await appApi.auth.resetPassword({ token: resetToken, newPassword: password, confirmPassword });
+        setNotice('密码已重置，请使用新密码登录');
+        setStep('login');
     };
 
     return (
@@ -231,6 +253,13 @@ export default function LoginPage() {
                                 {isLoading ? '登录中...' : '登录'}
                             </button>
                         </div>
+                        <button type="button" className="auth-link-button" onClick={handleForgotPassword}>忘记密码？</button>
+                        {resetToken ? (
+                            <div className="auth-reset-box">
+                                <div className="auth-email-pill">重置口令：{resetToken}</div>
+                                <button type="button" className="auth-button auth-button-secondary" onClick={handleResetPassword}>使用当前新密码完成重置</button>
+                            </div>
+                        ) : null}
                     </form>
                 )}
 

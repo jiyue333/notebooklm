@@ -1,0 +1,1 @@
+{"case_id":"chat_smoke_001","question":"请简要说明一个研究笔记本系统为什么需要引用能力？","expected":{"min_chars":20},"tags":["chat","smoke"]}

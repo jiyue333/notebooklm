@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { appApi } from '../services/appApi';
 import './SourcePanel.css';
 
@@ -34,6 +34,7 @@ export default function SourcePanel({
     const [searchSessionId, setSearchSessionId] = useState(null);
     const [searchModeLabel, setSearchModeLabel] = useState('Auto Research');
     const [error, setError] = useState('');
+    const [sortBy, setSortBy] = useState('relevance');
 
     const [mode, setMode] = useState('auto');
     const [showModeDropdown, setShowModeDropdown] = useState(false);
@@ -42,6 +43,19 @@ export default function SourcePanel({
     const importLockRef = useRef(false);
 
     const selectedCount = sources.filter((source) => source.selected).length;
+    const sortedSources = useMemo(() => {
+        const nextSources = [...sources];
+        if (sortBy === 'time') {
+            nextSources.sort((left, right) => new Date(right.publishedAt || 0).getTime() - new Date(left.publishedAt || 0).getTime());
+            return nextSources;
+        }
+        if (sortBy === 'source') {
+            nextSources.sort((left, right) => String(left.sourceName || left.domain || '').localeCompare(String(right.sourceName || right.domain || ''), 'zh-CN'));
+            return nextSources;
+        }
+        nextSources.sort((left, right) => (right.finalScore || 0) - (left.finalScore || 0));
+        return nextSources;
+    }, [sortBy, sources]);
     const isBusy = isSearching || isImporting;
 
     useEffect(() => {
@@ -79,6 +93,21 @@ export default function SourcePanel({
                 selected: true,
             })));
             setView('results');
+
+            if (result.execution === 'async' && result.searchSessionId) {
+                let latest = result;
+                for (let count = 0; count < 12; count += 1) {
+                    const polled = await appApi.sources.getSession({ notebookId, searchSessionId: result.searchSessionId });
+                    latest = polled;
+                    if (polled.items?.length) {
+                        setSources(polled.items.map((source) => ({ ...source, selected: true })));
+                    }
+                    if (polled.status === 'completed' || polled.status === 'failed') {
+                        break;
+                    }
+                }
+                setSearchModeLabel(latest.modeLabel || 'Auto Research');
+            }
         } catch (err) {
             setError(err.message || '搜索来源失败');
         } finally {
@@ -146,6 +175,7 @@ export default function SourcePanel({
     ];
     const currentMode = modeOptions.find((item) => item.id === mode) || modeOptions[1];
     const buildSourceBadge = (source) => source.sourceTypeBadge || source.sourceName || '来源';
+    const buildFavicon = (source) => source.faviconUrl || `https://www.google.com/s2/favicons?domain=${encodeURIComponent(source.domain || source.url || '')}&sz=64`;
     const buildSourceSummary = (source) => source.whySelected || source.description || '已按当前研究任务筛选';
     const buildHighlight = (source) => (Array.isArray(source.highlights) && source.highlights[0]) || '';
     const buildImportLabel = (source) => {
@@ -266,12 +296,21 @@ export default function SourcePanel({
                     <div className="sp-results-card">
                         <div className="sp-results-header">
                             <span className="sp-results-icon">{Ic.refresh}</span>
-                            <span className="sp-results-title">{searchModeLabel} 已完成！</span>
+                            <span className="sp-results-title">{searchModeLabel} {searchSessionId ? '结果已更新' : '已完成！'}</span>
+                            <select className="sp-sort-select" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
+                                <option value="relevance">按相关度</option>
+                                <option value="time">按时间</option>
+                                <option value="source">按来源</option>
+                            </select>
                             <button className="sp-view-btn" onClick={handleViewDiscover} disabled={isImporting}>查看</button>
                         </div>
                         <div className="sp-results-list">
-                            {previewSources.length > 0 ? previewSources.map((source) => (
-                                <div key={source.id} className="sp-result-item">
+                            {sortedSources.length > 0 ? sortedSources.slice(0, 3).map((source) => (
+                                <label key={source.id} className="sp-result-item sp-result-item-selectable">
+                                    <button className={`sp-checkbox ${source.selected ? 'checked' : ''}`} onClick={() => toggleSource(source.id)} disabled={isImporting} type="button">
+                                        {source.selected && Ic.check}
+                                    </button>
+                                    <img className="sp-result-favicon" src={buildFavicon(source)} alt="" loading="lazy" />
                                     <span className="sp-result-badge">{buildSourceBadge(source)}</span>
                                     <div className="sp-result-info">
                                         <div className="sp-result-title-row">
@@ -285,14 +324,14 @@ export default function SourcePanel({
                                             <span className="sp-result-highlight">{buildHighlight(source)}</span>
                                         )}
                                     </div>
-                                </div>
+                                </label>
                             )) : (
                                 <div className="sp-feedback-empty">没有找到相关来源</div>
                             )}
-                            {remainingCount > 0 && (
+                            {sortedSources.length - 3 > 0 && (
                                 <div className="sp-result-more">
                                     <span className="sp-result-more-icon">{Ic.link}</span>
-                                    <span>另外 {remainingCount} 个来源</span>
+                                    <span>另外 {sortedSources.length - 3} 个来源</span>
                                 </div>
                             )}
                         </div>
@@ -331,8 +370,9 @@ export default function SourcePanel({
                         </button>
                     </div>
                     <div className="sp-discover-list-scroll">
-                        {sources.map((source) => (
+                        {sortedSources.map((source) => (
                             <div key={source.id} className="sp-discover-item">
+                                <img className="sp-result-favicon" src={buildFavicon(source)} alt="" loading="lazy" />
                                 <span className="sp-discover-item-icon">{buildSourceBadge(source)}</span>
                                 <div className="sp-discover-item-info">
                                     <div className="sp-discover-item-title-row">

@@ -48,7 +48,6 @@ def analyze_content(state: SummaryGraphState) -> dict[str, Any]:
     t0 = perf_counter()
     text = state["clean_markdown"]
 
-    code_blocks = len(re.findall(r"```", text)) // 2
     total_chars = len(text)
     code_chars = sum(
         len(m.group(0)) for m in re.finditer(r"```\w*\n.*?```", text, re.DOTALL)
@@ -58,7 +57,6 @@ def analyze_content(state: SummaryGraphState) -> dict[str, Any]:
     image_count = len(re.findall(r"!\[", text))
     token_count = max(1, total_chars // 4)
 
-    title_lower = state.get("title", "").lower()
     text_lower = text[:3000].lower()
 
     if code_ratio > 0.30:
@@ -304,9 +302,10 @@ async def validate_summary(state: SummaryGraphState) -> dict[str, Any]:
     except Exception as exc:
         logger.debug("summary.validate_parse_failed", error=str(exc)[:120])
 
-    observe_summary_stage(stage="validate", status="ok", duration_ms=_ms(t0))
-    observe_summary_validation_result(passed=True)
-    return {"validation_passed": True, "validation_issues": [], "retry_count": retry_count}
+    observe_summary_stage(stage="validate", status="error", duration_ms=_ms(t0))
+    observe_summary_validation_result(passed=False)
+    observe_summary_judge_reject(reason="invalid_judge_output")
+    return {"validation_passed": False, "validation_issues": ["invalid_judge_output"], "retry_count": retry_count}
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────
