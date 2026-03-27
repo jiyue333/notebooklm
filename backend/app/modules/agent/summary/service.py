@@ -27,6 +27,39 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 _CJK_RATIO_THRESHOLD = 0.15
+_LANGUAGE_ALIASES = {
+    "zh": "zh",
+    "zh-cn": "zh",
+    "zh-hans": "zh",
+    "cn": "zh",
+    "chinese": "zh",
+    "中文": "zh",
+    "简体中文": "zh",
+    "汉语": "zh",
+    "en": "en",
+    "en-us": "en",
+    "english": "en",
+    "英文": "en",
+    "英语": "en",
+    "auto": "auto",
+    "自动": "auto",
+}
+
+
+def normalize_summary_language(language: str | None) -> str:
+    raw = (language or "auto").strip()
+    if not raw:
+        return "auto"
+    lowered = raw.lower().replace("_", "-")
+    if lowered in _LANGUAGE_ALIASES:
+        return _LANGUAGE_ALIASES[lowered]
+    if raw in _LANGUAGE_ALIASES:
+        return _LANGUAGE_ALIASES[raw]
+    if lowered.startswith("zh"):
+        return "zh"
+    if lowered.startswith("en"):
+        return "en"
+    return "auto"
 
 
 async def generate_summary(
@@ -40,6 +73,7 @@ async def generate_summary(
     **_kwargs,
 ) -> dict:
     """生成摘要，或直接返回缓存摘要。"""
+    normalized_language = normalize_summary_language(language)
 
     # ========== phase 1 检查缓存 ==========
     content_hash = hashlib.sha256(clean_markdown.encode()).hexdigest()
@@ -53,14 +87,14 @@ async def generate_summary(
         prompt_version=PROMPT_VERSION,
         model_provider=provider,
         model_name=str(model_name),
-        output_language=language,
+        output_language=normalized_language,
     )
     if cached:
         observe_summary_cache_hit()
         text = cached.summary_text
-        if language == "zh" and _needs_chinese_translation(text) and user:
+        if normalized_language == "zh" and _needs_chinese_translation(text) and user:
             text = await _translate_to_chinese(text, user)
-        return {"summary_text": text, "cached": True}
+        return {"summary_text": text, "cached": True, "language": normalized_language}
 
     # ========== phase 2 执行 LangGraph ==========
     t0 = perf_counter()
@@ -70,7 +104,7 @@ async def generate_summary(
         "article_id": article_id,
         "title": title,
         "clean_markdown": clean_markdown,
-        "language": language,
+        "language": normalized_language,
         "user": user,
         "map_chunks": [],
         "chunk_summaries": [],
@@ -108,12 +142,12 @@ async def generate_summary(
             prompt_version=PROMPT_VERSION,
             model_provider=provider,
             model_name=str(model_name),
-            output_language=language,
+            output_language=normalized_language,
             summary_text=summary_text,
         )
         await db.commit()
 
-    return {"summary_text": summary_text, "cached": False}
+    return {"summary_text": summary_text, "cached": False, "language": normalized_language}
 
 
 async def list_notebook_summaries(

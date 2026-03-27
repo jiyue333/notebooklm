@@ -33,8 +33,8 @@ export default function SourceActionModal({
                             <h3 className="source-action-title">{isRename ? '编辑来源标题' : '删除来源'}</h3>
                             <p className="source-action-subtitle">
                                 {isRename
-                                    ? '修改后会立即更新左侧来源列表和正文标题。'
-                                    : `删除后会移除来源《${articleTitle || '未命名来源'}》及其关联内容。`}
+                                    ? '修改后立即生效'
+                                    : `将删除《${articleTitle || '未命名来源'}》及关联内容`}
                             </p>
                         </div>
                     </div>
@@ -58,8 +58,7 @@ export default function SourceActionModal({
                         </label>
                     ) : (
                         <div className="source-action-danger-card">
-                            <p>这会删除该来源文章、关联的原始文件，以及当前笔记本中的该条来源记录。</p>
-                            <p>如果这是误操作，需要重新导入该来源。</p>
+                            <p>删除后不可恢复，如需使用请重新导入。</p>
                         </div>
                     )}
                     {error ? <div className="source-action-error">{error}</div> : null}

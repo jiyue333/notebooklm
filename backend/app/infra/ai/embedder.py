@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import asyncio
 
+import httpx
+
+from app.core.constant import PROVIDER_OLLAMA
 from app.infra.ai.factory import build_embeddings_model
 from app.modules.settings.runtime import EmbeddingRuntimeConfig, resolve_embedding_runtime_config
 
 _EMBED_TIMEOUT_SECONDS = 120
+_OLLAMA_PROBE_TIMEOUT_SECONDS = 2
 
 
 class Embedder:
@@ -35,6 +39,11 @@ class Embedder:
     async def embed_texts(self, texts: list[str]) -> list[list[float]] | None:
         if not texts or not self.is_configured:
             return None
+        if (
+            self._runtime_config.provider == PROVIDER_OLLAMA
+            and not await _ollama_embeddings_available(self._runtime_config.api_url)
+        ):
+            return None
 
         embeddings = build_embeddings_model(
             provider=self._runtime_config.provider,
@@ -52,6 +61,16 @@ class Embedder:
             response,
             expected_dimensions=self._runtime_config.output_dimensions,
         )
+
+
+async def _ollama_embeddings_available(base_url: str) -> bool:
+    endpoint = f"{base_url.rstrip('/')}/api/tags"
+    try:
+        async with httpx.AsyncClient(timeout=_OLLAMA_PROBE_TIMEOUT_SECONDS) as http:
+            response = await http.get(endpoint)
+            return response.is_success
+    except Exception:
+        return False
 
 
 def _validate_embedding_dimensions(

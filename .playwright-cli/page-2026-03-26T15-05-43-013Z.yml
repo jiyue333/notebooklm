@@ -1,0 +1,139 @@
+- generic [ref=e3]:
+  - banner [ref=e473]:
+    - generic [ref=e474]:
+      - button "返回" [ref=e475] [cursor=pointer]:
+        - img [ref=e476]
+      - generic [ref=e478]:
+        - generic [ref=e479]: 📒
+        - button "UI回归测试笔记本 ✎" [ref=e480] [cursor=pointer]:
+          - generic [ref=e481]: UI回归测试笔记本
+          - generic [ref=e482]: ✎
+    - generic [ref=e484]:
+      - textbox "文内搜索..." [ref=e485]
+      - generic [ref=e486]: 0/0
+      - button "↑" [disabled] [ref=e487] [cursor=pointer]
+      - button "↓" [disabled] [ref=e488] [cursor=pointer]
+    - generic [ref=e489]:
+      - button "切换主题" [ref=e490] [cursor=pointer]:
+        - img [ref=e491]
+      - button "布局偏好：阅读" [ref=e807] [cursor=pointer]:
+        - img [ref=e495]
+      - button "设置" [ref=e497] [cursor=pointer]:
+        - img [ref=e498]
+      - button "t" [ref=e501] [cursor=pointer]:
+        - generic [ref=e502]: t
+  - generic [ref=e503]:
+    - generic [ref=e808]:
+      - button "展开左栏" [ref=e809] [cursor=pointer]:
+        - img [ref=e810]
+      - button "添加笔记" [ref=e812] [cursor=pointer]:
+        - img [ref=e813]
+      - button "文内搜索" [ref=e815] [cursor=pointer]:
+        - img [ref=e816]
+    - generic [ref=e644]:
+      - generic [ref=e645]:
+        - generic [ref=e646]:
+          - generic [ref=e647]:
+            - 'button "LangChain Review 2026: Complete Framework Test & Real Results ✎" [ref=e648] [cursor=pointer]':
+              - generic [ref=e649]: "LangChain Review 2026: Complete Framework Test & Real Results"
+              - generic [ref=e650]: ✎
+            - link "打开链接" [ref=e651] [cursor=pointer]:
+              - /url: https://hackceleration.com/langchain-review/
+              - img [ref=e652]
+          - generic [ref=e654]:
+            - generic [ref=e655]: 未知来源
+            - generic [ref=e656]: ·
+            - generic [ref=e657]: 26-03-10 08-00
+        - generic [ref=e658]:
+          - button "翻译" [ref=e659] [cursor=pointer]:
+            - img [ref=e660]
+          - button "AI 摘要" [ref=e662] [cursor=pointer]:
+            - img [ref=e663]
+          - button "AI 助手" [ref=e665] [cursor=pointer]:
+            - img [ref=e666]
+          - button "更多设置" [ref=e670] [cursor=pointer]:
+            - img [ref=e671]
+      - generic [ref=e677]:
+        - paragraph [ref=e678]: LangChain is an open-source development framework that enables building AI agents and LLM applications with multi-model flexibility. Thanks to its modular architecture, native integrations with 100+ tools, and specialized frameworks (LangGraph for complex workflows, LangSmith for monitoring), this tool has become the reference standard for AI engineers worldwide. Whether you’re prototyping a chatbot or deploying multi-agent systems in production, LangChain provides the infrastructure to build reliable, observable AI applications.
+        - paragraph [ref=e679]: "In this comprehensive test, we analyze in depth LangChain’s capabilities: ease of implementation for developers, value proposition across pricing tiers (free Developer to custom Enterprise), depth of agent-building features, quality of documentation and community support, and breadth of integrations with search engines and external tools. We tested LangChain across several real client projects at Hack’celeration agency to understand when it truly outperforms alternatives. Discover our detailed review of this framework that’s reshaping how teams build with AI."
+        - paragraph [ref=e680]:
+          - img "LangChain Logo" [ref=e681]
+        - paragraph [ref=e682]: "Test of LangChain interface: Video showing our navigation on the official LangChain home page with scrolling through different sections. We see how we explore the complete ecosystem with presentations of LangChain, LangGraph and LangSmith. The demonstration presents the modular architecture of the framework and the use cases highlighted by the team, giving an overview of the product philosophy that Hack'celeration uses for our AI agent developments."
+        - heading "OUR REVIEW OF LANGCHAIN IN SUMMARY" [level=2] [ref=e683]
+        - paragraph [ref=e684]:
+          - img "#image_title" [ref=e685]
+        - paragraph [ref=e686]: Review by our Expert – Romain Cochard CEO of Hack’celeration
+        - heading "Overall rating" [level=3] [ref=e687]
+        - paragraph [ref=e688]: ★★★★★ ★★★★★ 4.3 out of 5
+        - paragraph [ref=e689]: LangChain positions itself as a solid open-source foundation for production AI development. We particularly appreciate the architectural flexibility with LangGraph for complex agent workflows and the comprehensive observability via LangSmith that provides insights impossible to get with raw LLM APIs. It’s a tool we recommend without hesitation for engineering teams building reliable, production-grade AI agents and anyone serious about understanding agent orchestration, prompt management, and multi-step reasoning chains.
+        - heading "Ease of use" [level=4] [ref=e690]
+        - paragraph [ref=e691]: ★★★★★ ★★★★★ 3.7 out of 5
+        - paragraph [ref=e692]: LangChain has a steep learning curve for developers new to LLM development. The Python SDK installation takes 5 minutes via pip, but understanding chains, agents, and callbacks requires 3-4 hours of documentation study. We trained an experienced backend developer in about 6 hours to build a functional RAG chatbot. The documentation is comprehensive with 200+ integration guides, but navigating between LangChain core, LangGraph, and LangSmith concepts can confuse beginners. Once you grasp the abstractions, building becomes fast. The new LangGraph Studio helps visualize agent flows, which significantly reduces debugging time.
+        - heading "Value for money" [level=4] [ref=e693]
+        - paragraph [ref=e694]: ★★★★★ ★★★★★ 4.8 out of 5
+        - paragraph [ref=e695]: "Let’s be clear: this is exceptional value. The core framework is completely free and open-source with no usage limits on your own infrastructure. LangSmith monitoring starts at $39/month for 10k traces with agent deployment included, when competitors like Weights & Biases charge $50/user for similar observability. We’ve built production systems serving 50k requests/month entirely on the free tier by self-hosting. The Plus plan at $39/seat is perfectly positioned for small teams needing collaborative debugging and deployment. Only at enterprise scale with custom hosting requirements do costs become variable, but even then, the ROI is clear compared to building observability infrastructure in-house."
+        - heading "Features and depth" [level=4] [ref=e696]
+        - paragraph [ref=e697]: ★★★★★ ★★★★★ 4.7 out of 5
+        - paragraph [ref=e698]: "LangChain provides three powerful layers that cover the full AI development lifecycle. The base framework handles prompt templates, output parsing, and memory management across 100+ LLM providers. LangGraph adds stateful, cyclical agent workflows with human-in-the-loop checkpoints that competitors can’t match. LangSmith delivers production monitoring with trace analysis, evaluation datasets, and A/B testing capabilities. We’ve used the tool kit to build everything from simple QA bots to multi-agent research systems with branching logic. What impressed us: the depth of retrieval strategies (parent document retrievers, multi-query, ensemble), built-in evaluation frameworks, and low-level control when you need it. Missing feature: visual agent builder for non-coders, though LangGraph Studio partially addresses this."
+        - heading "Customer support and assistance" [level=4] [ref=e699]
+        - paragraph [ref=e700]: ★★★★★ ★★★★★ 3.9 out of 5
+        - paragraph [ref=e701]: "Support quality varies significantly by plan tier. The open-source community on Discord (40k+ members) typically responds within 2-4 hours for common issues, and GitHub issues get maintainer attention within 24-48h for bugs. Documentation is extremely comprehensive with 500+ pages, integration guides, and code examples covering 90% of use cases. We contacted Plus plan email support twice: once for a LangSmith trace retention question (12h response), once for an agent deployment issue (8h with working solution). Enterprise customers get architectural guidance and SLA guarantees. Only limitation: no live chat on Developer/Plus tiers, and complex architectural questions sometimes require digging through GitHub discussions rather than getting direct answers."
+        - heading "Available integrations" [level=4] [ref=e702]
+        - paragraph [ref=e703]: ★★★★★ ★★★★★ 4.6 out of 5
+        - paragraph [ref=e704]: "LangChain connects with 100+ tools and services out of the box, which is industry-leading. Search engine integrations include Bing Search (paid), Brave Search (free), Google Search (paid), Exa Search (1000 free searches/month), and Jina Search (1M free response tokens). Each integration returns structured data with URL, snippet, and title fields consistently formatted. Beyond search, native connectors exist for vector databases (Pinecone, Chroma, Weaviate), document loaders (PDF, CSV, Notion, Google Drive), and LLM providers (OpenAI, Anthropic, Cohere, local Llama). We integrated 6 different tools in a single project without custom code. API flexibility allows building custom tools when needed. Only wish: more enterprise SaaS integrations (Salesforce, HubSpot) compared to data-focused tools."
+        - paragraph [ref=e705]:
+          - img "LangChain logo" [ref=e706]
+        - heading "Test LangChain – Our Review on Ease of use" [level=2] [ref=e707]
+        - paragraph [ref=e708]: "We tested LangChain in real conditions across 4 client AI projects, and it’s one of the most powerful but challenging frameworks for developers entering the LLM space. The initial barrier is significant: understanding the difference between chains, agents, retrievers, and memory requires conceptual shifts that take time to internalize."
+        - paragraph [ref=e709]: "Installation is straightforward via pip install langchain in under 5 minutes, but that’s where simplicity ends. Building your first RAG chatbot following the quickstart guide takes about 90 minutes for an experienced Python developer. We trained a senior backend developer with zero LLM experience: he needed 6 hours of focused work to understand chains, prompt templates, and vector store integration well enough to build autonomously. The framework’s abstractions are powerful but leaky– you frequently need to understand what’s happening under the hood to debug issues."
+        - paragraph [ref=e710]: "What significantly improved our experience: LangGraph Studio’s visual workflow editor and LangSmith’s trace debugging. Being able to see each agent step, inspect intermediate outputs, and understand why a chain failed cuts debugging time by 60% compared to print-statement debugging. The documentation has 500+ pages with excellent code examples, but navigating between LangChain core concepts, LangGraph’s state machines, and LangSmith’s monitoring takes practice."
+        - paragraph [ref=e711]: "Verdict: Excellent for engineering teams with Python experience ready to invest 1-2 weeks in the learning curve. Not suitable for no-code users or teams wanting instant results. Once mastered, development velocity is exceptional, but expect initial friction that pure API wrappers like OpenAI’s Assistants API avoid."
+        - heading "➕ Pros / ➖ Cons" [level=3] [ref=e712]
+        - paragraph [ref=e713]: ✅ Comprehensive documentation with 500+ pages and code examples ✅ LangGraph Studio visualization cuts debugging time by 60% ✅ Modular architecture enables incremental complexity adoption ✅ Active community with 40k+ Discord members responding in 2-4h ❌ Steep learning curve requiring 6+ hours for experienced developers ❌ Abstraction complexity makes debugging non-obvious for beginners ❌ No visual builder for non-technical users (LangGraph Studio helps but requires code)
+        - 'heading "Test LangChain: Our Review on Value for money" [level=2] [ref=e714]'
+        - paragraph [ref=e715]: "Let’s be blunt: LangChain offers exceptional value that’s hard to match in the AI infrastructure space. The core open-source framework is completely free with no usage restrictions when self-hosted – you can build and deploy production AI agents serving millions of requests without paying a cent to LangChain. This is fundamentally different from API-based solutions where costs scale linearly with usage."
+        - paragraph [ref=e716]: The Developer plan provides 5k traces per month free on LangSmith with full evaluation and monitoring capabilities. For context, 5k traces supports about 15-20k agent interactions depending on complexity, which covers most prototypes and small production deployments. We’ve run client projects serving 2000 users/month entirely on this tier. The Plus plan at $39/seat unlocks 10k traces, agent deployment infrastructure, and email support – this is incredibly competitive when Weights & Biases charges $50/user for similar ML observability and Datadog APM costs$ 31/host minimum.
+        - paragraph [ref=e717]: We tested the Plus tier for 3 months on a customer service automation project. The agent deployment feature alone saved us 8 hours of DevOps work setting up hosting, and trace-based debugging caught 3 production issues before users reported them. At $39/month for our 2-person team, that’s $468/year for infrastructure that would cost $2000+ to build in-house. Enterprise pricing becomes relevant at 100k+ traces/month or when you need custom hosting (on-prem, VPC), guaranteed SLAs, or architectural reviews for complex multi-agent systems.
+        - paragraph [ref=e718]: "Verdict: Unbeatable value for startups and SMBs building AI products. The free tier enables serious production usage, and paid plans are priced at developer-team scale rather than enterprise budgets. Only consideration: LLM API costs (OpenAI, Anthropic) will dwarf LangChain fees, but that’s true regardless of framework choice."
+        - heading "➕ Pros / ➖ Cons" [level=3] [ref=e719]
+        - paragraph [ref=e720]: ✅ Open-source core enables unlimited free usage when self-hosted ✅ 5k free traces/month supports most prototypes and small production apps ✅$39/seat Plus plan highly competitive vs $50+ alternatives like W&B ✅ Predictable pricing with clear trace limits vs usage-based billing ❌ Enterprise pricing opaque requiring sales calls for custom hosting ❌ LLM API costs separate and typically 10x higher than LangChain fees ❌ Trace limits restrictive for high-traffic apps without Enterprise plan
+        - heading "Test LangChain – Our Review on Features and depth" [level=2] [ref=e721]
+        - paragraph [ref=e722]: LangChain provides three powerful architectural layers that together form a complete AI development platform. The base LangChain framework handles prompt engineering with templates, output parsing, and memory management across 100+ LLM providers (OpenAI, Anthropic, Cohere, local Llama models). This layer lets you switch between models in 2 lines of code, which saved us when GPT-4 pricing changed mid-project and we needed to test Claude alternatives.
+        - paragraph [ref=e723]: LangGraph is where the framework truly differentiates itself. It enables stateful, cyclical agent workflows with conditional branching, human-in-the-loop checkpoints, and persistent state that pure chain-based approaches can’t handle. We built a research agent that iteratively searches, evaluates relevance, and decides whether to search again or synthesize findings – this required 14 conditional nodes that would be nightmarish in basic prompt chains. The visual workflow diagrams auto-generated by LangGraph Studio made debugging these complex flows actually manageable.
+        - paragraph [ref=e724]: "LangSmith delivers production-grade observability that competitors lack. Trace analysis shows every LLM call, token usage, and latency with drill-down to individual prompt/response pairs. We used evaluation datasets to A/B test 3 different retrieval strategies, measuring answer quality across 200 test cases automatically. The feedback collection and annotation features let non-technical team members flag bad outputs, which fed directly into our fine-tuning pipeline. What impressed us most: the depth of retrieval strategies including parent document retrievers, multi-query expansion, ensemble retrievers combining multiple sources, and contextual compression."
+        - paragraph [ref=e725]: "Verdict: Feature-complete for serious AI engineering with depth that rewards investment. Missing piece: a true visual agent builder for non-coders, though LangGraph Studio provides visualization. The toolkit handles everything from simple chatbots to sophisticated multi-agent systems with tool usage, memory, and planning."
+        - heading "➕ Pros / ➖ Cons" [level=3] [ref=e726]
+        - paragraph [ref=e727]: ✅ LangGraph stateful workflows enable complex multi-step agent logic ✅ 100+ LLM provider support allows model switching in 2 lines of code ✅ LangSmith trace analysis provides production debugging impossible with raw APIs ✅ Advanced retrieval strategies including ensemble and contextual compression ❌ No true no-code builder despite LangGraph Studio visualization ❌ Feature complexity can overwhelm teams needing only basic chatbots ❌ Evaluation tooling requires understanding ML metrics like BLEU scores
+        - 'heading "Test LangChain: Our Review on Customer support and assistance" [level=2] [ref=e728]'
+        - paragraph [ref=e729]: "Support quality with LangChain varies dramatically based on your pricing tier, but the open-source community provides a strong safety net even on the free Developer plan. The Discord community has 40k+ active members where core maintainers and experienced users typically respond to questions within 2-4 hours for common issues. We’ve posted 7 questions over 6 months: 5 got helpful answers within 3 hours, 2 required GitHub issue escalation for potential bugs."
+        - paragraph [ref=e730]: Documentation is extraordinarily comprehensive with over 500 pages covering framework concepts, integration guides for 100+ tools, and code examples for common patterns. The docs answered 85% of our questions without needing human support. However, navigating between LangChain core docs, LangGraph-specific guides, and LangSmith monitoring documentation can be confusing – the information architecture assumes you understand which layer handles which functionality.
+        - paragraph [ref=e731]: We tested Plus plan email support ($39/month) on two occasions. First, we asked about LangSmith trace retention policies for compliance requirements – got a detailed response in 12 hours with documentation links. Second, we hit an agent deployment error with cryptic logs – support responded in 8 hours with a working solution and explanation of the root cause (memory configuration issue). Response quality was good, but 8-12 hour SLAs mean you’re not unblocked same-day for urgent production issues.
+        - paragraph [ref=e732]: "Verdict: Strong for self-service developers, adequate for paid support tiers, excellent for teams comfortable with community-driven troubleshooting. Enterprise customers get architectural guidance and guaranteed SLAs we didn’t test. Major limitation: no live chat even on Plus tier means you’re debugging asynchronously, which can frustrate teams used to instant vendor support."
+        - heading "➕ Pros / ➖ Cons" [level=3] [ref=e733]
+        - paragraph [ref=e734]: ✅ 500+ page documentation answers 85% of questions without support tickets ✅ 40k+ Discord community provides 2-4 hour responses for common issues ✅ Plus plan email support delivers detailed solutions in 8-12 hours ✅ Enterprise architectural guidance available for complex multi-agent systems ❌ No live chat even on paid Plus tier for urgent debugging ❌ Complex architecture questions require GitHub discussion diving vs direct answers ❌ Documentation fragmentation across LangChain/LangGraph/LangSmith confuses navigation
+        - heading "Test LangChain – Our Review on Available integrations" [level=2] [ref=e735]
+        - paragraph [ref=e736]: "LangChain connects with 100+ tools and services through native integrations, making it the most comprehensive AI framework for external data access. Search engine integration is particularly robust: we tested Bing Search (paid API), Brave Search (free with rate limits), Google Search (paid via SerpAPI), Exa Search (1000 free monthly searches), and Jina Search (1M free response tokens). Each integration returns consistent structured data including URL, snippet, and title, which made switching between search providers trivial when rate limits hit."
+        - paragraph [ref=e737]: Beyond search, the integration breadth is exceptional across categories. Vector databases include Pinecone, Chroma, Weaviate, Qdrant, and Milvus with identical interfaces – we switched from Chroma to Pinecone in production by changing 3 lines of code. Document loaders handle PDF, CSV, Word, Notion, Google Drive, Confluence, and 50+ formats. We built a knowledge base ingestion pipeline that unified 6 different data sources without custom parsing code. LLM provider integrations span OpenAI, Anthropic, Cohere, Google, Azure, and local models via Ollama – the abstraction layer let us A/B test GPT-4 vs Claude across 200 test cases by parameterizing model selection.
+        - paragraph [ref=e738]: "What we tested in production: integrating Wikipedia search, Arxiv paper retrieval, and Brave web search in a single research agent. The tool standardization meant our agent logic didn’t care which tool returned results – the interface was identical. We also tested custom tool creation: wrapping our internal API took 30 minutes with the @tool decorator and worked identically to built-in integrations."
+        - paragraph [ref=e739]: "Verdict: Industry-leading integration breadth for AI-relevant tools and data sources. The standardized tool interface is brilliant engineering. Only gap: fewer enterprise SaaS integrations (Salesforce, HubSpot) compared to data infrastructure tools, though the API flexibility lets you build custom connectors when needed."
+        - heading "➕ Pros / ➖ Cons" [level=3] [ref=e740]
+        - paragraph [ref=e741]: ✅ 100+ native integrations including search, databases, and document sources ✅ Standardized tool interface enables switching providers in 3 lines of code ✅ Multiple free search options (Brave, Exa with 1000/month, Jina with 1M tokens) ✅ Custom tool creation takes 30 minutes with @tool decorator ❌ Fewer enterprise SaaS integrations vs data infrastructure tools ❌ Search API costs can accumulate quickly with paid providers (Bing, Google) ❌ Integration documentation varies in quality across 100+ connectors
+        - heading "FAQ – EVERYTHING ABOUT LANGCHAIN" [level=2] [ref=e742]
+        - heading "Is LangChain really free?" [level=3] [ref=e743]
+        - paragraph [ref=e744]: Yes, the core LangChain framework is completely free and open-source under the MIT license with no usage restrictions. You can build and deploy unlimited AI agents on your own infrastructure without paying anything. The LangSmith monitoring platform offers a Developer plan with 5k traces per month free (supporting 15-20k agent interactions), which covers prototypes and small production apps. However, if you need more traces, agent deployment infrastructure, or email support, you'll need the Plus plan at $39/seat/month. The framework itself remains free forever - you only pay for optional monitoring and hosting services.
+        - heading "How much does LangChain cost per month?" [level=3] [ref=e745]
+        - heading "Does LangChain slow down my AI application?" [level=3] [ref=e746]
+        - heading "Can you use LangChain with any LLM provider?" [level=3] [ref=e747]
+        - heading "Is LangChain suitable for production applications?" [level=3] [ref=e748]
+        - heading "What's the difference between LangChain and OpenAI Assistants API?" [level=3] [ref=e749]
+        - heading "How long does it take to build an AI agent with LangChain?" [level=3] [ref=e750]
+        - heading "What's the best free alternative to LangChain?" [level=3] [ref=e751]
+        - 'heading "LangChain vs LlamaIndex: when to choose LangChain?" [level=3] [ref=e752]'
+        - heading "Does LangChain work with local LLMs?" [level=3] [ref=e753]
+    - generic [ref=e818]:
+      - button "展开右栏" [ref=e819] [cursor=pointer]:
+        - img [ref=e820]
+      - button "添加来源" [ref=e822] [cursor=pointer]:
+        - img [ref=e823]
+      - button "添加笔记" [ref=e825] [cursor=pointer]:
+        - img [ref=e826]

@@ -3,6 +3,9 @@
    ============================================ */
 
 :root {
+  --app-font-family-latin: 'Times New Roman', Times, serif;
+  --app-font-family-cjk: 'Source Han Serif SC', 'Noto Serif SC', 'Songti SC', 'STSong', 'SimSun', serif;
+  --app-font-family: var(--app-font-family-latin), var(--app-font-family-cjk);
   --bg-color: #f2f4f6;
   --bg-elevated: rgba(255, 255, 255, 0.82);
   --card-bg: rgba(255, 255, 255, 0.64);
@@ -92,7 +95,7 @@ html {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', 'PingFang SC', sans-serif;
+  font-family: var(--app-font-family);
   background: var(--bg-color);
   color: var(--text-color);
   line-height: 1.6;
@@ -103,6 +106,18 @@ body {
 
 button, input, textarea, select {
   font: inherit;
+  border: none;
+}
+
+:where(button, a, [role="button"]):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-color), #fff 15%);
+  outline-offset: 2px;
+}
+
+:where(input, textarea, select):focus,
+:where(input, textarea, select):focus-visible {
+  outline: none;
+  outline-offset: 0;
 }
 
 #root {
@@ -438,15 +453,19 @@ a:hover {
   color: var(--title-color);
   padding: 6px 10px;
   outline: none;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-color), transparent 70%);
+  box-shadow: none;
+}
+
+.ui-inline-edit-input:focus {
+  background: color-mix(in srgb, var(--hover-bg), var(--accent-color) 4%);
 }
 
 .ui-account-menu {
   position: absolute;
   top: calc(100% + 10px);
   right: 0;
-  width: 250px;
-  padding: var(--space-2);
+  width: 286px;
+  padding: 10px;
   border-radius: var(--radius);
   background: var(--panel-bg);
   box-shadow: var(--card-shadow-hover);
@@ -458,16 +477,17 @@ a:hover {
 
 .ui-account-menu-profile {
   display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3);
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent-color), transparent 94%);
+  margin-bottom: 6px;
 }
 
 .ui-account-menu-avatar {
-  width: 42px;
-  height: 42px;
+  width: 46px;
+  height: 46px;
   border-radius: 50%;
   background: var(--accent-color);
   color: #fff;
@@ -475,35 +495,49 @@ a:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
+}
+
+.ui-account-menu-avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .ui-account-menu-meta {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
+  flex: 1;
 }
 
 .ui-account-menu-meta strong,
 .ui-account-menu-meta span {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .ui-account-menu-meta strong {
   color: var(--title-color);
-  font-size: var(--text-sm);
+  font-size: 0.95rem;
+  line-height: 1.35;
+  white-space: nowrap;
 }
 
 .ui-account-menu-meta span {
   color: var(--meta-color);
-  font-size: var(--text-xs);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
 }
 
 .ui-account-menu-item {
   width: 100%;
-  padding: 10px 12px;
+  padding: 11px 12px;
   margin-top: 4px;
   border: none;
   background: transparent;

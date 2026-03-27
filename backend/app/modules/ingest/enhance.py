@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.ingest.types import RemarkResult
 
 logger = structlog.get_logger(__name__)
+_SUMMARY_WARM_TIMEOUT_SECONDS = 5
 
 
 async def enhance(
@@ -34,13 +37,18 @@ async def enhance(
     if remark.clean_markdown:
         try:
             from app.modules.agent.summary.service import generate_summary
-            await generate_summary(
-                db,
-                article_id=article_id,
-                title=title,
-                clean_markdown=remark.clean_markdown,
-                language=language or "auto",
-                user=user,
+            await asyncio.wait_for(
+                generate_summary(
+                    db,
+                    article_id=article_id,
+                    title=title,
+                    clean_markdown=remark.clean_markdown,
+                    language=language or "auto",
+                    user=user,
+                ),
+                timeout=_SUMMARY_WARM_TIMEOUT_SECONDS,
             )
+        except asyncio.TimeoutError:
+            logger.warning("enhance.summary_timeout", timeout_s=_SUMMARY_WARM_TIMEOUT_SECONDS)
         except Exception as exc:
             logger.warning("enhance.summary_failed", error=str(exc))

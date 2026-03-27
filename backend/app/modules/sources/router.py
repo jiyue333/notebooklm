@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import re
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from fastapi import APIRouter, Depends, File, UploadFile
 from pydantic import BaseModel, Field
@@ -13,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import current_user_dep, db_session_dep
 from app.api.errors import AppError
 from app.api.response import success_response
+from app.infra.ai.lite_models import build_lite_llm
 from app.infra.storage.file_store import build_storage_key, store_file_bytes
 from app.modules.jobs import publisher as job_publisher
 from app.modules.jobs import repo as jobs_repo
@@ -24,6 +28,132 @@ from app.modules.agent.search import repo as search_repo
 router = APIRouter(tags=["sources"])
 
 _SUPPORTED_UPLOAD_EXTENSIONS = {".pdf", ".doc", ".docx", ".txt", ".md"}
+_AUTO_TITLE_MODEL_TIMEOUT_SECONDS = 6.0
+_AUTO_TITLE_MAX_LENGTH = 80
+_AUTO_TITLE_SYSTEM_PROMPT = (
+    "你是文档来源标题生成器。"
+    "请输出单行标题，不超过18个中文字符或8个英文单词。"
+    "不要输出引号、序号、句号或额外说明。"
+)
+
+
+def _strip_markdown_prefix(value: str) -> str:
+    return re.sub(r"^[#>*\-\s\d\.\)\(]+", "", value).strip()
+
+
+def _sanitize_title(value: str | None) -> str:
+    normalized = " ".join(str(value or "").replace("\u3000", " ").split()).strip()
+    normalized = normalized.strip("'\"`“”‘’")
+    normalized = _strip_markdown_prefix(normalized)
+    return normalized[:_AUTO_TITLE_MAX_LENGTH]
+
+
+def _flatten_llm_content(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            if isinstance(item, dict):
+                text = item.get("text") or item.get("content") or ""
+                if text:
+                    parts.append(str(text))
+        return "\n".join(parts)
+    return str(content or "")
+
+
+def _fallback_title_from_url(url: str | None) -> str:
+    normalized_url = (url or "").strip()
+    if not normalized_url:
+        return "网页来源"
+    parsed = urlparse(normalized_url if "://" in normalized_url else f"https://{normalized_url}")
+    host = (parsed.netloc or parsed.path.split("/")[0]).replace("www.", "").strip()
+    path_candidate = unquote((parsed.path or "").strip("/").split("/")[-1])
+    path_candidate = _sanitize_title(path_candidate.replace("-", " ").replace("_", " "))
+    if host and path_candidate and path_candidate.lower() not in {"index", "home"}:
+        return _sanitize_title(f"{host} · {path_candidate}")
+    if host:
+        return _sanitize_title(host)
+    return _sanitize_title(normalized_url) or "网页来源"
+
+
+def _fallback_title_from_text(content: str | None) -> str:
+    normalized_content = (content or "").strip()
+    if not normalized_content:
+        return "粘贴文字来源"
+    for raw_line in normalized_content.splitlines():
+        line = _sanitize_title(raw_line)
+        if line:
+            return line
+    return "粘贴文字来源"
+
+
+async def _generate_title_with_lite_model(
+    *,
+    source_type: str,
+    url: str | None = None,
+    content: str | None = None,
+) -> str | None:
+    model = build_lite_llm()
+    if model is None:
+        return None
+
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    if source_type == "web":
+        user_prompt = (
+            "根据下面网页链接生成一个简短中文标题。\n"
+            f"URL: {(url or '').strip()}\n"
+            "仅输出标题。"
+        )
+    else:
+        excerpt = (content or "").strip()[:1400]
+        user_prompt = (
+            "根据下面文本内容生成一个简短中文标题。\n"
+            f"内容:\n{excerpt}\n"
+            "仅输出标题。"
+        )
+
+    try:
+        response = await asyncio.wait_for(
+            model.ainvoke([
+                SystemMessage(content=_AUTO_TITLE_SYSTEM_PROMPT),
+                HumanMessage(content=user_prompt),
+            ]),
+            timeout=_AUTO_TITLE_MODEL_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        return None
+
+    generated = _sanitize_title(_flatten_llm_content(getattr(response, "content", "")))
+    return generated or None
+
+
+async def _resolve_manual_source_title(
+    *,
+    source_type: str,
+    provided_title: str | None,
+    url: str | None = None,
+    content: str | None = None,
+) -> str:
+    normalized_title = _sanitize_title(provided_title)
+    if normalized_title:
+        return normalized_title
+
+    fallback = (
+        _fallback_title_from_url(url)
+        if source_type == "web"
+        else _fallback_title_from_text(content)
+    )
+    generated = await _generate_title_with_lite_model(
+        source_type=source_type,
+        url=url,
+        content=content,
+    )
+    return generated or fallback
 
 
 # ── Schemas ─────────────────────────────────────────────────────────────────
@@ -57,12 +187,31 @@ async def import_sources_endpoint(
     )
     if search_session is None:
         raise AppError(404, "未找到对应搜索会话", code="search_session_not_found")
+    if search_session.status == "failed":
+        raise AppError(409, "该搜索会话已失败，请重新搜索后再导入", code="search_session_failed")
 
     results = await search_repo.list_search_results(
         session, search_session_id=search_session.id,
     )
+    if search_session.status in {"queued", "running"} and not results:
+        raise AppError(409, "搜索仍在进行中，请稍后再导入", code="search_session_pending")
+
     result_map = {r.id: r for r in results}
+    missing_result_ids = [rid for rid in payload.searchResultIds if rid not in result_map]
+    if missing_result_ids:
+        raise AppError(
+            422,
+            "部分搜索结果已失效，请重新搜索后再导入",
+            code="search_results_not_found",
+            meta={"missingResultIds": missing_result_ids},
+        )
     now = datetime.now(UTC)
+    existing_articles = await notebooks_repo.list_articles_by_notebook(
+        session,
+        user_id=current_user.id,
+        notebook_id=notebook_id,
+    )
+    existing_dedupe_keys = {article.dedupe_key for article in existing_articles if article.dedupe_key}
 
     # ====== step 1 创建 Article 记录 ======
     articles_for_batch: list[tuple[Article, str]] = []  # (article, raw_url)
@@ -70,11 +219,14 @@ async def import_sources_endpoint(
         sr = result_map.get(rid)
         if sr is None:
             continue
+        dedupe_key = f"url:{sr.url_hash}"
+        if dedupe_key in existing_dedupe_keys:
+            continue
         article = Article(
             user_id=current_user.id,
             notebook_id=notebook_id,
             input_type="search_result",
-            dedupe_key=f"url:{sr.url_hash}",
+            dedupe_key=dedupe_key,
             title=sr.title,
             source_url=sr.raw_url,
             author=sr.author,
@@ -87,6 +239,15 @@ async def import_sources_endpoint(
         session.add(article)
         await session.flush()
         articles_for_batch.append((article, sr.raw_url))
+        existing_dedupe_keys.add(dedupe_key)
+
+    if not articles_for_batch:
+        item = await get_notebook_detail(session, user_id=current_user.id, notebook_id=notebook_id)
+        return success_response(
+            item=item,
+            message="选中的来源已存在，无需重复导入",
+            meta={"skippedDuplicate": True},
+        )
 
     # ====== step 2 batch 提交所有 URL 到 MinerU ======
     mineru_batch_id: str | None = None
@@ -152,33 +313,45 @@ async def create_source_endpoint(
 
     now = datetime.now(UTC)
     if payload.sourceType == "text":
-        title = (payload.title or "粘贴文字来源").strip()
-        dedupe_key = f"text:{hashlib.sha256((payload.content or '').encode()).hexdigest()}"
+        normalized_content = (payload.content or "").strip()
+        if not normalized_content:
+            raise AppError(422, "请输入文字内容", code="content_required")
+        title = await _resolve_manual_source_title(
+            source_type="text",
+            provided_title=payload.title,
+            content=normalized_content,
+        )
+        dedupe_key = f"text:{hashlib.sha256(normalized_content.encode()).hexdigest()}"
         article = Article(
             user_id=current_user.id,
             notebook_id=notebook_id,
             input_type="text",
             dedupe_key=dedupe_key,
             title=title,
-            raw_text_input=payload.content,
-            preview_markdown=f"# {title}\n\n{(payload.content or '')[:200]}...",
+            raw_text_input=normalized_content,
+            preview_markdown=f"# {title}\n\n{normalized_content[:200]}...",
             parse_status="queued",
             chunk_status="not_started",
             index_status="not_started",
         )
     elif payload.sourceType == "web":
-        if not payload.url:
+        normalized_url = (payload.url or "").strip()
+        if not normalized_url:
             raise AppError(422, "请输入网站链接", code="url_required")
-        title = (payload.title or payload.url).strip()
-        dedupe_key = f"url:{hashlib.sha256(payload.url.strip().encode()).hexdigest()}"
+        title = await _resolve_manual_source_title(
+            source_type="web",
+            provided_title=payload.title,
+            url=normalized_url,
+        )
+        dedupe_key = f"url:{hashlib.sha256(normalized_url.encode()).hexdigest()}"
         article = Article(
             user_id=current_user.id,
             notebook_id=notebook_id,
             input_type="url",
             dedupe_key=dedupe_key,
             title=title,
-            source_url=payload.url.strip(),
-            preview_markdown=f"# {title}\n\n来源链接：{payload.url.strip()}\n\n等待解析中。",
+            source_url=normalized_url,
+            preview_markdown=f"# {title}\n\n来源链接：{normalized_url}\n\n等待解析中。",
             parse_status="queued",
             chunk_status="not_started",
             index_status="not_started",

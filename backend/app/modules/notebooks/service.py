@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import AppError
 from app.core.config import get_settings
+from app.infra.ai.lite_models import build_lite_llm
 from app.infra.cache import delete_keys, get_json, notebook_detail_key, set_json
 from app.infra.storage.file_store import is_object_storage_enabled
 from app.modules.notes import repo as notes_repo
@@ -25,6 +27,144 @@ def _normalize_tags(tags: list[str] | None) -> list[str]:
     return normalized[:8]
 
 
+_AUTO_NOTEBOOK_TITLE_MAX_LEN = 64
+_AUTO_NOTEBOOK_ICON_TIMEOUT_SECONDS = 4.0
+_AUTO_NOTEBOOK_TITLE_TIMEOUT_SECONDS = 4.0
+
+
+def _sanitize_notebook_title(value: str | None) -> str:
+    normalized = " ".join(str(value or "").replace("\u3000", " ").split()).strip()
+    normalized = normalized.strip("'\"`“”‘’")
+    return normalized[:_AUTO_NOTEBOOK_TITLE_MAX_LEN]
+
+
+def _fallback_notebook_title(*, tags: list[str] | None = None) -> str:
+    if tags:
+        first_tag = _sanitize_notebook_title(tags[0] if tags else "")
+        if first_tag:
+            return f"{first_tag} 研究"
+    return f"未命名笔记本 {datetime.now().strftime('%m-%d')}"
+
+
+def _flatten_llm_content(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            if isinstance(item, dict):
+                text = item.get("text") or item.get("content") or ""
+                if text:
+                    parts.append(str(text))
+        return "\n".join(parts)
+    return str(content or "")
+
+
+async def _generate_notebook_title_with_lite_model(*, tags: list[str], article_titles: list[str]) -> str | None:
+    model = build_lite_llm()
+    if model is None:
+        return None
+    try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+    except Exception:
+        return None
+
+    tags_text = "、".join(tags[:6]) if tags else "无标签"
+    article_text = "\n".join(f"- {item}" for item in article_titles[:6]) if article_titles else "- 暂无来源"
+    user_prompt = (
+        "请根据下面信息生成一个简短的中文笔记本标题。\n"
+        "要求：不超过16个中文字符；不要加引号、序号、句号。\n"
+        f"标签：{tags_text}\n"
+        "来源标题：\n"
+        f"{article_text}\n"
+        "仅输出标题。"
+    )
+    try:
+        response = await asyncio.wait_for(
+            model.ainvoke([
+                SystemMessage(content="你是笔记本标题生成器。"),
+                HumanMessage(content=user_prompt),
+            ]),
+            timeout=_AUTO_NOTEBOOK_TITLE_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        return None
+
+    generated = _sanitize_notebook_title(_flatten_llm_content(getattr(response, "content", "")))
+    return generated or None
+
+
+async def _generate_notebook_icon_with_lite_model(*, title: str, article_titles: list[str]) -> str | None:
+    model = build_lite_llm()
+    if model is None:
+        return None
+    try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+    except Exception:
+        return None
+
+    article_text = "\n".join(f"- {item}" for item in article_titles[:8]) if article_titles else "- 暂无来源"
+    user_prompt = (
+        "请为这个研究笔记本生成一个最贴切的单个 emoji 图标。\n"
+        "规则：只能输出 1 个 emoji；不要输出解释、文字或标点。\n"
+        f"笔记本标题：{title}\n"
+        "来源标题：\n"
+        f"{article_text}\n"
+        "仅输出 emoji。"
+    )
+    try:
+        response = await asyncio.wait_for(
+            model.ainvoke([
+                SystemMessage(content="你是图标生成器。"),
+                HumanMessage(content=user_prompt),
+            ]),
+            timeout=_AUTO_NOTEBOOK_ICON_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        return None
+
+    generated = str(_flatten_llm_content(getattr(response, "content", ""))).strip().split()[0] if response else ""
+    generated = generated.strip("'\"`“”‘’")
+    if not generated:
+        return None
+    return generated[:8]
+
+
+async def _resolve_notebook_title(
+    *,
+    title: str | None,
+    tags: list[str],
+    article_titles: list[str],
+) -> str:
+    normalized = _sanitize_notebook_title(title)
+    if normalized:
+        return normalized
+    generated = await _generate_notebook_title_with_lite_model(tags=tags, article_titles=article_titles)
+    return generated or _fallback_notebook_title(tags=tags)
+
+
+async def _ensure_notebook_icon(
+    session: AsyncSession,
+    *,
+    notebook,
+    article_titles: list[str],
+) -> None:
+    if notebook.emoji:
+        return
+    if not article_titles:
+        return
+    generated_icon = await _generate_notebook_icon_with_lite_model(
+        title=_sanitize_notebook_title(notebook.title) or _fallback_notebook_title(),
+        article_titles=article_titles,
+    )
+    if generated_icon:
+        notebook.emoji = generated_icon
+        await session.flush()
+
+
 async def list_notebooks(session: AsyncSession, *, user_id: str, query: str | None = None) -> list[dict]:
     notebooks = await repo.list_notebooks(session, user_id=user_id, query=query)
     counts = await repo.count_articles_by_notebook_ids(
@@ -32,6 +172,56 @@ async def list_notebooks(session: AsyncSession, *, user_id: str, query: str | No
         user_id=user_id,
         notebook_ids=[notebook.id for notebook in notebooks],
     )
+    articles_cache: dict[str, list] = {}
+    should_commit = False
+
+    async def _get_notebook_articles(notebook_id: str):
+        if notebook_id in articles_cache:
+            return articles_cache[notebook_id]
+        articles = await repo.list_articles_by_notebook(
+            session,
+            user_id=user_id,
+            notebook_id=notebook_id,
+        )
+        articles_cache[notebook_id] = articles
+        return articles
+
+    for notebook in notebooks:
+        notebook_tags = notebook.tags_json or []
+        normalized_title = _sanitize_notebook_title(notebook.title)
+        if not normalized_title:
+            articles = await _get_notebook_articles(notebook.id)
+            article_titles = [
+                _sanitize_notebook_title(article.title)
+                for article in articles
+                if _sanitize_notebook_title(article.title)
+            ]
+            notebook.title = await _resolve_notebook_title(
+                title=notebook.title,
+                tags=notebook_tags,
+                article_titles=article_titles,
+            )
+            should_commit = True
+
+        if counts.get(notebook.id, 0) > 0 and not notebook.emoji:
+            articles = await _get_notebook_articles(notebook.id)
+            article_titles = [
+                _sanitize_notebook_title(article.title)
+                for article in articles
+                if _sanitize_notebook_title(article.title)
+            ]
+            before = notebook.emoji
+            await _ensure_notebook_icon(
+                session,
+                notebook=notebook,
+                article_titles=article_titles,
+            )
+            if notebook.emoji != before:
+                should_commit = True
+
+    if should_commit:
+        await session.commit()
+
     return [
         assembler.build_notebook_summary(notebook, source_count=counts.get(notebook.id, 0))
         for notebook in notebooks
@@ -42,12 +232,17 @@ async def create_notebook(
     session: AsyncSession,
     *,
     user_id: str,
-    title: str,
+    title: str | None,
     emoji: str | None,
     color: str | None,
     tags: list[str] | None = None,
 ) -> dict:
-    normalized_title = title.strip()
+    normalized_tags = _normalize_tags(tags)
+    normalized_title = await _resolve_notebook_title(
+        title=title,
+        tags=normalized_tags,
+        article_titles=[],
+    )
     if await _title_exists(session, user_id=user_id, title=normalized_title):
         raise AppError(409, '笔记本标题已存在', code='notebook_title_conflict')
 
@@ -57,7 +252,7 @@ async def create_notebook(
         title=normalized_title,
         emoji=emoji,
         color=color,
-        tags=_normalize_tags(tags),
+        tags=normalized_tags,
     )
     await session.commit()
     await session.refresh(notebook)
@@ -94,6 +289,11 @@ async def get_notebook_detail(session: AsyncSession, *, user_id: str, notebook_i
         user_id=user_id,
         notebook_id=notebook_id,
     )
+    await _ensure_notebook_icon(
+        session,
+        notebook=notebook,
+        article_titles=[_sanitize_notebook_title(article.title) for article in articles if _sanitize_notebook_title(article.title)],
+    )
     detail = assembler.build_notebook_detail(notebook, notes, articles, source_count=len(articles))
     await set_json(cache_key, detail, ttl_seconds=_resolve_notebook_detail_ttl(detail))
     await session.commit()
@@ -115,7 +315,20 @@ async def update_notebook(
         raise AppError(404, '未找到对应的笔记本', code='notebook_not_found')
 
     if title is not None:
-        normalized_title = title.strip()
+        existing_articles = await repo.list_articles_by_notebook(
+            session,
+            user_id=user_id,
+            notebook_id=notebook_id,
+        )
+        normalized_title = await _resolve_notebook_title(
+            title=title,
+            tags=_normalize_tags(tags) if tags is not None else (notebook.tags_json or []),
+            article_titles=[
+                _sanitize_notebook_title(article.title)
+                for article in existing_articles
+                if _sanitize_notebook_title(article.title)
+            ],
+        )
         title_owner = await repo.get_notebook_by_title(session, user_id=user_id, title=normalized_title)
         if title_owner is not None and title_owner.id != notebook_id:
             raise AppError(409, '笔记本标题已存在', code='notebook_title_conflict')

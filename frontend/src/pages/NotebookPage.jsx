@@ -5,25 +5,18 @@ import { appApi, clearStoredSession, getStoredSession, isAuthError } from '../se
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { Document, Page, pdfjs } from 'react-pdf';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import rehypeSlug from 'rehype-slug';
-import 'react-pdf/dist/Page/AnnotationLayer.css';
-import 'react-pdf/dist/Page/TextLayer.css';
 import SettingsModal from '../components/SettingsModal';
 import InlineEditableText from '../components/common/InlineEditableText';
 import ErrorBanner from '../components/common/ErrorBanner';
+import AccountMenu from '../components/common/AccountMenu';
 import AddSourceModal from '../components/AddSourceModal';
 import SourcePanel from '../components/SourcePanel';
 import NoteModal from '../components/NoteModal';
 import SourceActionModal from '../components/SourceActionModal';
 import './NotebookPage.css';
-
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-    'pdfjs-dist/build/pdf.worker.min.mjs',
-    import.meta.url,
-).toString();
 
 /* ============================================
    Strip first h1 from markdown
@@ -57,12 +50,6 @@ function normalizeHeadingText(value) {
     return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
-function normalizePdfLookupText(value) {
-    return normalizeHeadingText(value)
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}\u4e00-\u9fff]+/gu, '');
-}
-
 function formatArticleDate(value) {
     if (!value) return '';
     const parsed = new Date(value);
@@ -77,8 +64,70 @@ function formatArticleDate(value) {
     return `${year}-${month}-${day} ${hours}-${minutes}`;
 }
 
+function isEditableTarget(target) {
+    const element = target instanceof HTMLElement ? target : null;
+    if (!element) return false;
+    const tagName = element.tagName;
+    return element.isContentEditable || tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT';
+}
+
 function getArticleBodyElement(container) {
     return container?.querySelector('[data-role="article-body"]') || null;
+}
+
+function collectReaderSearchMatches(root, query, maxHits = 200) {
+    if (!root) return [];
+    const keyword = query.trim();
+    if (!keyword) return [];
+
+    const lowerKeyword = keyword.toLocaleLowerCase();
+    const walker = document.createTreeWalker(
+        root,
+        NodeFilter.SHOW_TEXT,
+        {
+            acceptNode(node) {
+                if (!node.nodeValue?.trim()) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                const parent = node.parentElement;
+                if (!parent) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                if (parent.closest('pre, code')) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                return NodeFilter.FILTER_ACCEPT;
+            },
+        },
+    );
+
+    const textNodes = [];
+    while (walker.nextNode()) {
+        textNodes.push(walker.currentNode);
+    }
+
+    const hits = [];
+    for (const textNode of textNodes) {
+        if (hits.length >= maxHits) {
+            break;
+        }
+        const rawText = textNode.nodeValue || '';
+        const lowerText = rawText.toLocaleLowerCase();
+        let matchIndex = lowerText.indexOf(lowerKeyword);
+        while (matchIndex >= 0) {
+            hits.push({
+                textNode,
+                start: matchIndex,
+                end: matchIndex + keyword.length,
+            });
+            if (hits.length >= maxHits) {
+                break;
+            }
+            matchIndex = lowerText.indexOf(lowerKeyword, matchIndex + keyword.length);
+        }
+    }
+
+    return hits;
 }
 
 function collectRenderedToc(container) {
@@ -95,84 +144,6 @@ function collectRenderedToc(container) {
             };
         })
         .filter(Boolean);
-}
-
-async function resolvePdfDestinationPage(pdf, destination) {
-    const dest = Array.isArray(destination)
-        ? destination
-        : (destination ? await pdf.getDestination(destination) : null);
-    const ref = dest?.[0];
-    if (!ref) return null;
-    const pageIndex = await pdf.getPageIndex(ref);
-    return pageIndex + 1;
-}
-
-async function buildPdfOutlineItems(pdf, items, depth = 1, fallbackOrder = { current: 1 }) {
-    if (!Array.isArray(items) || items.length === 0) return [];
-    const result = [];
-    for (const item of items) {
-        const pageNumber = await resolvePdfDestinationPage(pdf, item.dest).catch(() => null);
-        const currentIndex = fallbackOrder.current++;
-        result.push({
-            id: `pdf-outline-${currentIndex}`,
-            title: normalizeHeadingText(item.title),
-            level: Math.min(depth, 4),
-            pageNumber,
-            children: await buildPdfOutlineItems(pdf, item.items, depth + 1, fallbackOrder),
-        });
-    }
-    return result;
-}
-
-function flattenPdfOutline(items) {
-    const flat = [];
-    const walk = (nodes) => {
-        for (const node of nodes || []) {
-            flat.push({
-                id: node.id,
-                title: node.title,
-                level: node.level,
-                pageNumber: node.pageNumber,
-            });
-            if (Array.isArray(node.children) && node.children.length > 0) {
-                walk(node.children);
-            }
-        }
-    };
-    walk(items);
-    return flat;
-}
-
-async function buildPdfPageTextIndex(pdf) {
-    const pages = [];
-    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-        const page = await pdf.getPage(pageNumber);
-        const textContent = await page.getTextContent();
-        const pageText = textContent.items
-            .map((item) => (typeof item?.str === 'string' ? item.str : ''))
-            .join(' ');
-        pages.push({
-            pageNumber,
-            normalizedText: normalizePdfLookupText(pageText),
-        });
-    }
-    return pages;
-}
-
-async function buildGeneratedPdfToc(pdf, fallbackToc) {
-    if (!Array.isArray(fallbackToc) || fallbackToc.length === 0) return [];
-    const pageTextIndex = await buildPdfPageTextIndex(pdf);
-    return fallbackToc.map((item, index) => {
-        const title = normalizeHeadingText(item.title);
-        const normalizedTitle = normalizePdfLookupText(title);
-        const matchedPage = pageTextIndex.find((page) => normalizedTitle && page.normalizedText.includes(normalizedTitle));
-        return {
-            id: item.id || `pdf-generated-${index + 1}`,
-            title,
-            level: item.level || 2,
-            pageNumber: matchedPage?.pageNumber || null,
-        };
-    });
 }
 
 function resolveHeadingTarget(container, tocItem) {
@@ -216,25 +187,79 @@ const CHAT_ROUTE_LABELS = {
     general: '通用回答',
     ambiguous: '待确认范围',
 };
+const GLOBAL_LAYOUT_STORAGE_KEY = 'notebook.layout.preference';
+const LAYOUT_OPTIONS = [
+    { id: 'triple', label: '三栏', description: '左中右' },
+    { id: 'focus', label: '双栏', description: '左 + 中' },
+    { id: 'reader', label: '阅读', description: '仅中栏' },
+];
+const LATIN_FONT_OPTIONS = [
+    { id: 'times_new_roman', label: 'Times New Roman' },
+    { id: 'georgia', label: 'Georgia' },
+    { id: 'source_serif', label: 'Source Serif 4' },
+    { id: 'source_sans', label: 'Source Sans 3' },
+    { id: 'inter', label: 'Inter' },
+    { id: 'jetbrains_mono', label: 'JetBrains Mono' },
+];
+const CJK_FONT_OPTIONS = [
+    { id: 'source_han_serif', label: '思源宋体' },
+    { id: 'source_han_sans', label: '思源黑体' },
+    { id: 'songti', label: '宋体' },
+    { id: 'kaiti', label: '楷体' },
+    { id: 'yahei', label: '微软雅黑' },
+];
+
+function resolveLayoutMode(mode) {
+    return LAYOUT_OPTIONS.some((item) => item.id === mode) ? mode : 'triple';
+}
+
+function getStoredLayoutMode() {
+    if (typeof window === 'undefined') return 'triple';
+    const stored = window.localStorage.getItem(GLOBAL_LAYOUT_STORAGE_KEY);
+    return resolveLayoutMode(stored);
+}
+
+function persistLayoutMode(mode) {
+    if (typeof window === 'undefined') return;
+    if (!LAYOUT_OPTIONS.some((item) => item.id === mode)) return;
+    window.localStorage.setItem(GLOBAL_LAYOUT_STORAGE_KEY, mode);
+}
 
 const ARTICLE_MARKDOWN_REMARK_PLUGINS = [remarkGfm];
 const ARTICLE_MARKDOWN_REHYPE_PLUGINS = [rehypeRaw, rehypeSlug];
 
 const markdownComponents = {
+    p({ node, children, ...props }) {
+        const hasBlockChild = Array.isArray(node?.children) && node.children.some((child) => (
+            child?.tagName === 'pre'
+            || (
+                child?.tagName === 'code'
+                && Array.isArray(child?.properties?.className)
+                && child.properties.className.some((name) => String(name).startsWith('language-'))
+            )
+        ));
+        if (hasBlockChild) {
+            return <>{children}</>;
+        }
+        return <p {...props}>{children}</p>;
+    },
     code({ inline, className, children, ...props }) {
+        const codeText = String(children || '');
         const match = /language-(\w+)/.exec(className || '');
-        if (inline) {
+        const isInlineCode = inline ?? (!match && !codeText.includes('\n'));
+        if (isInlineCode) {
             return <code className={className} {...props}>{children}</code>;
         }
         return (
             <SyntaxHighlighter
                 style={oneDark}
                 language={match?.[1] || 'text'}
-                PreTag="div"
+                PreTag="pre"
+                CodeTag="code"
                 customStyle={{ borderRadius: '16px', margin: 0, fontSize: '0.86em' }}
                 {...props}
             >
-                {String(children).replace(/\n$/, '')}
+                {codeText.replace(/\n$/, '')}
             </SyntaxHighlighter>
         );
     },
@@ -258,183 +283,13 @@ const MarkdownDocument = memo(function MarkdownDocument({ content, className }) 
     );
 });
 
-const PdfDocumentPane = memo(function PdfDocumentPane({
-    fileUrl,
-    fallbackToc,
-    pageWidth,
-    onOutlineChange,
-    requestedPageNumber,
-    onPageJumpHandled,
-}) {
-    const [numPages, setNumPages] = useState(0);
-    const [loadError, setLoadError] = useState('');
-    const [pdfData, setPdfData] = useState(null);
-    const [resolvedPageWidth, setResolvedPageWidth] = useState(pageWidth);
-    const viewportRef = useRef(null);
-    const pageRefs = useRef(new Map());
-    const session = getStoredSession();
-    const pdfFile = useMemo(() => (
-        pdfData ? { data: pdfData } : null
-    ), [pdfData]);
-
-    useEffect(() => {
-        setNumPages(0);
-        setLoadError('');
-        setPdfData(null);
-        onOutlineChange([]);
-        pageRefs.current = new Map();
-    }, [fileUrl, onOutlineChange]);
-
-    useEffect(() => {
-        if (!fileUrl) {
-            return undefined;
-        }
-        const controller = new AbortController();
-        let cancelled = false;
-        const loadPdfBytes = async () => {
-            try {
-                setLoadError('');
-                const absoluteUrl = /^https?:\/\//.test(fileUrl)
-                    ? fileUrl
-                    : new URL(fileUrl, window.location.origin).toString();
-                const response = await fetch(absoluteUrl, {
-                    headers: {
-                        ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
-                    },
-                    signal: controller.signal,
-                });
-                if (!response.ok) {
-                    throw new Error(`PDF 请求失败 (${response.status})`);
-                }
-                const data = new Uint8Array(await response.arrayBuffer());
-                if (!data.byteLength) {
-                    throw new Error('PDF 文件为空');
-                }
-                if (!cancelled) {
-                    setPdfData(data);
-                }
-            } catch (error) {
-                if (controller.signal.aborted || cancelled) {
-                    return;
-                }
-                const message = error instanceof Error ? error.message : 'PDF 加载失败';
-                console.error('pdf.fetch_failed', { fileUrl, message });
-                setLoadError(message);
-            }
-        };
-        loadPdfBytes();
-        return () => {
-            cancelled = true;
-            controller.abort();
-        };
-    }, [fileUrl, session?.token]);
-
-    useEffect(() => {
-        const element = viewportRef.current;
-        if (!element) return undefined;
-        const updateWidth = () => {
-            const nextWidth = Math.max(320, Math.min(pageWidth, element.clientWidth - 48));
-            setResolvedPageWidth(nextWidth);
-        };
-        updateWidth();
-        const observer = new ResizeObserver(updateWidth);
-        observer.observe(element);
-        return () => observer.disconnect();
-    }, [pageWidth]);
-
-    useEffect(() => {
-        if (!requestedPageNumber) return;
-        const target = pageRefs.current.get(requestedPageNumber);
-        if (target) {
-            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-        onPageJumpHandled();
-    }, [onPageJumpHandled, requestedPageNumber]);
-
-    const handleLoadSuccess = useCallback(async (pdf) => {
-        setNumPages(pdf.numPages);
-        setLoadError('');
-        try {
-            const outline = await pdf.getOutline();
-            if (Array.isArray(outline) && outline.length > 0) {
-                const normalizedOutline = await buildPdfOutlineItems(pdf, outline);
-                onOutlineChange(flattenPdfOutline(normalizedOutline));
-                return;
-            }
-            const generatedOutline = await buildGeneratedPdfToc(pdf, fallbackToc);
-            onOutlineChange(generatedOutline);
-        } catch {
-            onOutlineChange([]);
-        }
-    }, [fallbackToc, onOutlineChange]);
-
-    if (!fileUrl) {
-        return <div className="nb-empty-hint"><p>PDF 文件暂不可访问</p></div>;
-    }
-
-    if (loadError) {
-        return (
-            <div className="nb-pdf-body" data-role="article-body" ref={viewportRef}>
-                <div className="nb-empty-hint"><p>{loadError}</p></div>
-            </div>
-        );
-    }
-
-    if (!pdfFile) {
-        return (
-            <div className="nb-pdf-body" data-role="article-body" ref={viewportRef}>
-                <div className="nb-pdf-loading">正在加载 PDF...</div>
-            </div>
-        );
-    }
-
-    return (
-        <div className="nb-pdf-body" data-role="article-body" ref={viewportRef}>
-            <Document
-                file={pdfFile}
-                loading={<div className="nb-pdf-loading">正在加载 PDF...</div>}
-                onLoadError={(error) => setLoadError(error?.message || 'PDF 加载失败')}
-                onLoadSuccess={handleLoadSuccess}
-            >
-                {Array.from({ length: numPages }, (_, index) => {
-                    const pageNumber = index + 1;
-                    return (
-                        <div
-                            key={`pdf-page-${pageNumber}`}
-                            className="nb-pdf-page"
-                            ref={(node) => {
-                                if (node) {
-                                    pageRefs.current.set(pageNumber, node);
-                                } else {
-                                    pageRefs.current.delete(pageNumber);
-                                }
-                            }}
-                        >
-                            <Page
-                                pageNumber={pageNumber}
-                                renderAnnotationLayer
-                                renderTextLayer
-                                width={resolvedPageWidth}
-                            />
-                        </div>
-                    );
-                })}
-            </Document>
-        </div>
-    );
-});
-
 const ArticleContentPane = memo(function ArticleContentPane({
     articleId,
-    articleFileUrl,
     articleProcessingHint,
     articleDisplayBlocked,
-    articleRenderMode,
     renderedArticleContent,
-    fallbackToc,
     fontSize,
     pageWidth,
-    pdfRequestedPageNumber,
     showSummary,
     summaryLoading,
     summaryText,
@@ -445,8 +300,6 @@ const ArticleContentPane = memo(function ArticleContentPane({
     translationError,
     setShowSummary,
     setShowTranslation,
-    setPdfOutline,
-    setPdfRequestedPageNumber,
     onCopySummary,
 }) {
     const deferredArticleContent = useDeferredValue(renderedArticleContent);
@@ -492,9 +345,7 @@ const ArticleContentPane = memo(function ArticleContentPane({
                             <div className="nb-summary-loading"><span className="nb-spinner" /><span>正在生成译文...</span></div>
                         ) : translationError ? (
                             <p>{translationError}</p>
-                        ) : (
-                            <p>当前内容已切换为译文视图。</p>
-                        )}
+                        ) : null}
                     </div>
                 </div>
             )}
@@ -504,15 +355,6 @@ const ArticleContentPane = memo(function ArticleContentPane({
                     <h3>正文准备中</h3>
                     <p>{articleProcessingHint || '来源已导入，正在处理正文，请稍后刷新。'}</p>
                 </div>
-            ) : articleRenderMode === 'pdf' && !showTranslation ? (
-                <PdfDocumentPane
-                    fileUrl={articleFileUrl}
-                    fallbackToc={fallbackToc}
-                    pageWidth={pageWidth}
-                    requestedPageNumber={pdfRequestedPageNumber}
-                    onOutlineChange={setPdfOutline}
-                    onPageJumpHandled={() => setPdfRequestedPageNumber(null)}
-                />
             ) : showTranslation && translationText ? (
                 <div className="nb-article-markdown" data-role="article-body">
                     <MarkdownDocument content={deferredArticleContent} />
@@ -531,6 +373,7 @@ const ArticleContentPane = memo(function ArticleContentPane({
    ============================================ */
 const I = {
     back: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" /></svg>,
+    notebook: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 2h9a3 3 0 0 1 3 3v14a1 1 0 0 1-1.6.8L13 17.4l-3.4 2.4A1 1 0 0 1 8 19V5a3 3 0 0 0-2-2.82V2Zm4 4h5v2h-5V6Zm0 4h5v2h-5v-2Z" /><path d="M4 3.5A1.5 1.5 0 0 1 5.5 2h.5v20h-.5A1.5 1.5 0 0 1 4 20.5v-17Z" /></svg>,
     translate: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z" /></svg>,
     summary: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L14.85 9.15L22 12L14.85 14.85L12 22L9.15 14.85L2 12L9.15 9.15L12 2Z" /></svg>,
     chat: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12z" /><path d="M7 9h2v2H7zm4 0h2v2h-2zm4 0h2v2h-2z" /></svg>,
@@ -538,6 +381,7 @@ const I = {
     addNote: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M14.06 9.02l.92.92L5.92 19H5v-.92l9.06-9.06M17.66 3c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z" /></svg>,
     edit: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M14.06 9.02l.92.92L5.92 19H5v-.92l9.06-9.06M17.66 3c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z" /></svg>,
     theme: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69zM12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6zm0-10c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4z" /></svg>,
+    layout: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h4v4H7V7zm0 6h4v4H7v-4zm6-6h4v10h-4V7z" /></svg>,
     settings: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" /></svg>,
     close: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>,
     send: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" /></svg>,
@@ -547,6 +391,9 @@ const I = {
     font: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9.93 13.5h4.14L12 7.98 9.93 13.5zM20 2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-4.05 16.5l-1.14-3H9.17l-1.12 3H5.96l5.11-13h1.86l5.11 13h-2.09z" /></svg>,
     deleteChat: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" /></svg>,
     openLink: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z" /></svg>,
+    search: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 1 0 16 9.5a6.43 6.43 0 0 0-1.57 4.23l.27.28h.79l5 4.99L20.49 19Zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14Z" /></svg>,
+    collapseLeft: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 4h18v16H3V4zm2 2v12h5V6H5zm8 6 4-4v8l-4-4z" /></svg>,
+    collapseRight: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 4h18v16H3V4zm9 0v12h7V6h-7zm-1 8-4-4 4-4v8z" /></svg>,
     // Source-type icons (rendered in theme color via CSS)
     arxiv: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L14.85 9.15L22 12L14.85 14.85L12 22L9.15 14.85L2 12L9.15 9.15L12 2Z" /></svg>,
     github: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" /></svg>,
@@ -555,15 +402,49 @@ const I = {
     article: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z" /></svg>,
 };
 
-/* Map article type → icon */
-function getArticleIcon(type) {
-    switch (type) {
-        case 'github': return I.github;
-        case 'paper': return I.paper;
-        case 'research': return I.research;
-        case 'article': return I.article;
-        default: return I.paper;
+function buildSiteFavicon(url) {
+    if (!url) return '';
+    try {
+        const parsed = new URL(url.startsWith('http') ? url : `https://${url}`);
+        if (!parsed.hostname) return '';
+        return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(parsed.hostname)}&sz=64`;
+    } catch {
+        return '';
     }
+}
+
+function isUploadedArticle(article) {
+    const inputType = String(article?.inputType || '').toLowerCase();
+    return inputType === 'file_upload' || inputType === 'file' || inputType === 'upload';
+}
+
+function isPdfArticle(article) {
+    if (!article) return false;
+    if (isUploadedArticle(article)) return false;
+    const fileMime = String(article.fileMime || '').toLowerCase();
+    const title = String(article.title || '').toLowerCase();
+    const fileName = String(article.fileName || '').toLowerCase();
+    const sourceUrl = String(article.sourceUrl || '').toLowerCase();
+    return fileMime === 'application/pdf'
+        || title.endsWith('.pdf')
+        || fileName.endsWith('.pdf')
+        || sourceUrl.endsWith('.pdf');
+}
+
+function resolveArticleIcon(article) {
+    if (isUploadedArticle(article)) {
+        return { type: 'svg', value: I.article, fallback: I.article };
+    }
+    if (isPdfArticle(article)) {
+        return { type: 'svg', value: I.paper, fallback: I.paper };
+    }
+    if (article?.sourceUrl) {
+        const favicon = buildSiteFavicon(article.sourceUrl);
+        if (favicon) {
+            return { type: 'favicon', value: favicon, fallback: I.article };
+        }
+    }
+    return { type: 'svg', value: I.article, fallback: I.article };
 }
 
 /* ============================================
@@ -573,29 +454,41 @@ export default function NotebookPage() {
     const { id } = useParams();
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
-    const { toggleTheme } = useTheme();
+    const {
+        toggleTheme,
+        fontFamilyLatin,
+        fontFamilyCjk,
+        setFontFamilyLatin,
+        setFontFamilyCjk,
+    } = useTheme();
     const requestedArticleId = searchParams.get('articleId');
 
     const [currentUser, setCurrentUser] = useState(null);
     const [notebook, setNotebook] = useState(null);
     const [selectedArticle, setSelectedArticle] = useState(null);
-    const [searchQuery, setSearchQuery] = useState('');
     const [showSettings, setShowSettings] = useState(false);
-    const [layoutMode, setLayoutMode] = useState('triple');
+    const [settingsInitialTab, setSettingsInitialTab] = useState('language');
+    const [layoutMode, setLayoutMode] = useState(() => getStoredLayoutMode());
     const [showAddSource, setShowAddSource] = useState(false);
-    const [sourceExpanded, setSourceExpanded] = useState(false);
+    const [isSourceDetailMode, setIsSourceDetailMode] = useState(false);
+    const [pendingSourceSearch, setPendingSourceSearch] = useState(null);
+    const [showAccountMenu, setShowAccountMenu] = useState(false);
     const [showArticleMenu, setShowArticleMenu] = useState(false);
+    const [showLayoutPrefMenu, setShowLayoutPrefMenu] = useState(false);
     const [articleContextMenu, setArticleContextMenu] = useState(null);
     const [articleActionPendingId, setArticleActionPendingId] = useState(null);
     const [sourceActionModal, setSourceActionModal] = useState(null);
     const [renderedToc, setRenderedToc] = useState([]);
-    const [pdfOutline, setPdfOutline] = useState([]);
-    const [pdfRequestedPageNumber, setPdfRequestedPageNumber] = useState(null);
     const [isPageLoading, setIsPageLoading] = useState(true);
     const [pageError, setPageError] = useState('');
     const menuRef = useRef(null);
+    const layoutPrefRef = useRef(null);
     const articleContextMenuRef = useRef(null);
     const centerBodyRef = useRef(null);
+    const readerSearchInputRef = useRef(null);
+    const readerSearchHitRefs = useRef([]);
+    const chatFeedbackTimerRef = useRef(null);
+    const articleReadyRefreshRef = useRef(new Set());
 
     // AI features
     const [showSummary, setShowSummary] = useState(false);
@@ -616,6 +509,9 @@ export default function NotebookPage() {
     const [translationError, setTranslationError] = useState('');
     const [readerSearchQuery, setReaderSearchQuery] = useState('');
     const [readerSearchIndex, setReaderSearchIndex] = useState(0);
+    const [readerSearchMatchCount, setReaderSearchMatchCount] = useState(0);
+    const [readerSearchShouldJump, setReaderSearchShouldJump] = useState(false);
+    const [chatFeedback, setChatFeedback] = useState('');
 
     // Article settings
     const [fontSize, setFontSize] = useState(1.05);
@@ -626,12 +522,32 @@ export default function NotebookPage() {
     const [notes, setNotes] = useState([]);
     const [noteFilterTag, setNoteFilterTag] = useState('');
     const [noteModalData, setNoteModalData] = useState(null); // null = closed, object = open
+    const [noteActionMenuId, setNoteActionMenuId] = useState(null);
+    const [notesFeedback, setNotesFeedback] = useState('');
+    const [autoOpenedEmptyNotebookId, setAutoOpenedEmptyNotebookId] = useState(null);
 
 
     const redirectToLogin = useCallback(() => {
         clearStoredSession();
         navigate('/login', { replace: true });
     }, [navigate]);
+    const noteActionMenuRef = useRef(null);
+    const applyLayoutMode = useCallback((nextMode) => {
+        if (!LAYOUT_OPTIONS.some((item) => item.id === nextMode)) {
+            return;
+        }
+        setLayoutMode(nextMode);
+        persistLayoutMode(nextMode);
+    }, []);
+    const pushChatFeedback = useCallback((message) => {
+        setChatFeedback(message);
+        if (chatFeedbackTimerRef.current) {
+            window.clearTimeout(chatFeedbackTimerRef.current);
+        }
+        chatFeedbackTimerRef.current = window.setTimeout(() => {
+            setChatFeedback('');
+        }, 1800);
+    }, []);
 
     const trackAiEvent = useCallback((payload) => {
         if (!notebook?.id) return;
@@ -641,20 +557,55 @@ export default function NotebookPage() {
         }).catch(() => {});
     }, [notebook?.id]);
 
+    useEffect(() => () => {
+        if (chatFeedbackTimerRef.current) {
+            window.clearTimeout(chatFeedbackTimerRef.current);
+        }
+    }, []);
+
+    useEffect(() => {
+        articleReadyRefreshRef.current = new Set();
+        setIsSourceDetailMode(false);
+    }, [id]);
+
+    useEffect(() => {
+        if (layoutMode !== 'triple') {
+            setIsSourceDetailMode(false);
+        }
+    }, [layoutMode]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+        const handleLayoutModeChange = (event) => {
+            const nextMode = resolveLayoutMode(event?.detail?.mode);
+            applyLayoutMode(nextMode);
+        };
+        window.addEventListener('notebook-layout-mode-changed', handleLayoutModeChange);
+        return () => window.removeEventListener('notebook-layout-mode-changed', handleLayoutModeChange);
+    }, [applyLayoutMode]);
+
     // Close dropdown on outside click
     useEffect(() => {
         const handler = (e) => {
             if (menuRef.current && !menuRef.current.contains(e.target)) {
                 setShowArticleMenu(false);
             }
+            if (layoutPrefRef.current && !layoutPrefRef.current.contains(e.target)) {
+                setShowLayoutPrefMenu(false);
+            }
             if (articleContextMenuRef.current && !articleContextMenuRef.current.contains(e.target)) {
                 setArticleContextMenu(null);
+            }
+            if (noteActionMenuRef.current && !noteActionMenuRef.current.contains(e.target)) {
+                setNoteActionMenuId(null);
             }
         };
         const handleEscape = (event) => {
             if (event.key === 'Escape') {
                 setShowArticleMenu(false);
+                setShowLayoutPrefMenu(false);
                 setArticleContextMenu(null);
+                setNoteActionMenuId(null);
             }
         };
         document.addEventListener('mousedown', handler);
@@ -664,6 +615,41 @@ export default function NotebookPage() {
             document.removeEventListener('keydown', handleEscape);
         };
     }, []);
+
+    useEffect(() => {
+        const handleShortcut = (event) => {
+            if (isEditableTarget(event.target)) {
+                return;
+            }
+            const lowerKey = event.key.toLowerCase();
+            if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+                event.preventDefault();
+                applyLayoutMode('triple');
+                setShowAddSource(true);
+                return;
+            }
+            if ((event.metaKey || event.ctrlKey) && lowerKey === 'n') {
+                event.preventDefault();
+                openNewNote();
+                return;
+            }
+            if ((event.metaKey || event.ctrlKey) && lowerKey === 'f' && selectedArticle) {
+                event.preventDefault();
+                readerSearchInputRef.current?.focus();
+                readerSearchInputRef.current?.select();
+                return;
+            }
+            if (!event.metaKey && !event.ctrlKey && (lowerKey === 'j' || lowerKey === 'k')) {
+                event.preventDefault();
+                centerBodyRef.current?.scrollBy({
+                    top: lowerKey === 'j' ? 140 : -140,
+                    behavior: 'smooth',
+                });
+            }
+        };
+        document.addEventListener('keydown', handleShortcut);
+        return () => document.removeEventListener('keydown', handleShortcut);
+    }, [applyLayoutMode, selectedArticle]);
 
     const syncNotebookState = useCallback((detail) => {
         setNotebook(detail);
@@ -683,13 +669,17 @@ export default function NotebookPage() {
             try {
                 setIsPageLoading(true);
                 setPageError('');
-                const [user, detail] = await Promise.all([
+                const [user, detail, currentSettings] = await Promise.all([
                     appApi.auth.getCurrentUser(),
                     appApi.notebooks.getDetail(id),
+                    appApi.settings.get(),
                 ]);
                 if (!isMounted) return;
                 setCurrentUser(user);
                 syncNotebookState(detail);
+                const preferredLayoutMode = resolveLayoutMode(currentSettings?.layoutMode);
+                setLayoutMode(preferredLayoutMode);
+                persistLayoutMode(preferredLayoutMode);
             } catch (err) {
                 if (!isMounted) return;
                 if (isAuthError(err)) {
@@ -726,8 +716,6 @@ export default function NotebookPage() {
         setTranslationLoading(false);
         setTranslationLanguage('');
         setTranslationError('');
-        setPdfOutline([]);
-        setPdfRequestedPageNumber(null);
         setChatReadingCursor({
             page: null,
             sectionId: selectedArticle?.toc?.[0]?.id || null,
@@ -768,6 +756,7 @@ export default function NotebookPage() {
                 window.clearTimeout(timeoutId);
             }
         };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
         id,
         redirectToLogin,
@@ -777,40 +766,161 @@ export default function NotebookPage() {
         syncNotebookState,
     ]);
 
-    const articleRenderMode = selectedArticle?.renderMode || 'markdown';
-    const articleCanDisplayPdf = articleRenderMode === 'pdf' && Boolean(selectedArticle?.fileUrl);
-    const articleContentReady = selectedArticle?.contentReady ?? Boolean(selectedArticle?.content?.trim());
-    const articleDisplayBlocked = Boolean(selectedArticle) && !articleCanDisplayPdf && !articleContentReady;
-    const articleAiBlocked = !articleContentReady;
-    const fallbackPdfToc = useMemo(() => (
-        Array.isArray(selectedArticle?.toc) ? selectedArticle.toc : []
-    ), [selectedArticle?.toc]);
-    const toc = useMemo(() => {
-        if (articleRenderMode === 'pdf') {
-            return pdfOutline.length > 0 ? pdfOutline : fallbackPdfToc;
+    useEffect(() => {
+        if (!id || !selectedArticle?.id || !selectedArticle?.contentReady) {
+            return undefined;
         }
-        return renderedToc;
-    }, [articleRenderMode, fallbackPdfToc, pdfOutline, renderedToc]);
+        if (articleReadyRefreshRef.current.has(selectedArticle.id)) {
+            return undefined;
+        }
+        articleReadyRefreshRef.current.add(selectedArticle.id);
+        const timer = window.setTimeout(async () => {
+            try {
+                const detail = await appApi.notebooks.getDetail(id);
+                syncNotebookState(detail);
+            } catch (err) {
+                if (isAuthError(err)) {
+                    redirectToLogin();
+                }
+            }
+        }, 900);
+        return () => window.clearTimeout(timer);
+    }, [id, redirectToLogin, selectedArticle?.contentReady, selectedArticle?.id, syncNotebookState]);
+
+    const articleContentReady = selectedArticle?.contentReady ?? Boolean(selectedArticle?.content?.trim());
+    const articleDisplayBlocked = Boolean(selectedArticle) && !articleContentReady;
+    const showTopbarReaderSearch = Boolean(selectedArticle) && !articleDisplayBlocked;
+    const articleAiBlocked = !articleContentReady;
+    const isChatTemporarilyBlocked = Boolean(
+        selectedArticle
+        && !articleContentReady
+        && selectedArticle.parseStatus !== 'failed',
+    );
+    const toc = renderedToc;
     const strippedContent = useMemo(() => (
-        selectedArticle && articleRenderMode !== 'pdf' && !articleDisplayBlocked
+        selectedArticle && !articleDisplayBlocked
             ? stripFirstH1(selectedArticle.content)
             : ''
-    ), [selectedArticle, articleDisplayBlocked, articleRenderMode]);
+    ), [selectedArticle, articleDisplayBlocked]);
     const renderedArticleContent = useMemo(() => (
         showTranslation && translationText ? stripFirstH1(translationText) : strippedContent
     ), [showTranslation, translationText, strippedContent]);
-    const readerSearchMatches = useMemo(() => {
-        if (!readerSearchQuery.trim()) return [];
-        const lower = renderedArticleContent.toLowerCase();
-        const keyword = readerSearchQuery.trim().toLowerCase();
-        const matches = [];
-        let cursor = lower.indexOf(keyword);
-        while (cursor !== -1 && matches.length < 100) {
-            matches.push(cursor);
-            cursor = lower.indexOf(keyword, cursor + keyword.length);
+    const layoutHasLeftRail = layoutMode === 'reader';
+    const layoutHasRightRail = layoutMode !== 'triple';
+    const notebookDisplayIcon = useMemo(() => {
+        if (!notebook) {
+            return {
+                type: 'icon',
+                value: I.notebook,
+            };
         }
-        return matches;
-    }, [readerSearchQuery, renderedArticleContent]);
+        if ((notebook.articles || []).length === 0) {
+            return {
+                type: 'icon',
+                value: I.notebook,
+            };
+        }
+        const emoji = String(notebook.emoji || '').trim();
+        if (emoji) {
+            return {
+                type: 'emoji',
+                value: emoji,
+            };
+        }
+        return {
+            type: 'icon',
+            value: I.notebook,
+        };
+    }, [notebook]);
+    const notebookPageStyle = useMemo(() => ({
+        '--nb-reader-column-width': `${pageWidth}px`,
+    }), [pageWidth]);
+    const triggerReaderSearchJump = useCallback((direction = 'next') => {
+        const hits = readerSearchHitRefs.current || [];
+        if (!hits.length) {
+            return;
+        }
+        setReaderSearchShouldJump(true);
+        setReaderSearchIndex((prev) => {
+            if (direction === 'prev') {
+                return prev <= 0 ? hits.length - 1 : prev - 1;
+            }
+            return prev >= hits.length - 1 ? 0 : prev + 1;
+        });
+    }, []);
+    const isTocItemActive = useCallback((tocItem) => (
+        Boolean(tocItem?.id) && chatReadingCursor.sectionId === tocItem.id
+    ), [chatReadingCursor.sectionId]);
+
+    useEffect(() => {
+        const articleBody = getArticleBodyElement(centerBodyRef.current);
+        if (!articleBody || articleDisplayBlocked || !readerSearchQuery.trim()) {
+            readerSearchHitRefs.current = [];
+            setReaderSearchMatchCount(0);
+            setReaderSearchShouldJump(false);
+            const selection = window.getSelection();
+            selection?.removeAllRanges();
+            return;
+        }
+        const hits = collectReaderSearchMatches(articleBody, readerSearchQuery, 200);
+        readerSearchHitRefs.current = hits;
+        setReaderSearchMatchCount(hits.length);
+        setReaderSearchIndex((prev) => (
+            hits.length === 0 ? 0 : Math.min(prev, hits.length - 1)
+        ));
+        setReaderSearchShouldJump(false);
+    }, [
+        articleDisplayBlocked,
+        readerSearchQuery,
+        renderedArticleContent,
+        selectedArticle?.id,
+        showTranslation,
+        translationText,
+    ]);
+
+    useEffect(() => {
+        if (!readerSearchShouldJump) {
+            return;
+        }
+        const hits = readerSearchHitRefs.current || [];
+        if (!hits.length) {
+            setReaderSearchShouldJump(false);
+            return;
+        }
+        const safeIndex = Math.min(Math.max(readerSearchIndex, 0), hits.length - 1);
+        if (safeIndex !== readerSearchIndex) {
+            setReaderSearchIndex(safeIndex);
+            return;
+        }
+        const current = hits[safeIndex];
+        if (!current?.textNode) {
+            return;
+        }
+        try {
+            const range = document.createRange();
+            range.setStart(current.textNode, current.start);
+            range.setEnd(current.textNode, current.end);
+            const selection = window.getSelection();
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+            const container = centerBodyRef.current;
+            const rangeRect = range.getBoundingClientRect();
+            if (container && rangeRect.height > 0) {
+                const containerRect = container.getBoundingClientRect();
+                const deltaTop = rangeRect.top - containerRect.top - (container.clientHeight * 0.3);
+                container.scrollBy({
+                    top: deltaTop,
+                    behavior: 'smooth',
+                });
+            } else {
+                current.textNode.parentElement?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            }
+        } catch {
+            // ignore invalid range during fast content refresh
+        } finally {
+            setReaderSearchShouldJump(false);
+        }
+    }, [readerSearchIndex, readerSearchShouldJump]);
 
     // AI Summary
     const handleSummary = async () => {
@@ -876,17 +986,24 @@ export default function NotebookPage() {
         const nextValue = !showAiChat;
         setShowAiChat(nextValue);
         if (nextValue) {
-            setSourceExpanded(false);
+            applyLayoutMode('triple');
+            if (isChatTemporarilyBlocked) {
+                pushChatFeedback('正文解析中，助手暂不可提问');
+            } else {
+                pushChatFeedback('已打开 AI 助手');
+            }
             if (!selectedArticle) setChatScope('notebook');
             try {
                 const sessions = await appApi.settings.listConversations({ notebookId: notebook.id });
                 setChatSessions(sessions);
-            } catch {}
+            } catch (error) {
+                console.error('chat.sessions_load_failed', error);
+            }
         }
     };
 
     const handleSendChat = async () => {
-        if (!chatInput.trim() || !notebook || isChatStreaming) return;
+        if (!chatInput.trim() || !notebook || isChatStreaming || isChatTemporarilyBlocked) return;
         const prompt = chatInput.trim();
         const isFollowUp = Boolean(chatConversationId || chatMessages.some((item) => item.role === 'assistant'));
         const pendingAssistantId = createChatMessageId();
@@ -1003,17 +1120,6 @@ export default function NotebookPage() {
 
     const handleTocClick = useCallback((event, tocItem) => {
         event.preventDefault();
-        if (articleRenderMode === 'pdf') {
-            if (tocItem?.pageNumber) {
-                setPdfRequestedPageNumber(tocItem.pageNumber);
-                setChatReadingCursor({
-                    page: tocItem.pageNumber,
-                    sectionId: tocItem.id || null,
-                    blockId: null,
-                });
-            }
-            return;
-        }
         const container = centerBodyRef.current;
         if (!container) return;
 
@@ -1033,10 +1139,10 @@ export default function NotebookPage() {
             sectionId: tocItem?.id || null,
             blockId: null,
         });
-    }, [articleRenderMode]);
+    }, []);
 
     useEffect(() => {
-        if (!selectedArticle || articleDisplayBlocked || articleRenderMode === 'pdf') {
+        if (!selectedArticle || articleDisplayBlocked) {
             setRenderedToc([]);
             return undefined;
         }
@@ -1066,9 +1172,9 @@ export default function NotebookPage() {
             window.cancelAnimationFrame(frameId);
             container.removeEventListener('scroll', syncScrollSpy);
         };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
         articleDisplayBlocked,
-        articleRenderMode,
         renderedArticleContent,
         selectedArticle?.id,
         showTranslation,
@@ -1192,11 +1298,12 @@ export default function NotebookPage() {
             const article = notebook.articles.find((item) => item.id === citation.articleId);
             if (article) {
                 handleSelectArticle(article);
+                pushChatFeedback(`已跳转：${article.title}`);
             }
             return;
         }
         navigate(`/notebook/${citation.notebookId}?articleId=${citation.articleId}`);
-    }, [chatConversationId, handleSelectArticle, navigate, notebook, trackAiEvent]);
+    }, [chatConversationId, handleSelectArticle, navigate, notebook, pushChatFeedback, trackAiEvent]);
 
     const handleCopySummary = useCallback(() => {
         if (!summaryText.trim()) return;
@@ -1223,7 +1330,43 @@ export default function NotebookPage() {
     const clearChat = () => {
         setChatMessages([]);
         setChatConversationId(null);
+        pushChatFeedback('已清空当前会话');
     };
+
+    const handleSwitchConversation = useCallback((session) => {
+        setChatConversationId(session.id);
+        setChatMessages((session.messages || []).map((message, index) => ({
+            id: `${session.id}-${index}`,
+            role: message.role,
+            content: message.content || '',
+            route: message.route || null,
+            routeBadge: message.routeBadge || '',
+            relatedArticles: [],
+            evidenceSpans: [],
+            isStreaming: false,
+        })));
+        pushChatFeedback(`已切换到：${session.title}`);
+    }, [pushChatFeedback]);
+
+    const handleDeleteConversation = useCallback(async (session) => {
+        if (!notebook?.id) return;
+        try {
+            await appApi.settings.deleteConversation({ notebookId: notebook.id, conversationId: session.id });
+            setChatSessions((prev) => prev.filter((item) => item.id !== session.id));
+            if (chatConversationId === session.id) {
+                setChatConversationId(null);
+                setChatMessages([]);
+            }
+            pushChatFeedback('会话已删除');
+        } catch (err) {
+            pushChatFeedback(err?.message || '删除会话失败');
+        }
+    }, [chatConversationId, notebook?.id, pushChatFeedback]);
+
+    const handleLogout = useCallback(async () => {
+        await appApi.auth.logout();
+        redirectToLogin();
+    }, [redirectToLogin]);
 
     // Note handlers – use modal
     const openNewNote = () => {
@@ -1237,13 +1380,18 @@ export default function NotebookPage() {
 
     const exportNote = async (noteId) => {
         if (!notebook) return;
-        const markdown = await appApi.notes.exportNote(notebook.id, noteId);
-        const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = `${noteId}.md`;
-        link.click();
-        URL.revokeObjectURL(link.href);
+        try {
+            setNotesFeedback('');
+            const { blob, filename } = await appApi.notes.exportNote(notebook.id, noteId);
+            const link = document.createElement('a');
+            const blobUrl = URL.createObjectURL(blob);
+            link.href = blobUrl;
+            link.download = filename || 'note.md';
+            link.click();
+            URL.revokeObjectURL(blobUrl);
+        } catch (err) {
+            setNotesFeedback(err.message || '导出失败，请稍后重试');
+        }
     };
 
     const handleSaveNote = async (updatedNote) => {
@@ -1261,6 +1409,7 @@ export default function NotebookPage() {
         if (!notebook) return;
         await appApi.notes.remove(notebook.id, noteId);
         setNotes((prev) => prev.filter((item) => item.id !== noteId));
+        setNoteActionMenuId((current) => (current === noteId ? null : current));
         if (noteModalData?.id === noteId) {
             setNoteModalData(null);
         }
@@ -1268,7 +1417,17 @@ export default function NotebookPage() {
 
     const handleSourcesImported = useCallback((detail) => {
         syncNotebookState(detail);
+        setIsSourceDetailMode(false);
     }, [syncNotebookState]);
+
+    const handleStartSourceSearch = useCallback(({ query, mode }) => {
+        applyLayoutMode('triple');
+        setPendingSourceSearch({
+            query,
+            mode,
+            requestId: Date.now(),
+        });
+    }, [applyLayoutMode]);
 
     const handleRetryArticle = useCallback(async (articleId) => {
         if (!notebook?.id) return;
@@ -1294,10 +1453,14 @@ export default function NotebookPage() {
     }, [notebook?.id]);
 
     useEffect(() => {
-        if (notebook && notebook.articles.length === 0 && !showAddSource) {
-            setShowAddSource(true);
+        if (!notebook?.id) {
+            return;
         }
-    }, [notebook, showAddSource]);
+        if (notebook.articles.length === 0 && autoOpenedEmptyNotebookId !== notebook.id) {
+            setShowAddSource(true);
+            setAutoOpenedEmptyNotebookId(notebook.id);
+        }
+    }, [autoOpenedEmptyNotebookId, notebook?.articles.length, notebook?.id]);
 
     if (isPageLoading) {
         return (
@@ -1324,30 +1487,144 @@ export default function NotebookPage() {
     }
 
     return (
-        <div className="notebook-page">
+        <div className="notebook-page" style={notebookPageStyle}>
             {/* Top Bar */}
-            <header className="nb-topbar">
+            <header
+                className="nb-topbar"
+                data-layout={layoutMode}
+                data-left-rail={layoutHasLeftRail ? 'true' : 'false'}
+                data-right-rail={layoutHasRightRail ? 'true' : 'false'}
+            >
                 <div className="nb-topbar-left">
                     <button className="nb-icon-btn" onClick={() => navigate('/home')} title="返回">{I.back}</button>
                     <div className="nb-topbar-title">
-                        <span className="nb-topbar-emoji">{notebook.emoji}</span>
+                        <span className={`nb-topbar-emoji ${notebookDisplayIcon.type === 'emoji' ? 'emoji' : 'icon'}`}>
+                            {notebookDisplayIcon.value}
+                        </span>
                         <InlineEditableText
                             value={notebook.title}
                             className="nb-topbar-title-trigger"
                             inputClassName="nb-topbar-title-input"
+                            showEditIcon={false}
                             onSave={handleRenameNotebook}
                         />
                     </div>
                 </div>
+                <div className="nb-topbar-center">
+                    {showTopbarReaderSearch ? (
+                        <div className="nb-topbar-reader-search">
+                            <input
+                                ref={readerSearchInputRef}
+                                className="nb-topbar-reader-search-input"
+                                placeholder="文内搜索..."
+                                value={readerSearchQuery}
+                                onChange={(event) => {
+                                    setReaderSearchQuery(event.target.value);
+                                    setReaderSearchIndex(0);
+                                    setReaderSearchShouldJump(false);
+                                }}
+                                onKeyDown={(event) => {
+                                    if (event.key === 'Enter') {
+                                        event.preventDefault();
+                                        triggerReaderSearchJump(event.shiftKey ? 'prev' : 'next');
+                                    }
+                                }}
+                            />
+                            <span className="nb-topbar-reader-search-meta">{readerSearchMatchCount > 0 ? `${Math.min(readerSearchIndex + 1, readerSearchMatchCount)}/${readerSearchMatchCount}` : '0/0'}</span>
+                            <button type="button" className="nb-icon-btn-sm" onClick={() => triggerReaderSearchJump('prev')} disabled={!readerSearchMatchCount}>↑</button>
+                            <button type="button" className="nb-icon-btn-sm" onClick={() => triggerReaderSearchJump('next')} disabled={!readerSearchMatchCount}>↓</button>
+                        </div>
+                    ) : null}
+                </div>
                 <div className="nb-topbar-right">
+                    <button
+                        className={`nb-icon-btn ${showAiChat ? 'active' : ''}`}
+                        onClick={handleToggleChat}
+                        title={isChatTemporarilyBlocked ? '正文解析中，助手暂不可提问' : 'AI 助手'}
+                    >
+                        {I.chat}
+                    </button>
+                    <div className="nb-layout-pref-wrapper" ref={layoutPrefRef}>
+                        <button
+                            className={`nb-icon-btn ${showLayoutPrefMenu ? 'active' : ''}`}
+                            onClick={() => setShowLayoutPrefMenu((current) => !current)}
+                            title="页面布局"
+                        >
+                            {I.layout}
+                        </button>
+                        {showLayoutPrefMenu ? (
+                            <div className="nb-layout-pref-menu">
+                                {LAYOUT_OPTIONS.map((option) => (
+                                    <button
+                                        key={option.id}
+                                        type="button"
+                                        className={`nb-layout-pref-item ${layoutMode === option.id ? 'active' : ''}`}
+                                        onClick={() => {
+                                            applyLayoutMode(option.id);
+                                            setShowLayoutPrefMenu(false);
+                                        }}
+                                    >
+                                        <span className="nb-layout-pref-label">{option.label}</span>
+                                        <span className="nb-layout-pref-desc">{option.description}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        ) : null}
+                    </div>
                     <button className="nb-icon-btn" onClick={toggleTheme} title="切换主题">{I.theme}</button>
-                    <button className="nb-icon-btn" onClick={() => setShowSettings(true)} title="设置">{I.settings}</button>
-                    <div className="nb-avatar">{currentUser?.name?.charAt(0) || 'U'}</div>
+                    <button
+                        className="nb-icon-btn"
+                        onClick={() => {
+                            setSettingsInitialTab('language');
+                            setShowSettings(true);
+                        }}
+                        title="设置"
+                    >
+                        {I.settings}
+                    </button>
+                    <div className="nb-account-wrapper">
+                        <button type="button" className="nb-avatar-btn" onClick={() => setShowAccountMenu((current) => !current)}>
+                            <div className="nb-avatar">
+                                {(currentUser?.avatar || getStoredSession()?.user?.avatar) ? (
+                                    <img
+                                        className="nb-avatar-image"
+                                        src={currentUser?.avatar || getStoredSession()?.user?.avatar}
+                                        alt={currentUser?.name || getStoredSession()?.user?.name || '用户头像'}
+                                    />
+                                ) : (
+                                    currentUser?.name?.charAt(0) || getStoredSession()?.user?.name?.charAt(0) || 'U'
+                                )}
+                            </div>
+                        </button>
+                        <AccountMenu
+                            open={showAccountMenu}
+                            user={currentUser || getStoredSession()?.user}
+                            onClose={() => setShowAccountMenu(false)}
+                            onOpenSettings={() => {
+                                setShowAccountMenu(false);
+                                setSettingsInitialTab('account');
+                                setShowSettings(true);
+                            }}
+                            onLogout={handleLogout}
+                        />
+                    </div>
                 </div>
             </header>
 
             {/* Main Layout */}
-            <div className="nb-layout" data-layout={layoutMode}>
+            <div
+                className="nb-layout"
+                data-layout={layoutMode}
+                data-left-rail={layoutHasLeftRail ? 'true' : 'false'}
+                data-right-rail={layoutHasRightRail ? 'true' : 'false'}
+            >
+                {layoutHasLeftRail ? (
+                    <div className="nb-collapsed-rail nb-collapsed-rail-left">
+                        <button type="button" className="nb-collapsed-rail-btn" onClick={() => applyLayoutMode('focus')} title="展开左栏">
+                            {I.collapseLeft}
+                        </button>
+                    </div>
+                ) : null}
                 {/* ====== LEFT COLUMN ====== */}
                 {layoutMode !== 'reader' ? (
                 <div className="nb-left">
@@ -1355,13 +1632,18 @@ export default function NotebookPage() {
                         <div className="nb-panel-header">
                             <span className="nb-panel-icon">{I.toc}</span>
                             <span className="nb-panel-title">文章目录</span>
-                            <button type="button" className="nb-panel-collapse" onClick={() => setLayoutMode('reader')}>收起侧栏</button>
+                            <button type="button" className="nb-panel-collapse-icon" onClick={() => applyLayoutMode('reader')} title="收起左栏">
+                                {I.collapseLeft}
+                            </button>
                         </div>
                         <div className="nb-panel-body nb-list-panel-body">
                             {toc.length > 0 ? (
                                 <ul className="nb-toc-list nb-list-scroll">
                                     {toc.map((item, idx) => (
-                                        <li key={`${item.id || item.title}-${item.matchIndex || 0}-${idx}`} className={`nb-toc-item nb-toc-level-${item.level}`}>
+                                        <li
+                                            key={`${item.id || item.title}-${item.matchIndex || 0}-${idx}`}
+                                            className={`nb-toc-item nb-toc-level-${item.level} ${isTocItemActive(item) ? 'active' : ''}`}
+                                        >
                                             <a href={`#${item.id}`} onClick={(event) => handleTocClick(event, item)}>{item.title}</a>
                                         </li>
                                     ))}
@@ -1372,7 +1654,7 @@ export default function NotebookPage() {
                         </div>
                     </div>
 
-                    <div className="nb-panel nb-left-bottom" style={{ flex: 1 }}>
+                    <div className="nb-panel nb-left-bottom">
                         <div className="nb-panel-header">
                             <span className="nb-panel-icon">{I.paper}</span>
                             <span className="nb-panel-title">来源文章</span>
@@ -1381,30 +1663,50 @@ export default function NotebookPage() {
                         <div className="nb-panel-body nb-list-panel-body">
                             {notebook.articles.length > 0 ? (
                                 <ul className="nb-article-list nb-list-scroll">
-                                    {notebook.articles.map(article => (
-                                        <li
-                                            key={article.id}
-                                            className={`nb-article-item ${selectedArticle?.id === article.id ? 'active' : ''}`}
-                                            onClick={() => handleSelectArticle(article)}
-                                            onContextMenu={(event) => handleOpenArticleContextMenu(event, article)}
-                                            title="右键可编辑或删除来源"
-                                        >
-                                            <span className="nb-article-icon">{getArticleIcon(article.type)}</span>
-                                            <span className="nb-article-title-text">{article.title}</span>
-                                            <span className={`nb-status-pill ${article.parseStatus === 'failed' ? 'failed' : (article.contentReady ? 'ready' : 'processing')}`}>
-                                                {article.parseStatus === 'failed' ? '失败' : (article.contentReady ? '就绪' : '解析中')}
-                                            </span>
-                                            {article.parseStatus === 'failed' ? (
-                                                <button type="button" className="nb-article-retry" onClick={(event) => { event.stopPropagation(); void handleRetryArticle(article.id); }}>重试</button>
-                                            ) : null}
-                                            {articleActionPendingId === article.id ? (
-                                                <span className="nb-article-action-state">处理中</span>
-                                            ) : null}
-                                        </li>
-                                    ))}
+                                    {notebook.articles.map(article => {
+                                        const articleIcon = resolveArticleIcon(article);
+                                        return (
+                                            <li
+                                                key={article.id}
+                                                className={`nb-article-item ${selectedArticle?.id === article.id ? 'active' : ''}`}
+                                                onClick={() => handleSelectArticle(article)}
+                                                onContextMenu={(event) => handleOpenArticleContextMenu(event, article)}
+                                                title="右键可编辑或删除来源"
+                                            >
+                                                {articleIcon.type === 'favicon' ? (
+                                                    <span className="nb-article-icon-wrap">
+                                                        <img
+                                                            className="nb-article-favicon"
+                                                            src={articleIcon.value}
+                                                            alt=""
+                                                            loading="lazy"
+                                                            onError={(event) => {
+                                                                event.currentTarget.style.display = 'none';
+                                                                const fallback = event.currentTarget.parentElement?.querySelector('.nb-article-icon-fallback');
+                                                                if (fallback) fallback.style.display = 'inline-flex';
+                                                            }}
+                                                        />
+                                                        <span className="nb-article-icon nb-article-icon-fallback">{articleIcon.fallback || I.article}</span>
+                                                    </span>
+                                                ) : (
+                                                    <span className="nb-article-icon">{articleIcon.value}</span>
+                                                )}
+                                                <span className="nb-article-title-text">{article.title}</span>
+                                                <span className={`nb-status-pill ${article.parseStatus === 'failed' ? 'failed' : (article.contentReady ? 'ready' : 'processing')}`}>
+                                                    {article.parseStatus === 'failed' ? '失败' : (article.contentReady ? '就绪' : '解析中')}
+                                                </span>
+                                                {article.parseStatus === 'failed' ? (
+                                                    <button type="button" className="nb-article-retry" onClick={(event) => { event.stopPropagation(); void handleRetryArticle(article.id); }}>重试</button>
+                                                ) : null}
+                                                {articleActionPendingId === article.id ? (
+                                                    <span className="nb-article-action-state">处理中</span>
+                                                ) : null}
+                                            </li>
+                                        );
+                                    })}
                                 </ul>
                             ) : (
-                                <div className="nb-empty-hint"><p>暂无来源文章</p></div>
+                                <div className="nb-empty-hint" />
                             )}
                             {articleContextMenu ? (
                                 <div
@@ -1455,25 +1757,9 @@ export default function NotebookPage() {
                     {selectedArticle ? (
                         <>
                             <div className="nb-article-toolbar">
-                                <div className="nb-layout-toggle-group">
-                                    {[
-                                        { id: 'triple', label: '三栏' },
-                                        { id: 'focus', label: '双栏' },
-                                        { id: 'reader', label: '阅读' },
-                                    ].map((item) => (
-                                        <button
-                                            key={item.id}
-                                            type="button"
-                                            className={`nb-layout-toggle ${layoutMode === item.id ? 'active' : ''}`}
-                                            onClick={() => setLayoutMode(item.id)}
-                                        >
-                                            {item.label}
-                                        </button>
-                                    ))}
-                                </div>
                                 <div className="nb-toolbar-left">
                                     <div className="nb-toolbar-title-row">
-                                        <InlineEditableText value={selectedArticle.title} className="nb-toolbar-title-trigger" inputClassName="nb-toolbar-title-input" onSave={async (nextTitle) => { const detail = await appApi.sources.updateArticle({ notebookId: notebook.id, articleId: selectedArticle.id, title: nextTitle }); syncNotebookState(detail); }} />
+                                        <InlineEditableText value={selectedArticle.title} className="nb-toolbar-title-trigger" inputClassName="nb-toolbar-title-input" showEditIcon={false} onSave={async (nextTitle) => { const detail = await appApi.sources.updateArticle({ notebookId: notebook.id, articleId: selectedArticle.id, title: nextTitle }); syncNotebookState(detail); }} />
                                         {selectedArticle.sourceUrl ? (
                                             <a
                                                 href={selectedArticle.sourceUrl}
@@ -1511,9 +1797,8 @@ export default function NotebookPage() {
                                     </button>
                                     <button
                                         className={`nb-icon-btn ${showAiChat ? 'active' : ''}`}
-                                        title={selectedArticle && articleAiBlocked ? '正文准备完成后才可针对文章问答' : 'AI 助手'}
+                                        title={isChatTemporarilyBlocked ? '正文解析中，助手暂不可提问' : 'AI 助手'}
                                         onClick={handleToggleChat}
-                                        disabled={selectedArticle ? articleAiBlocked : false}
                                     >
                                         {I.chat}
                                     </button>
@@ -1528,6 +1813,34 @@ export default function NotebookPage() {
                                                         <input type="range" min="0.8" max="1.4" step="0.05" value={fontSize} onChange={(e) => setFontSize(parseFloat(e.target.value))} />
                                                         <span className="nb-slider-value">{fontSize.toFixed(2)}em</span>
                                                         <span>大</span>
+                                                    </div>
+                                                </div>
+                                                <div className="nb-dropdown-section">
+                                                    <label className="nb-dropdown-label">英文字体</label>
+                                                    <div className="nb-dropdown-select-wrap">
+                                                        <select
+                                                            className="nb-dropdown-select"
+                                                            value={fontFamilyLatin}
+                                                            onChange={(event) => setFontFamilyLatin(event.target.value)}
+                                                        >
+                                                            {LATIN_FONT_OPTIONS.map((option) => (
+                                                                <option key={option.id} value={option.id}>{option.label}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <div className="nb-dropdown-section">
+                                                    <label className="nb-dropdown-label">中文字体</label>
+                                                    <div className="nb-dropdown-select-wrap">
+                                                        <select
+                                                            className="nb-dropdown-select"
+                                                            value={fontFamilyCjk}
+                                                            onChange={(event) => setFontFamilyCjk(event.target.value)}
+                                                        >
+                                                            {CJK_FONT_OPTIONS.map((option) => (
+                                                                <option key={option.id} value={option.id}>{option.label}</option>
+                                                            ))}
+                                                        </select>
                                                     </div>
                                                 </div>
                                                 <div className="nb-dropdown-section">
@@ -1546,24 +1859,14 @@ export default function NotebookPage() {
                             </div>
 
                             <div className="nb-reading-progress"><div className="nb-reading-progress-bar" style={{ width: `${readingProgress}%` }} /></div>
-                            <div className="nb-reader-toolbar">
-                                <input className="input nb-reader-search-input" placeholder="文内搜索..." value={readerSearchQuery} onChange={(event) => { setReaderSearchQuery(event.target.value); setReaderSearchIndex(0); }} />
-                                <span className="nb-reader-search-meta">{readerSearchMatches.length > 0 ? `${Math.min(readerSearchIndex + 1, readerSearchMatches.length)}/${readerSearchMatches.length}` : '0/0'}</span>
-                                <button type="button" className="nb-icon-btn" onClick={() => setReaderSearchIndex((prev) => Math.max(prev - 1, 0))} disabled={!readerSearchMatches.length}>↑</button>
-                                <button type="button" className="nb-icon-btn" onClick={() => setReaderSearchIndex((prev) => Math.min(prev + 1, readerSearchMatches.length - 1))} disabled={!readerSearchMatches.length}>↓</button>
-                            </div>
                             <div className="nb-center-body" ref={centerBodyRef}>
                                 <ArticleContentPane
                                     articleId={selectedArticle.id}
-                                    articleFileUrl={selectedArticle.fileUrl}
                                     articleProcessingHint={selectedArticle.processingHint}
                                     articleDisplayBlocked={articleDisplayBlocked}
-                                    articleRenderMode={articleRenderMode}
                                     renderedArticleContent={renderedArticleContent}
-                                    fallbackToc={fallbackPdfToc}
                                     fontSize={fontSize}
                                     pageWidth={pageWidth}
-                                    pdfRequestedPageNumber={pdfRequestedPageNumber}
                                     showSummary={showSummary}
                                     summaryLoading={summaryLoading}
                                     summaryText={summaryText}
@@ -1574,8 +1877,6 @@ export default function NotebookPage() {
                                     translationError={translationError}
                                     setShowSummary={setShowSummary}
                                     setShowTranslation={setShowTranslation}
-                                    setPdfOutline={setPdfOutline}
-                                    setPdfRequestedPageNumber={setPdfRequestedPageNumber}
                                     onCopySummary={handleCopySummary}
                                 />
                             </div>
@@ -1590,10 +1891,10 @@ export default function NotebookPage() {
                 </div>
 
                 {/* ====== RIGHT COLUMN ====== */}
-                {layoutMode !== 'reader' ? (
+                {layoutMode === 'triple' ? (
                 <div className="nb-right">
                     {showAiChat ? (
-                        <div className="nb-panel nb-right-full nb-chat-panel">
+                        <div className={`nb-panel nb-right-full nb-chat-panel ${isChatTemporarilyBlocked ? 'blocked' : ''}`}>
                             <div className="nb-panel-header nb-chat-header">
                                 <span className="nb-panel-title">AI 助手</span>
                                 <div className="nb-chat-header-actions">
@@ -1601,14 +1902,28 @@ export default function NotebookPage() {
                                     <button className="nb-icon-btn-sm" onClick={() => setShowAiChat(false)} title="关闭">{I.close}</button>
                                 </div>
                             </div>
+                            {isChatTemporarilyBlocked ? (
+                                <div className="nb-chat-blocking-banner">正文解析中，助手暂不可提问</div>
+                            ) : null}
                             <div className="nb-chat-sessions">
-                                <button type="button" className="nb-chat-session-new" onClick={() => { setChatConversationId(null); setChatMessages([]); }}>新建对话</button>
+                                <button
+                                    type="button"
+                                    className="nb-chat-session-new"
+                                    onClick={() => {
+                                        setChatConversationId(null);
+                                        setChatMessages([]);
+                                        pushChatFeedback('已创建空白对话');
+                                    }}
+                                >
+                                    新建对话
+                                </button>
+                                {chatFeedback ? <p className="nb-chat-feedback">{chatFeedback}</p> : null}
                                 {chatSessions.map((session) => (
                                     <div key={session.id} className={`nb-chat-session-item ${chatConversationId === session.id ? 'active' : ''}`}>
-                                        <button type="button" className="nb-chat-session-switch" onClick={() => { setChatConversationId(session.id); setChatMessages((session.messages || []).map((message, index) => ({ id: `${session.id}-${index}`, role: message.role, content: message.content || '' }))); }}>
+                                        <button type="button" className="nb-chat-session-switch" onClick={() => handleSwitchConversation(session)}>
                                             {session.title}
                                         </button>
-                                        <button type="button" className="nb-chat-session-delete" onClick={async () => { await appApi.settings.deleteConversation({ notebookId: notebook.id, conversationId: session.id }); setChatSessions((prev) => prev.filter((item) => item.id !== session.id)); if (chatConversationId === session.id) { setChatConversationId(null); setChatMessages([]); } }}>✕</button>
+                                        <button type="button" className="nb-chat-session-delete" onClick={() => { void handleDeleteConversation(session); }}>✕</button>
                                     </div>
                                 ))}
                             </div>
@@ -1617,10 +1932,14 @@ export default function NotebookPage() {
                                     <div className="nb-chat-welcome">
                                         <div className="nb-chat-welcome-icon">{I.sparkle}</div>
                                         <p className="nb-chat-welcome-title">有什么想问的?</p>
-                                        <p className="nb-chat-welcome-hint">{chatScope === 'article' ? '已加载当前文章内容，你可以提问、讨论或请求分析' : '当前使用 notebook 级对话，可以围绕整个研究空间提问。'}</p>
+                                        <p className="nb-chat-welcome-hint">
+                                            {isChatTemporarilyBlocked
+                                                ? '等待当前文章解析完成后即可提问'
+                                                : (chatScope === 'article' ? '围绕当前文章提问' : '围绕整个 notebook 提问')}
+                                        </p>
                                         <div className="nb-chat-quick-actions">
-                                            <button onClick={() => setChatInput('创建详细摘要')}>创建详细摘要</button>
-                                            <button onClick={() => setChatScope((current) => current === 'article' ? 'notebook' : 'article')}>{chatScope === 'article' ? '切换为 notebook 对话' : '切换为文章对话'}</button>
+                                            <button disabled={isChatTemporarilyBlocked} onClick={() => setChatInput('创建详细摘要')}>创建详细摘要</button>
+                                            <button disabled={isChatTemporarilyBlocked} onClick={() => setChatScope((current) => current === 'article' ? 'notebook' : 'article')}>{chatScope === 'article' ? '切换为 notebook 对话' : '切换为文章对话'}</button>
                                         </div>
                                     </div>
                                 )}
@@ -1683,49 +2002,48 @@ export default function NotebookPage() {
                             </div>
                             <div className="nb-chat-input-area">
                                 <div className="nb-chat-input-wrapper">
-                                    <textarea className="nb-chat-input nb-chat-textarea" placeholder={chatScope === 'article' ? '针对当前文章提问...' : '针对整个 notebook 提问...'} value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendChat(); } }} rows={3} />
-                                    <button className="nb-chat-send-btn" onClick={handleSendChat} disabled={!chatInput.trim() || isChatStreaming}>{I.send}</button>
+                                    <textarea className="nb-chat-input nb-chat-textarea" disabled={isChatTemporarilyBlocked} placeholder={isChatTemporarilyBlocked ? '正文解析中，请稍后...' : (chatScope === 'article' ? '针对当前文章提问...' : '针对整个 notebook 提问...')} value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendChat(); } }} rows={3} />
+                                    <button className="nb-chat-send-btn" onClick={handleSendChat} disabled={!chatInput.trim() || isChatStreaming || isChatTemporarilyBlocked}>{I.send}</button>
                                 </div>
                             </div>
                         </div>
-                    ) : sourceExpanded ? (
-                        <div className="nb-panel nb-right-full">
-                            <SourcePanel
-                                notebookId={notebook.id}
-                                searchQuery={searchQuery}
-                                setSearchQuery={setSearchQuery}
-                                onAddSource={() => setShowAddSource(true)}
-                                onCollapse={() => setSourceExpanded(false)}
-                                onSourcesImported={handleSourcesImported}
-                            />
-                        </div>
                     ) : (
                         <>
-                            <div className="nb-panel nb-right-top">
+                            <div className={`nb-panel ${isSourceDetailMode ? 'nb-right-full' : 'nb-right-top'}`}>
                                 <SourcePanel
                                     notebookId={notebook.id}
-                                    searchQuery={searchQuery}
-                                    setSearchQuery={setSearchQuery}
                                     onAddSource={() => setShowAddSource(true)}
-                                    onExpand={() => setSourceExpanded(true)}
+                                    onCollapsePanel={() => applyLayoutMode('focus')}
                                     onSourcesImported={handleSourcesImported}
+                                    onDetailViewChange={setIsSourceDetailMode}
+                                    pendingSearchRequest={pendingSourceSearch}
+                                    onSearchHandled={(requestId) => {
+                                        setPendingSourceSearch((current) => (current?.requestId === requestId ? null : current));
+                                    }}
                                 />
                             </div>
 
                             {/* Notes Panel */}
-                            <div className="nb-panel nb-right-bottom" style={{ flex: 1 }}>
+                            {!isSourceDetailMode ? (
+                            <div className="nb-panel nb-right-bottom">
                                 <div className="nb-panel-header">
                                     <span className="nb-panel-icon">{I.note}</span>
                                     <span className="nb-panel-title">笔记</span>
                                     <span className="nb-panel-badge">{notes.length}</span>
-                                    <button type="button" className="nb-panel-collapse" onClick={() => setLayoutMode('reader')}>收起右栏</button>
                                 </div>
                                 <div className="nb-panel-body nb-notes-body">
                                     <div className="nb-notes-filter">
                                         <input className="input" placeholder="按标签筛选笔记" value={noteFilterTag} onChange={(event) => setNoteFilterTag(event.target.value)} />
                                     </div>
+                                    {notesFeedback ? (
+                                        <p className="nb-notes-feedback">{notesFeedback}</p>
+                                    ) : null}
                                     <div className="nb-notes-list">
-                                        {notes.filter((note) => !noteFilterTag || (note.tags || []).includes(noteFilterTag)).map(note => (
+                                        {notes.filter((note) => {
+                                            const keyword = noteFilterTag.trim().toLowerCase();
+                                            if (!keyword) return true;
+                                            return (note.tags || []).some((tag) => String(tag).toLowerCase().includes(keyword));
+                                        }).map(note => (
                                             <div key={note.id} className="nb-note-card">
                                                 <div className="nb-note-card-inner" onClick={() => openExistingNote(note)}>
                                                     <div className="nb-note-card-icon">{I.edit}</div>
@@ -1733,7 +2051,24 @@ export default function NotebookPage() {
                                                         <span className="nb-note-card-title">{note.title}</span>
                                                         <span className="nb-note-card-sub">{note.type} · {note.sources} 个来源 · {note.time}</span>
                                                     </div>
-                                                    <button className="nb-note-card-more" onClick={(e) => { e.stopPropagation(); handleDeleteNote(note.id); }} title="删除">{I.more}</button>
+                                                    <button
+                                                        type="button"
+                                                        className="nb-note-card-more"
+                                                        onClick={(event) => {
+                                                            event.stopPropagation();
+                                                            setNoteActionMenuId((current) => (current === note.id ? null : note.id));
+                                                        }}
+                                                        title="更多操作"
+                                                    >
+                                                        {I.more}
+                                                    </button>
+                                                    {noteActionMenuId === note.id ? (
+                                                        <div ref={noteActionMenuRef} className="nb-note-card-menu">
+                                                            <button type="button" onClick={(event) => { event.stopPropagation(); setNoteActionMenuId(null); openExistingNote(note); }}>编辑</button>
+                                                            <button type="button" onClick={(event) => { event.stopPropagation(); setNoteActionMenuId(null); void exportNote(note.id); }}>导出</button>
+                                                            <button type="button" className="danger" onClick={(event) => { event.stopPropagation(); setNoteActionMenuId(null); void handleDeleteNote(note.id); }}>删除</button>
+                                                        </div>
+                                                    ) : null}
                                                 </div>
                                             </div>
                                         ))}
@@ -1747,18 +2082,28 @@ export default function NotebookPage() {
                                     </div>
                                 </div>
                             </div>
+                            ) : null}
                         </>
                     )}
                 </div>
                 ) : null}
+
+                {layoutHasRightRail ? (
+                    <div className="nb-collapsed-rail nb-collapsed-rail-right">
+                        <button type="button" className="nb-collapsed-rail-btn" onClick={() => applyLayoutMode('triple')} title="展开右栏">
+                            {I.collapseRight}
+                        </button>
+                    </div>
+                ) : null}
             </div>
 
-            {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+            {showSettings && <SettingsModal initialTab={settingsInitialTab} onClose={() => setShowSettings(false)} />}
             {showAddSource && (
                 <AddSourceModal
                     notebookId={notebook.id}
                     onClose={() => setShowAddSource(false)}
                     onImported={handleSourcesImported}
+                    onStartSearch={handleStartSourceSearch}
                 />
             )}
             {noteModalData && (

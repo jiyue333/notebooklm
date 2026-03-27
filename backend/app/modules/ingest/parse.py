@@ -9,6 +9,9 @@
 
 from __future__ import annotations
 
+import html
+import re
+
 import structlog
 
 from app.infra.providers.mineru.client import MinerUCloudClient
@@ -66,10 +69,20 @@ async def parse_to_markdown(
         # URL batch 失败 + 有 bytes → 回退文件 batch
         if content.raw_bytes:
             logger.info("parse.url_failed_fallback_upload", url=content.source_url)
-            return await client.parse_file(
-                content.raw_bytes, file_name=file_name,
-                data_id=data_id, model_version=model_version,
-            )
+            try:
+                md = await client.parse_file(
+                    content.raw_bytes, file_name=file_name,
+                    data_id=data_id, model_version=model_version,
+                )
+                if md:
+                    return md
+            except Exception as exc:
+                logger.info("parse.file_batch_failed", url=content.source_url, error=str(exc)[:200])
+            if content.route == DocRoute.HTML:
+                fallback = _fallback_html_bytes_to_markdown(content.raw_bytes, source_url=content.source_url)
+                if fallback:
+                    logger.warning("parse.local_html_fallback", url=content.source_url)
+                    return fallback
         return None
 
     # ====== FILE 来源: 文件 batch ======
@@ -138,3 +151,42 @@ def _default_ext(route: DocRoute) -> str:
         DocRoute.IMAGE: ".png",
         DocRoute.HTML: ".html",
     }.get(route, ".bin")
+
+
+def _fallback_html_bytes_to_markdown(raw_bytes: bytes, *, source_url: str | None) -> str:
+    text = raw_bytes.decode("utf-8", errors="replace")
+    stripped = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", text)
+    replacements = [
+        (r"(?i)<br\s*/?>", "\n"),
+        (r"(?i)</p\s*>", "\n\n"),
+        (r"(?i)</div\s*>", "\n\n"),
+        (r"(?i)</section\s*>", "\n\n"),
+        (r"(?i)</article\s*>", "\n\n"),
+        (r"(?i)</li\s*>", "\n"),
+        (r"(?is)<li[^>]*>", "- "),
+    ]
+    for pattern, replacement in replacements:
+        stripped = re.sub(pattern, replacement, stripped)
+
+    for level in range(6, 0, -1):
+        stripped = re.sub(
+            rf"(?is)<h{level}[^>]*>(.*?)</h{level}>",
+            lambda match: f"\n\n{'#' * level} {_strip_html_inline(match.group(1))}\n\n",
+            stripped,
+        )
+
+    stripped = re.sub(r"(?is)<title[^>]*>(.*?)</title>", lambda m: f"# {_strip_html_inline(m.group(1))}\n\n", stripped)
+    stripped = re.sub(r"(?is)<[^>]+>", " ", stripped)
+    stripped = html.unescape(stripped)
+    stripped = re.sub(r"\r\n?", "\n", stripped)
+    stripped = re.sub(r"[ \t]+\n", "\n", stripped)
+    stripped = re.sub(r"\n{3,}", "\n\n", stripped).strip()
+    if source_url:
+        stripped = f"来源：{source_url}\n\n{stripped}".strip()
+    return stripped
+
+
+def _strip_html_inline(value: str) -> str:
+    text = re.sub(r"(?is)<[^>]+>", " ", value)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()

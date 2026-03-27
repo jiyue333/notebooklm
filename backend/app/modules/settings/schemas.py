@@ -7,6 +7,10 @@ class SettingsUpdateRequest(BaseModel):
     outputLanguage: str | None = Field(default=None, max_length=64)
     themeColor: str | None = Field(default=None, max_length=64)
     colorMode: str | None = Field(default=None, max_length=32)
+    fontFamily: str | None = Field(default=None, max_length=64)
+    fontFamilyLatin: str | None = Field(default=None, max_length=64)
+    fontFamilyCjk: str | None = Field(default=None, max_length=64)
+    layoutMode: str | None = Field(default=None, max_length=32)
     customSystemPrompt: str | None = Field(default=None, max_length=4000)
     answerLengthPreference: str | None = Field(default=None, max_length=32)
     useDefaultModelConfig: bool | None = None
@@ -31,7 +35,7 @@ class SettingsUpdateRequest(BaseModel):
 
 class ProfileUpdateRequest(BaseModel):
     username: str = Field(min_length=1, max_length=255)
-    avatarUrl: str | None = Field(default=None, max_length=2048)
+    avatarUrl: str | None = Field(default=None, max_length=4_000_000)
 
 
 class PasswordUpdateRequest(BaseModel):

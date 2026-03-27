@@ -7,6 +7,7 @@ export default function InlineEditableText({
     className = '',
     inputClassName = '',
     readOnly = false,
+    showEditIcon = true,
     maxLength,
 }) {
     const [isEditing, setIsEditing] = useState(false);
@@ -79,7 +80,7 @@ export default function InlineEditableText({
             title={readOnly ? undefined : '点击编辑'}
         >
             <span>{value || placeholder}</span>
-            {!readOnly ? <span className="ui-inline-edit-icon">✎</span> : null}
+            {!readOnly && showEditIcon ? <span className="ui-inline-edit-icon">✎</span> : null}
         </button>
     );
 }

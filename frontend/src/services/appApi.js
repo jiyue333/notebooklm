@@ -7,6 +7,10 @@ const DEFAULT_SETTINGS = {
     outputLanguage: mockUser.settings?.outputLanguage || '中文',
     themeColor: 'ocean',
     colorMode: mockUser.settings?.theme || 'light',
+    fontFamily: 'serif',
+    fontFamilyLatin: 'times_new_roman',
+    fontFamilyCjk: 'source_han_serif',
+    layoutMode: 'triple',
     modelProvider: 'ollama',
     modelName: mockUser.settings?.model || 'qwen3.5:0.8b',
     apiUrl: 'http://127.0.0.1:11434',
@@ -115,6 +119,27 @@ const maskApiKey = (apiKey) => (
     apiKey && apiKey.length >= 4 ? `••••${apiKey.slice(-4)}` : ''
 );
 
+const parseDownloadFilename = (contentDisposition, fallbackName = 'note.md') => {
+    if (!contentDisposition) return fallbackName;
+    const encodedName = contentDisposition.match(/filename\*\s*=\s*UTF-8''([^;]+)/i)?.[1];
+    if (encodedName) {
+        try {
+            return decodeURIComponent(encodedName);
+        } catch {
+            return fallbackName;
+        }
+    }
+    const quotedName = contentDisposition.match(/filename\s*=\s*"([^"]+)"/i)?.[1];
+    if (quotedName) {
+        return quotedName;
+    }
+    const rawName = contentDisposition.match(/filename\s*=\s*([^;]+)/i)?.[1];
+    if (rawName) {
+        return rawName.trim();
+    }
+    return fallbackName;
+};
+
 const extractPlainExcerpt = (markdown) => markdown
     .replace(/^#.*$/gm, '')
     .replace(/[`*_>#-]/g, '')
@@ -126,9 +151,11 @@ const createImportedArticle = (source, index) => ({
     id: generateId(`art-import-${index}`),
     title: source.title,
     type: 'article',
+    inputType: 'search_result',
     icon: '🌐',
     author: 'Web Search',
     date: formatTimestamp(),
+    sourceUrl: source.url,
     selected: false,
     content: `# ${source.title}\n\n${source.description}\n\n来源链接：${source.url}`,
     toc: [],
@@ -138,7 +165,10 @@ const createUploadedArticle = (file, index) => ({
     id: generateId(`art-upload-${index}`),
     title: file.name,
     type: 'article',
+    inputType: 'file_upload',
     icon: '📎',
+    fileName: file.name,
+    fileMime: file.type || '',
     author: 'Uploaded File',
     date: formatTimestamp(),
     selected: false,
@@ -150,6 +180,7 @@ const createManualSourceArticle = ({ sourceType, url, title, content }) => ({
     id: generateId('art-manual'),
     title: title || (sourceType === 'web' ? url : '粘贴文字来源'),
     type: 'article',
+    inputType: sourceType === 'web' ? 'manual_web' : 'manual_text',
     icon: sourceType === 'web' ? '🌐' : '📝',
     author: sourceType === 'web' ? 'Manual Web Source' : 'Pasted Text',
     date: formatTimestamp(),
@@ -160,9 +191,9 @@ const createManualSourceArticle = ({ sourceType, url, title, content }) => ({
     toc: [],
 });
 
-const createNotebookRecord = ({ title, emoji = '📒', color = '#8B7355', tags = [] }) => ({
+const createNotebookRecord = ({ title, emoji = null, color = null, tags = [] }) => ({
     id: generateId('nb'),
-    title: title?.trim() || 'Untitled notebook',
+    title: title?.trim() || `未命名笔记本 ${new Date().toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }).replace('/', '-')}`,
     emoji,
     color,
     tags,
@@ -182,6 +213,10 @@ const buildSettingsView = (user, settings) => ({
     outputLanguage: settings.outputLanguage,
     themeColor: settings.themeColor,
     colorMode: settings.colorMode,
+    fontFamily: settings.fontFamily || 'sans',
+    fontFamilyLatin: settings.fontFamilyLatin || 'times_new_roman',
+    fontFamilyCjk: settings.fontFamilyCjk || 'source_han_serif',
+    layoutMode: settings.layoutMode || 'triple',
     modelProvider: settings.modelProvider,
     modelName: settings.modelName,
     apiUrl: settings.apiUrl,
@@ -225,7 +260,7 @@ const buildSettingsView = (user, settings) => ({
 const buildMockTranslation = (article, targetLanguage) => {
     const excerpt = extractPlainExcerpt(article.content).slice(0, 240);
     return {
-        translatedContent: `# ${article.title}\n\n> 以下为面向 ${targetLanguage} 的 mock 译文，真实后端接入后这里会替换为模型生成结果。\n\n## 译文摘要\n\n${excerpt}\n\n## 说明\n\n- 当前使用的是示例翻译结果\n- 正式版本会基于文章正文和目标语言生成完整译文`,
+        translatedContent: `# ${article.title}\n\n## ${targetLanguage} 译文\n\n${excerpt}`,
         targetLanguage,
     };
 };
@@ -449,6 +484,20 @@ const mockProvider = {
         return { success: true };
     },
 
+    async exportNote(notebookId, noteId) {
+        await wait(120);
+        const notes = ensureNotesBucket(notebookId);
+        const note = notes.find((item) => item.id === noteId);
+        if (!note) {
+            throw new Error('未找到对应笔记');
+        }
+        const safeTitle = (note.title || 'note').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'note';
+        return {
+            blob: new Blob([note.content || ''], { type: 'text/markdown;charset=utf-8' }),
+            filename: `${safeTitle}.md`,
+        };
+    },
+
     async searchSources({ notebookId, query, mode = 'auto', maxResults = 10 }) {
         await wait(mode === 'deep' ? 320 : 900);
         if (!query?.trim()) {
@@ -635,7 +684,7 @@ const mockProvider = {
         const embeddingConfigChanged = ['embeddingProvider', 'embeddingModel', 'embeddingApiUrl']
             .some((key) => nextSettings[key] !== mockState.settings[key]);
         if (embeddingConfigChanged && !payload.confirmEmbeddingReindex) {
-            const error = new Error('修改 Embedding 配置会清空旧向量并自动重建索引，请确认后继续。');
+            const error = new Error('修改 Embedding 配置会触发向量重建，请确认后继续。');
             error.status = 409;
             error.code = 'embedding_reindex_confirmation_required';
             error.meta = {
@@ -794,6 +843,35 @@ const buildUrl = (path) => {
     return `${normalizedBase}${normalizedPath}`;
 };
 
+const shouldUseLocalApiFallback = () => {
+    if (typeof window === 'undefined') return false;
+    const hostname = window.location?.hostname || '';
+    return hostname === '127.0.0.1' || hostname === 'localhost';
+};
+
+const buildFallbackUrl = (path) => {
+    if (/^https?:\/\//.test(path)) return null;
+    if (!String(runtimeConfig.apiBaseUrl || '').startsWith('/')) return null;
+    if (!shouldUseLocalApiFallback()) return null;
+    const normalizedBase = String(runtimeConfig.apiFallbackUrl || '').replace(/\/$/, '');
+    if (!normalizedBase) return null;
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+    return `${normalizedBase}${normalizedPath}`;
+};
+
+const fetchWithFallback = async (path, requestInit) => {
+    const primaryUrl = buildUrl(path);
+    try {
+        return await fetch(primaryUrl, requestInit);
+    } catch (error) {
+        const fallbackUrl = buildFallbackUrl(path);
+        if (!(error instanceof TypeError) || !fallbackUrl || fallbackUrl === primaryUrl) {
+            throw error;
+        }
+        return fetch(fallbackUrl, requestInit);
+    }
+};
+
 const parseResponse = async (response) => {
     const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
@@ -906,7 +984,7 @@ const requestStream = async (
     const session = getStoredSession();
 
     try {
-        const response = await fetch(buildUrl(path), {
+        const response = await fetchWithFallback(path, {
             method,
             headers: {
                 ...(body ? { 'Content-Type': 'application/json' } : {}),
@@ -932,6 +1010,13 @@ const requestStream = async (
             timeoutError.meta = { path, method, timeoutMs };
             throw timeoutError;
         }
+        if (error instanceof TypeError) {
+            const networkError = new Error('网络连接失败，请确认前后端服务已启动后重试');
+            networkError.status = 0;
+            networkError.code = 'network_error';
+            networkError.meta = { path, method };
+            throw networkError;
+        }
         throw error;
     } finally {
         clearTimeout(timeout);
@@ -945,7 +1030,7 @@ const request = async (path, { method = 'GET', body, headers = {}, timeoutMs = r
     const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
 
     try {
-        const response = await fetch(buildUrl(path), {
+        const response = await fetchWithFallback(path, {
             method,
             headers: {
                 ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
@@ -972,6 +1057,13 @@ const request = async (path, { method = 'GET', body, headers = {}, timeoutMs = r
             timeoutError.code = 'request_timeout';
             timeoutError.meta = { path, method, timeoutMs };
             throw timeoutError;
+        }
+        if (error instanceof TypeError) {
+            const networkError = new Error('网络连接失败，请确认前后端服务已启动后重试');
+            networkError.status = 0;
+            networkError.code = 'network_error';
+            networkError.meta = { path, method };
+            throw networkError;
         }
         throw error;
     } finally {
@@ -1005,24 +1097,29 @@ const normalizeSearchItem = (item = {}) => ({
 });
 
 const normalizeSearchPayload = (payload) => {
-    const legacyItem = payload?.item || {};
-    const run = payload?.run || {};
+    const source = payload?.item?.run ? payload.item : payload;
+    const legacyItem = source?.item || payload?.item || {};
+    const run = source?.run || {};
+    const rawMode = run.mode || source?.mode || legacyItem.mode || payload?.mode || 'auto';
+    const mode = typeof rawMode === 'string' ? rawMode.toLowerCase() : 'auto';
+    const rawStatus = run.status || legacyItem.status || source?.status || payload?.status || 'completed';
+    const status = typeof rawStatus === 'string' ? rawStatus.toLowerCase() : 'completed';
     return {
-        searchSessionId: run.id || legacyItem.searchSessionId || payload?.searchSessionId || null,
-        mode: run.mode || legacyItem.mode || payload?.mode || 'auto',
-        modeLabel: run.modeLabel || legacyItem.modeLabel || payload?.modeLabel || getSearchModeLabel(run.mode || legacyItem.mode || payload?.mode || 'auto'),
-        status: run.status || legacyItem.status || payload?.status || 'completed',
-        execution: 'sync',
+        searchSessionId: run.id || source?.searchSessionId || legacyItem.searchSessionId || payload?.searchSessionId || null,
+        mode,
+        modeLabel: run.modeLabel || source?.modeLabel || legacyItem.modeLabel || payload?.modeLabel || getSearchModeLabel(mode),
+        status,
+        execution: source?.execution || (['queued', 'running', 'partial'].includes(status) ? 'async' : 'sync'),
         currentRound: run.currentRound || 1,
         maxRounds: run.maxRounds || 1,
         targetCount: run.targetCount || 10,
-        elapsedMs: run.elapsedMs || payload?.meta?.elapsedMs || 0,
-        items: (payload?.items || legacyItem.items || []).map(normalizeSearchItem),
-        taskSpec: payload?.taskSpec || payload?.meta?.intent || {},
-        recallSummary: payload?.recallSummary || {},
-        preferencesApplied: payload?.preferencesApplied || {},
-        debug: payload?.debug || null,
-        message: payload?.message || '',
+        elapsedMs: run.elapsedMs || source?.meta?.elapsedMs || payload?.meta?.elapsedMs || 0,
+        items: (source?.items || legacyItem.items || payload?.items || []).map(normalizeSearchItem),
+        taskSpec: source?.taskSpec || payload?.taskSpec || source?.meta?.intent || payload?.meta?.intent || {},
+        recallSummary: source?.recallSummary || payload?.recallSummary || {},
+        preferencesApplied: source?.preferencesApplied || payload?.preferencesApplied || {},
+        debug: source?.debug || payload?.debug || null,
+        message: source?.message || payload?.message || '',
     };
 };
 
@@ -1079,17 +1176,6 @@ const normalizeChatStreamPayload = (payload = {}) => {
         fallbackUsed: Boolean(payload.fallbackUsed),
         fallbackReason: payload.fallbackReason || '',
     };
-};
-
-const pollSearchSession = async (fetchSession, { intervalMs = 1000, maxAttempts = 20 } = {}) => {
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-        const result = await fetchSession();
-        if (result.status === 'completed' || result.status === 'failed') {
-            return result;
-        }
-        await wait(intervalMs);
-    }
-    throw new Error('搜索任务超时，请稍后重试');
 };
 
 const backendProvider = {
@@ -1208,10 +1294,24 @@ const backendProvider = {
     },
 
     async exportNote(notebookId, noteId) {
-        const response = await fetch(buildUrl(`/notebooks/${notebookId}/notes/${noteId}/export`), {
+        const response = await fetchWithFallback(`/notebooks/${notebookId}/notes/${noteId}/export`, {
             headers: { ...(getStoredSession()?.token ? { Authorization: `Bearer ${getStoredSession().token}` } : {}) },
         });
-        return response.text();
+        if (!response.ok) {
+            let message = `导出失败 (${response.status})`;
+            try {
+                const payload = await parseResponse(response);
+                message = payload?.error?.message || payload?.message || message;
+            } catch (error) {
+                console.error('note.export_parse_failed', error);
+            }
+            const error = new Error(message);
+            error.status = response.status;
+            throw error;
+        }
+        const blob = await response.blob();
+        const filename = parseDownloadFilename(response.headers.get('Content-Disposition'), 'note.md');
+        return { blob, filename };
     },
 
     async getSearchSession({ notebookId, searchSessionId }) {
@@ -1329,6 +1429,16 @@ const backendProvider = {
             method: 'PATCH',
             body: { avatarUrl: dataUrl, username: getStoredSession()?.user?.name || 'user' },
         });
+        const session = getStoredSession();
+        if (session?.user) {
+            setStoredSession({
+                ...session,
+                user: {
+                    ...session.user,
+                    ...payload.item,
+                },
+            });
+        }
         return payload.item;
     },
 
@@ -1447,6 +1557,7 @@ export const appApi = {
         get: provider.getSettings,
         update: provider.updateSettings,
         updateProfile: provider.updateProfile,
+        uploadAvatar: provider.uploadAvatar,
         updatePassword: provider.updatePassword,
         listConversations: provider.listConversations,
         deleteConversation: provider.deleteConversation,

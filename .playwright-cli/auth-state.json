@@ -1,0 +1,34 @@
+{
+  "cookies": [],
+  "origins": [
+    {
+      "origin": "http://127.0.0.1:5173",
+      "localStorage": [
+        {
+          "name": "[REDACTED]-font-family",
+          "value": "hei"
+        },
+        {
+          "name": "[REDACTED]-theme",
+          "value": "light"
+        },
+        {
+          "name": "[REDACTED]-logo-option",
+          "value": "stack"
+        },
+        {
+          "name": "[REDACTED]-accent",
+          "value": "ocean"
+        },
+        {
+          "name": "notebooklm-session",
+          "value": "{\"token\":\"DQTPG_0ZJTFydsEz6njZG6FzTYQq5kX1BuLpZwUhCHQ\",\"user\":{\"id\":\"5dc75b6c-acc7-434c-ad14-f0dadd86ef94\",\"name\":\"test_26391\",\"email\":\"test@example.com\",\"avatar\":null}}"
+        },
+        {
+          "name": "notebook.layout.preference",
+          "value": "triple"
+        }
+      ]
+    }
+  ]
+}

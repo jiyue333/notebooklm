@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import AsyncIterator, Literal
 from urllib.parse import urlparse
 
@@ -9,7 +10,7 @@ import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_user_dep, db_session_dep
@@ -17,10 +18,14 @@ from app.api.errors import AppError
 from app.api.response import success_response
 from app.api.sse import build_sse_error_payload, encode_sse_event
 from app.modules.agent.chat.service import list_notebook_conversations, remove_notebook_conversation, stream_message
-from app.modules.agent.summary.service import list_notebook_summaries
-from app.modules.agent.summary.service import generate_summary
+from app.modules.agent.summary.service import generate_summary, list_notebook_summaries, normalize_summary_language
 from app.modules.notebooks import repo as notebooks_repo
-from app.modules.settings.runtime import resolve_preferred_sites, resolve_search_api_key, resolve_tavily_api_key
+from app.modules.settings.runtime import (
+    get_merged_user_settings,
+    resolve_preferred_sites,
+    resolve_search_api_key,
+    resolve_tavily_api_key,
+)
 from app.modules.agent.search.schemas import SearchRequest, SearchResponse
 from app.modules.agent.search.service import get_search_session, start_agent_search
 
@@ -46,6 +51,11 @@ def _normalize_existing_url(url: str | None) -> str:
     return f"{parsed.scheme}://{parsed.netloc}{path}"
 
 
+def _normalize_user_text(value: str) -> str:
+    sanitized = value.replace("\x00", " ").strip()
+    return re.sub(r"\s+", " ", sanitized)
+
+
 class AiEventRequest(BaseModel):
     operation: Literal["chat", "summary"]
     action: Literal["follow_up", "citation_open", "answer_copy", "summary_copy"]
@@ -57,7 +67,15 @@ class AiEventRequest(BaseModel):
 class ChatRequest(BaseModel):
     conversationId: str | None = None
     articleId: str | None = None
-    message: str = Field(min_length=1)
+    message: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, value: str) -> str:
+        normalized = _normalize_user_text(value)
+        if not normalized:
+            raise ValueError("message 不能为空")
+        return normalized
 
 
 class TranslateRequest(BaseModel):
@@ -97,7 +115,8 @@ async def translate_article_endpoint(
     article = await notebooks_repo.get_article(session, user_id=current_user.id, notebook_id=notebook_id, article_id=article_id)
     if article is None or not article.clean_markdown:
         raise AppError(404, "未找到对应文章", code="article_not_found")
-    target_language = payload.targetLanguage or (getattr(current_user, 'settings_json', {}) or {}).get('outputLanguage') or '中文'
+    merged_settings = get_merged_user_settings(current_user)
+    target_language = payload.targetLanguage or merged_settings.get("outputLanguage") or "中文"
     model = stream_message.__globals__['build_user_chat_model'](current_user)
     if model is None:
         raise AppError(422, '请先配置聊天模型', code='model_config_required')
@@ -144,7 +163,8 @@ async def summary_stream_endpoint(
                 )
                 return
 
-            output_language = (getattr(current_user, "settings_json", {}) or {}).get("outputLanguage") or "中文"
+            merged_settings = get_merged_user_settings(current_user)
+            output_language = normalize_summary_language(merged_settings.get("outputLanguage"))
             result = await generate_summary(
                 session,
                 article_id=article.id,
@@ -159,6 +179,7 @@ async def summary_stream_endpoint(
             yield encode_sse_event("done", {
                 "summaryText": summary_text,
                 "cached": result.get("cached", False),
+                "language": output_language,
             })
         except Exception as exc:
             yield build_sse_error_payload(

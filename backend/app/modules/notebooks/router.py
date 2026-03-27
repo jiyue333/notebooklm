@@ -59,8 +59,8 @@ async def create_notebook_endpoint(
         session,
         user_id=current_user.id,
         title=payload.title,
-        emoji=payload.emoji,
-        color=payload.color,
+        emoji=None,
+        color=None,
         tags=payload.tags,
     )
     return success_response(item=item)

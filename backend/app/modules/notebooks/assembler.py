@@ -45,11 +45,13 @@ def build_note_view(note: Note) -> dict:
 
 def build_article_view(article: Article) -> dict:
     published_or_created = article.published_at or article.created_at
-    render_mode = guess_render_mode(file_mime=article.file_mime, file_name=article.file_name)
+    detected_render_mode = guess_render_mode(file_mime=article.file_mime, file_name=article.file_name)
     content_ready = article.parse_status in {'ready', 'completed'} and bool((article.clean_markdown or '').strip())
+    # MinerU can parse PDF into markdown; frontend rendering is unified to markdown/text.
+    render_mode = 'markdown'
     file_url = None
     if article.file_storage_key:
-        if render_mode == 'pdf':
+        if detected_render_mode == 'pdf':
             file_url = f'/api/notebooks/{article.notebook_id}/articles/{article.id}/file?proxy=1'
         else:
             file_url = build_presigned_get_url(article.file_storage_key)
@@ -65,9 +67,11 @@ def build_article_view(article: Article) -> dict:
         'id': article.id,
         'title': article.title,
         'type': 'article',
+        'inputType': article.input_type,
         'author': article.author,
         'date': published_or_created.isoformat(),
         'sourceUrl': article.source_url,
+        'fileName': article.file_name,
         'selected': False,
         'renderMode': render_mode,
         'fileUrl': file_url,

@@ -1,0 +1,18 @@
+{
+  "bench_run_id": "ingest-smoke-20260326034941",
+  "pipeline": "ingest",
+  "profile": "smoke",
+  "cases": [
+    {
+      "case_id": "ingest_smoke_001",
+      "judge": {
+        "score": 1.0,
+        "subscores": {
+          "chunk_count": 1.0
+        },
+        "pass": true,
+        "reason": "分块数量达标"
+      }
+    }
+  ]
+}

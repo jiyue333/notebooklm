@@ -9,6 +9,7 @@
     align-items: center;
     justify-content: center;
     padding: 20px;
+    font-family: var(--app-font-family);
 }
 
 .auth-card {
@@ -117,12 +118,13 @@
     min-height: 62px;
     padding: 0 22px;
     font-size: 17px;
-    border: 1px solid var(--border-color);
+    border: none;
     border-radius: 999px;
     background: var(--bg-elevated);
     color: var(--title-color);
     outline: none;
-    transition: border-color var(--duration-fast) var(--ease-standard), box-shadow var(--duration-fast) var(--ease-standard);
+    box-shadow: var(--card-shadow);
+    transition: box-shadow var(--duration-fast) var(--ease-standard);
 }
 
 .auth-input-large {
@@ -130,8 +132,7 @@
 }
 
 .auth-input:focus {
-    border-color: color-mix(in srgb, var(--accent-color), transparent 50%);
-    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-color), transparent 88%);
+    box-shadow: var(--card-shadow-hover);
 }
 
 .auth-input::placeholder {
@@ -177,7 +178,7 @@
 }
 
 .auth-button-primary {
-    background: var(--title-color);
+    background: var(--accent-color);
     color: #ffffff;
 }
 

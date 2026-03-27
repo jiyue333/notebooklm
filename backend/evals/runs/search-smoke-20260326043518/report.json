@@ -1,0 +1,24 @@
+{
+  "bench_run_id": "search-smoke-20260326043518",
+  "pipeline": "search",
+  "profile": "smoke",
+  "generated_at": "2026-03-26T04:37:49.066746+00:00",
+  "cases": [
+    {
+      "case_id": "search_smoke_001",
+      "judge": {
+        "score": 1.0,
+        "subscores": {
+          "result_count": 3.0
+        },
+        "pass": true,
+        "reason": "结果数量达标"
+      },
+      "meta": {
+        "searchSessionId": "16004db4-d85f-45af-8af2-93b14afcd66f",
+        "status": "completed",
+        "resultCount": 3
+      }
+    }
+  ]
+}

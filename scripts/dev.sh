@@ -46,6 +46,29 @@ is_running() {
   kill -0 "$pid" >/dev/null 2>&1
 }
 
+command_for_pid() {
+  local pid="${1:-}"
+  [[ -n "$pid" ]] || return 1
+  ps -ww -p "$pid" -o command= 2>/dev/null
+}
+
+pid_matches_patterns() {
+  local pid="${1:-}"
+  shift || true
+  local cmd
+  cmd="$(command_for_pid "$pid")"
+  [[ -n "$cmd" ]] || return 1
+
+  local pattern
+  for pattern in "$@"; do
+    [[ -n "$pattern" ]] || continue
+    if [[ "$cmd" == *"$pattern"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 read_pid() {
   local file="$1"
   if [[ -f "$file" ]]; then
@@ -139,7 +162,9 @@ list_group_pids() {
 
 find_matching_pids() {
   local pattern="$1"
-  ps -axww -o pid=,command= 2>/dev/null | awk -v needle="$pattern" 'index($0, needle) { print $1 }'
+  ps -axww -o pid=,command= 2>/dev/null | awk -v needle="$pattern" -v self="$$" -v parent="$PPID" '
+    index($0, needle) && $1 != self && $1 != parent { print $1 }
+  '
 }
 
 first_matching_pid() {
@@ -164,15 +189,22 @@ first_matching_pid() {
   return 1
 }
 
+listening_pid_for_port() {
+  local port="$1"
+  lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | head -n 1
+}
+
 resolve_existing_pid() {
   local pid_file="$1"
   shift
   local pid
   pid="$(read_pid "$pid_file")"
-  if is_running "$pid"; then
+  if is_running "$pid" && pid_matches_patterns "$pid" "$@"; then
     echo "$pid"
     return 0
   fi
+
+  rm -f "$pid_file"
 
   first_matching_pid "$@" || return 1
 }
@@ -243,17 +275,18 @@ kill_process() {
   local name="$1"
   local pid_file="$2"
   shift 2
+  local patterns=("$@")
   local pid
   pid="$(read_pid "$pid_file")"
   local matched_pids=()
   local matched_pid
   local match_pattern
 
-  if is_running "$pid"; then
+  if is_running "$pid" && pid_matches_patterns "$pid" "${patterns[@]}"; then
     matched_pids+=("$pid")
   fi
 
-  for match_pattern in "$@"; do
+  for match_pattern in "${patterns[@]}"; do
     while IFS= read -r matched_pid; do
       [[ -z "$matched_pid" ]] && continue
       if [[ "$matched_pid" != "$$" && "$matched_pid" != "$PPID" ]]; then
@@ -362,36 +395,47 @@ start_frontend() {
 show_status() {
   local backend_pid frontend_pid
   local worker_pid scheduler_pid
-  backend_pid="$(read_pid "$BACKEND_PID_FILE")"
-  worker_pid="$(read_pid "$WORKER_PID_FILE")"
-  scheduler_pid="$(read_pid "$SCHEDULER_PID_FILE")"
-  frontend_pid="$(read_pid "$FRONTEND_PID_FILE")"
+  backend_pid="$(resolve_existing_pid "$BACKEND_PID_FILE" "$BACKEND_MATCH" || true)"
+  worker_pid="$(resolve_existing_pid "$WORKER_PID_FILE" "$WORKER_MATCH" || true)"
+  scheduler_pid="$(resolve_existing_pid "$SCHEDULER_PID_FILE" "$SCHEDULER_MATCH" || true)"
+  frontend_pid="$(resolve_existing_pid "$FRONTEND_PID_FILE" "$FRONTEND_MATCH_VITE_BIN" "$FRONTEND_MATCH_VITE_SHIM" || true)"
+
+  if [[ -z "$backend_pid" ]]; then
+    backend_pid="$(listening_pid_for_port "$BACKEND_PORT" || true)"
+  fi
+  if [[ -z "$frontend_pid" ]]; then
+    frontend_pid="$(listening_pid_for_port "$FRONTEND_PORT" || true)"
+  fi
 
   if is_running "$backend_pid"; then
+    echo "$backend_pid" > "$BACKEND_PID_FILE"
     echo "backend: running (pid=$backend_pid)"
-  elif [[ -n "$(find_matching_pids "$BACKEND_MATCH")" ]]; then
+  elif [[ -n "$(first_matching_pid "$BACKEND_MATCH" || true)" ]]; then
     echo "backend: running (orphaned process detected)"
   else
     echo "backend: stopped"
   fi
 
   if is_running "$worker_pid"; then
+    echo "$worker_pid" > "$WORKER_PID_FILE"
     echo "worker: running (pid=$worker_pid)"
-  elif [[ -n "$(find_matching_pids "$WORKER_MATCH")" ]]; then
+  elif [[ -n "$(first_matching_pid "$WORKER_MATCH" || true)" ]]; then
     echo "worker: running (orphaned process detected)"
   else
     echo "worker: stopped"
   fi
 
   if is_running "$scheduler_pid"; then
+    echo "$scheduler_pid" > "$SCHEDULER_PID_FILE"
     echo "scheduler: running (pid=$scheduler_pid)"
-  elif [[ -n "$(find_matching_pids "$SCHEDULER_MATCH")" ]]; then
+  elif [[ -n "$(first_matching_pid "$SCHEDULER_MATCH" || true)" ]]; then
     echo "scheduler: running (orphaned process detected)"
   else
     echo "scheduler: stopped"
   fi
 
   if is_running "$frontend_pid"; then
+    echo "$frontend_pid" > "$FRONTEND_PID_FILE"
     echo "frontend: running (pid=$frontend_pid)"
   elif [[ -n "$(first_matching_pid "$FRONTEND_MATCH_VITE_BIN" "$FRONTEND_MATCH_VITE_SHIM" || true)" ]]; then
     echo "frontend: running (orphaned process detected)"

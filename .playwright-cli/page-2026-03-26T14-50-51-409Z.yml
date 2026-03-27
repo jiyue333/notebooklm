@@ -1,0 +1,99 @@
+- generic [ref=e3]:
+  - banner [ref=e9]:
+    - generic [ref=e10]:
+      - button "返回" [ref=e11] [cursor=pointer]:
+        - img [ref=e12]
+      - generic [ref=e14]:
+        - generic [ref=e15]: 📒
+        - button "UI回归测试笔记本 ✎" [ref=e16] [cursor=pointer]:
+          - generic [ref=e17]: UI回归测试笔记本
+          - generic [ref=e18]: ✎
+    - generic [ref=e19]:
+      - button "切换主题" [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+      - button "布局偏好：三栏" [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+      - button "设置" [ref=e27] [cursor=pointer]:
+        - img [ref=e28]
+      - button "t" [ref=e31] [cursor=pointer]:
+        - generic [ref=e32]: t
+  - generic [ref=e33]:
+    - generic [ref=e34]:
+      - generic [ref=e35]:
+        - generic [ref=e36]:
+          - img [ref=e38]
+          - generic [ref=e40]: 文章目录
+          - button "收起左栏" [ref=e41] [cursor=pointer]:
+            - img [ref=e42]
+        - paragraph [ref=e46]: 选择一篇文章查看目录
+      - generic [ref=e47]:
+        - generic [ref=e48]:
+          - img [ref=e50]
+          - generic [ref=e52]: 来源文章
+          - generic [ref=e53]: "0"
+        - paragraph [ref=e56]: 暂无来源文章
+    - generic [ref=e58]:
+      - img [ref=e60]
+      - heading "选择一篇文章开始阅读" [level=3] [ref=e62]
+      - paragraph [ref=e63]: 点击左侧来源文章列表中的任意文章
+    - generic [ref=e64]:
+      - generic [ref=e65]:
+        - generic [ref=e66]:
+          - img [ref=e68]
+          - generic [ref=e70]: 来源
+          - button "收起右栏" [ref=e71] [cursor=pointer]:
+            - img [ref=e72]
+        - generic [ref=e74]:
+          - button "添加来源" [ref=e75] [cursor=pointer]:
+            - img [ref=e77]
+            - generic [ref=e79]: 添加来源
+          - generic [ref=e81]:
+            - generic [ref=e82]:
+              - img [ref=e84]
+              - textbox "在网络中搜索新来源" [ref=e86]
+            - generic [ref=e87]:
+              - button "Auto Research" [ref=e90] [cursor=pointer]:
+                - img [ref=e92]
+                - generic [ref=e94]: Auto Research
+                - img [ref=e96]
+              - button [disabled] [ref=e98]:
+                - img [ref=e99]
+      - generic [ref=e101]:
+        - generic [ref=e102]:
+          - img [ref=e104]
+          - generic [ref=e106]: 笔记
+          - generic [ref=e107]: "0"
+        - generic [ref=e108]:
+          - textbox "按标签筛选笔记" [ref=e110]
+          - button "添加笔记" [ref=e113] [cursor=pointer]:
+            - img [ref=e114]
+            - generic [ref=e116]: 添加笔记
+  - generic [ref=e118]:
+    - button [ref=e119] [cursor=pointer]:
+      - img [ref=e120]
+    - heading "添加来源" [level=2] [ref=e122]
+    - generic [ref=e123]:
+      - generic [ref=e124]:
+        - img [ref=e126]
+        - textbox "在网络中搜索新来源" [ref=e128]
+      - generic [ref=e129]:
+        - button "Fast Research" [ref=e131] [cursor=pointer]:
+          - img [ref=e133]
+          - generic [ref=e136]: Fast Research
+          - img [ref=e138]
+        - button [ref=e140] [cursor=pointer]:
+          - img [ref=e141]
+    - generic [ref=e143] [cursor=pointer]:
+      - generic [ref=e144]:
+        - strong [ref=e145]: 或拖放文件
+        - generic [ref=e146]: PDF、图片、文档、音频，等等
+      - generic [ref=e147]:
+        - button "上传文件" [ref=e148]:
+          - img [ref=e150]
+          - generic [ref=e152]: 上传文件
+        - button "云端硬盘" [ref=e153]:
+          - img [ref=e155]
+          - generic [ref=e157]: 云端硬盘
+        - button "复制的文字" [ref=e158]:
+          - img [ref=e160]
+          - generic [ref=e162]: 复制的文字

@@ -1,0 +1,11 @@
+- generic [ref=e4]:
+  - heading "NotebookLM" [level=1] [ref=e5]
+  - paragraph [ref=e6]: 未找到账号，请补充资料完成注册
+  - generic [ref=e19]:
+    - generic [ref=e20]: codexui2026@example.com
+    - textbox "用户名" [active] [ref=e21]
+    - textbox "设置密码（至少 8 位）" [ref=e22]
+    - textbox "确认密码" [ref=e23]
+    - generic [ref=e24]:
+      - button "返回" [ref=e25] [cursor=pointer]
+      - button "创建账号" [ref=e26] [cursor=pointer]

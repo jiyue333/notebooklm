@@ -10,6 +10,7 @@ import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.errors import AppError
 from app.infra.ai.chat_models import build_user_chat_model
 from app.infra.telemetry.metrics import (
     observe_chat_answer_length,
@@ -64,7 +65,7 @@ async def stream_message(
         return
 
     # ========== phase 2 加载会话与上下文 ==========
-    conversation, notebook_title, article_title = await _prepare_context(
+    conversation, notebook_title, article_title, resolved_article_id = await _prepare_context(
         db, user_id=user_id, notebook_id=notebook_id,
         question=question, article_id=article_id, conversation_id=conversation_id,
     )
@@ -78,7 +79,7 @@ async def stream_message(
     state = await graph.ainvoke({
         "query": question,
         "notebook_id": notebook_id,
-        "article_id": article_id,
+        "article_id": resolved_article_id,
         "user_id": user_id,
         "user": user,
         "notebook_title": notebook_title,
@@ -119,7 +120,7 @@ async def stream_message(
         conversation_id=conversation.id,
         role="assistant",
         content=full_answer,
-        article_id=article_id,
+        article_id=resolved_article_id,
         route=route,
         retrieval_snapshot_json={"evidence": verified_citations, "trace_log": trace_log},
         web_searched=need_web_search,
@@ -191,11 +192,17 @@ async def _prepare_context(
     article_id: str | None,
     conversation_id: str | None,
 ):
+    notebook = await notebooks_repo.get_notebook(db, user_id=user_id, notebook_id=notebook_id)
+    if notebook is None:
+        raise AppError(404, "未找到对应的笔记本", code="notebook_not_found")
+
     conversation = None
     if conversation_id:
         conversation = await repo.get_conversation(
             db, conversation_id=conversation_id, user_id=user_id,
         )
+        if conversation is None or conversation.notebook_id != notebook_id:
+            raise AppError(404, "未找到对应会话", code="conversation_not_found")
     if conversation is None:
         conversation = await repo.create_conversation(
             db,
@@ -206,24 +213,27 @@ async def _prepare_context(
         )
         await db.flush()
 
+    resolved_article_id = article_id or conversation.current_article_id
+    article_title = ""
+    if resolved_article_id:
+        article = await notebooks_repo.get_article(
+            db,
+            user_id=user_id,
+            notebook_id=notebook_id,
+            article_id=resolved_article_id,
+        )
+        if article is None:
+            raise AppError(404, "未找到对应文章", code="article_not_found")
+        article_title = article.title or ""
+
     await repo.append_message(
         db, conversation_id=conversation.id, role="user",
-        content=question, article_id=article_id,
+        content=question, article_id=resolved_article_id,
     )
 
-    notebook_title = ""
-    article_title = ""
-    notebook = await notebooks_repo.get_notebook(db, user_id=user_id, notebook_id=notebook_id)
-    if notebook:
-        notebook_title = notebook.title or ""
-    if article_id:
-        article = await notebooks_repo.get_article(
-            db, user_id=user_id, notebook_id=notebook_id, article_id=article_id,
-        )
-        if article:
-            article_title = article.title or ""
+    notebook_title = notebook.title or ""
 
-    return conversation, notebook_title, article_title
+    return conversation, notebook_title, article_title, resolved_article_id
 
 
 def _build_answer_messages(state: dict) -> list:

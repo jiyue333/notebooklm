@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +13,18 @@ from app.modules.notes.schemas import NoteUpsertRequest
 from app.modules.notes.service import delete_note, export_note_markdown, save_note
 
 router = APIRouter(tags=["notes"])
+
+
+def _build_content_disposition(filename: str) -> str:
+    normalized = (filename or "note.md").strip() or "note.md"
+    if not normalized.lower().endswith(".md"):
+        normalized = f"{normalized}.md"
+    ascii_base = re.sub(r"[^A-Za-z0-9._-]+", "_", normalized).strip("._-")
+    if not ascii_base or ascii_base.lower() in {"md", ".md"}:
+        ascii_base = "note"
+    ascii_fallback = ascii_base if ascii_base.lower().endswith(".md") else f"{ascii_base}.md"
+    encoded = quote(normalized, safe="")
+    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded}"
 
 
 @router.post("/notebooks/{notebook_id}/notes")
@@ -78,5 +93,5 @@ async def export_note_endpoint(
     return Response(
         content=content,
         media_type="text/markdown",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _build_content_disposition(filename)},
     )

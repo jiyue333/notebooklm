@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections import defaultdict
 from time import perf_counter
 
@@ -59,42 +58,37 @@ async def hybrid_retrieval(
     if not request.scope_article_ids:
         return []
 
-    # ========== phase 1 并行检索 ==========
+    # ========== phase 1 检索 ==========
     t_embed = perf_counter()
     query_vec = await embed_query(request.query, user=request.user)
     observe_retrieval_stage(stage="embed_query", duration_ms=_ms(t_embed))
 
-    t_recall = perf_counter()
-    async def _empty():
-        return []
+    dense_results: list[RetrievalResult] = []
+    if query_vec:
+        t_dense = perf_counter()
+        try:
+            dense_results = await dense_retrieval(
+                db,
+                query_embedding=query_vec,
+                scope_article_ids=request.scope_article_ids,
+                top_k=request.top_k * 2,
+            )
+        except Exception as exc:
+            logger.warning("hybrid.dense_failed", error=str(exc)[:200])
+        observe_retrieval_stage(stage="dense", duration_ms=_ms(t_dense), count=len(dense_results))
 
-    dense_task = dense_retrieval(
-        db,
-        query_embedding=query_vec or [],
-        scope_article_ids=request.scope_article_ids,
-        top_k=request.top_k * 2,
-    ) if query_vec else _empty()
-
-    sparse_task = sparse_retrieval(
-        db,
-        query=request.query,
-        scope_article_ids=request.scope_article_ids,
-        top_k=request.top_k * 2,
-    )
-
-    dense_results, sparse_results = await asyncio.gather(
-        dense_task, sparse_task, return_exceptions=True,
-    )
-
-    if isinstance(dense_results, BaseException):
-        logger.warning("hybrid.dense_failed", error=str(dense_results)[:200])
-        dense_results = []
-    if isinstance(sparse_results, BaseException):
-        logger.warning("hybrid.sparse_failed", error=str(sparse_results)[:200])
-        sparse_results = []
-
-    observe_retrieval_stage(stage="dense", duration_ms=_ms(t_recall), count=len(dense_results))
-    observe_retrieval_stage(stage="sparse", duration_ms=_ms(t_recall), count=len(sparse_results))
+    t_sparse = perf_counter()
+    sparse_results: list[RetrievalResult] = []
+    try:
+        sparse_results = await sparse_retrieval(
+            db,
+            query=request.query,
+            scope_article_ids=request.scope_article_ids,
+            top_k=request.top_k * 2,
+        )
+    except Exception as exc:
+        logger.warning("hybrid.sparse_failed", error=str(exc)[:200])
+    observe_retrieval_stage(stage="sparse", duration_ms=_ms(t_sparse), count=len(sparse_results))
 
     # ========== phase 2 RRF 融合 ==========
     t_fuse = perf_counter()

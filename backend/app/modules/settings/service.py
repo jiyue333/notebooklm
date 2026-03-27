@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import AppError
@@ -33,6 +34,8 @@ from app.modules.settings.runtime import (
     resolve_embedding_runtime_config_from_merged,
 )
 from app.modules.settings.view_builder import build_settings_view
+
+logger = structlog.get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -179,7 +182,7 @@ async def _publish_reindex_jobs(session: AsyncSession, jobs: list) -> None:
     try:
         await job_publisher.publish_jobs(session, jobs)
     except Exception:
-        pass
+        logger.exception("settings.reindex_jobs_publish_failed", job_count=len(jobs))
     finally:
         await session.commit()
 

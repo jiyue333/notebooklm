@@ -1,0 +1,21 @@
+- generic [ref=e28]:
+  - banner [ref=e29]:
+    - button "NotebookLM" [ref=e31] [cursor=pointer]:
+      - generic "堆叠卡片" [ref=e32]:
+        - img [ref=e34]
+        - generic [ref=e38]: NotebookLM
+    - generic [ref=e40]:
+      - generic [ref=e41]: 🔍
+      - textbox "搜索笔记本、文章或标签..." [ref=e42]
+    - generic [ref=e43]:
+      - button "🌙" [ref=e44] [cursor=pointer]
+      - button "设置" [ref=e45] [cursor=pointer]:
+        - img [ref=e46]
+      - button "t" [ref=e49] [cursor=pointer]:
+        - generic [ref=e50]: t
+  - main [ref=e51]:
+    - generic [ref=e53]:
+      - generic [ref=e54]: ✨
+      - heading "还没有任何笔记本" [level=3] [ref=e55]
+      - paragraph [ref=e56]: 创建笔记本后开始导入来源。
+      - button "立即创建" [ref=e57] [cursor=pointer]

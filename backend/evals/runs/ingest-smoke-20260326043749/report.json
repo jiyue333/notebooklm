@@ -1,0 +1,24 @@
+{
+  "bench_run_id": "ingest-smoke-20260326043749",
+  "pipeline": "ingest",
+  "profile": "smoke",
+  "generated_at": "2026-03-26T04:37:57.042151+00:00",
+  "cases": [
+    {
+      "case_id": "ingest_smoke_001",
+      "judge": {
+        "score": 1.0,
+        "subscores": {
+          "chunk_count": 1.0
+        },
+        "pass": true,
+        "reason": "分块数量达标"
+      },
+      "meta": {
+        "articleId": "860c3e03-0134-4a8b-97ea-413d3fe25dac",
+        "chunkCount": 1,
+        "parser": "text_passthrough"
+      }
+    }
+  ]
+}

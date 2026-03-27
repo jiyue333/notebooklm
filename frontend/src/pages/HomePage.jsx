@@ -1,30 +1,45 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import AppLogo, { getLogoOptions } from '../components/common/AppLogo';
+import AppLogo from '../components/common/AppLogo';
 import AccountMenu from '../components/common/AccountMenu';
 import EmptyState from '../components/common/EmptyState';
 import ErrorBanner from '../components/common/ErrorBanner';
 import Spinner from '../components/common/Spinner';
-import { useToast } from '../components/common/ToastProvider';
+import { useToast } from '../components/common/useToast';
+import { getLogoOptions } from '../components/common/logoOptions';
 import { useTheme } from '../contexts/useTheme';
-import { appApi, clearStoredSession, isAuthError } from '../services/appApi';
+import { appApi, clearStoredSession, getStoredSession, isAuthError } from '../services/appApi';
 import SettingsModal from '../components/SettingsModal';
 import NotebookModal from '../components/NotebookModal';
 import './HomePage.css';
 
 const LOGO_STORAGE_KEY = '[REDACTED]-logo-option';
 const RECENT_NOTEBOOK_LIMIT = 4;
+const Hc = {
+    theme: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69zM12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6zm0-10c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4z" /></svg>,
+    settings: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" /></svg>,
+    layout: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h4v4H7V7zm0 6h4v4H7v-4zm6-6h4v10h-4V7z" /></svg>,
+    notebook: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 2h9a3 3 0 0 1 3 3v14a1 1 0 0 1-1.6.8L13 17.4l-3.4 2.4A1 1 0 0 1 8 19V5a3 3 0 0 0-2-2.82V2Zm4 4h5v2h-5V6Zm0 4h5v2h-5v-2Z" /><path d="M4 3.5A1.5 1.5 0 0 1 5.5 2h.5v20h-.5A1.5 1.5 0 0 1 4 20.5v-17Z" /></svg>,
+};
 
 function getStoredLogoOption() {
     if (typeof window === 'undefined' || !window.localStorage) return 'stack';
     return window.localStorage.getItem(LOGO_STORAGE_KEY) || 'stack';
 }
 
+function resolveNotebookIcon(nb) {
+    const hasContent = Number(nb?.sourceCount || 0) > 0;
+    if (!hasContent) return null;
+    const emoji = String(nb?.emoji || '').trim();
+    return emoji || null;
+}
+
 export default function HomePage() {
     const navigate = useNavigate();
-    const { theme, resolvedTheme, toggleTheme } = useTheme();
+    const { toggleTheme } = useTheme();
     const { showToast } = useToast();
     const [showSettings, setShowSettings] = useState(false);
+    const [settingsInitialTab, setSettingsInitialTab] = useState('language');
     const [searchQuery, setSearchQuery] = useState('');
     const [workspaceResults, setWorkspaceResults] = useState([]);
     const [isSearchingWorkspace, setIsSearchingWorkspace] = useState(false);
@@ -36,12 +51,16 @@ export default function HomePage() {
     const [error, setError] = useState('');
     const [showAccountMenu, setShowAccountMenu] = useState(false);
     const [logoOption, setLogoOption] = useState(getStoredLogoOption);
+    const [activeTag, setActiveTag] = useState('');
     const logoOptions = getLogoOptions();
+    const searchInputRef = useRef(null);
+    const sessionUser = getStoredSession()?.user;
+    const displayUser = user ? { ...user, avatar: user.avatar || sessionUser?.avatar || null } : sessionUser;
 
-    const redirectToLogin = () => {
+    const redirectToLogin = useCallback(() => {
         clearStoredSession();
         navigate('/login', { replace: true });
-    };
+    }, [navigate]);
 
     useEffect(() => {
         if (typeof window !== 'undefined' && window.localStorage) {
@@ -79,6 +98,26 @@ export default function HomePage() {
         return () => {
             isMounted = false;
         };
+    }, [redirectToLogin]);
+
+    useEffect(() => {
+        const handleShortcut = (event) => {
+            const target = event.target instanceof HTMLElement ? event.target : null;
+            if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) {
+                return;
+            }
+            if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+                event.preventDefault();
+                searchInputRef.current?.focus();
+                return;
+            }
+            if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'n') {
+                event.preventDefault();
+                openNotebookModal('create');
+            }
+        };
+        document.addEventListener('keydown', handleShortcut);
+        return () => document.removeEventListener('keydown', handleShortcut);
     }, []);
 
     useEffect(() => {
@@ -113,27 +152,43 @@ export default function HomePage() {
         };
     }, [searchQuery]);
 
+    const availableTags = useMemo(() => {
+        const tags = new Set();
+        notebooks.forEach((notebook) => {
+            (notebook.tags || []).forEach((tag) => {
+                if (tag) {
+                    tags.add(tag);
+                }
+            });
+        });
+        return Array.from(tags).sort((left, right) => left.localeCompare(right, 'zh-CN'));
+    }, [notebooks]);
+
     const filteredNotebooks = useMemo(() => {
         const normalizedQuery = searchQuery.trim().toLowerCase();
-        if (!normalizedQuery) return notebooks;
-        return notebooks.filter((nb) => (
-            nb.title.toLowerCase().includes(normalizedQuery)
-            || (Array.isArray(nb.tags) && nb.tags.some((tag) => tag.toLowerCase().includes(normalizedQuery)))
-        ));
-    }, [notebooks, searchQuery]);
+        return notebooks.filter((nb) => {
+            const matchesQuery = !normalizedQuery || nb.title.toLowerCase().includes(normalizedQuery)
+                || (Array.isArray(nb.tags) && nb.tags.some((tag) => tag.toLowerCase().includes(normalizedQuery)));
+            const matchesTag = !activeTag || (Array.isArray(nb.tags) && nb.tags.includes(activeTag));
+            return matchesQuery && matchesTag;
+        });
+    }, [activeTag, notebooks, searchQuery]);
 
     const { recentNotebooks, otherNotebooks } = useMemo(() => ({
-        recentNotebooks: filteredNotebooks.slice(0, RECENT_NOTEBOOK_LIMIT),
-        otherNotebooks: filteredNotebooks.slice(RECENT_NOTEBOOK_LIMIT),
+        recentNotebooks: [...filteredNotebooks]
+            .sort((left, right) => new Date(right.lastOpenedAt || 0).getTime() - new Date(left.lastOpenedAt || 0).getTime())
+            .slice(0, RECENT_NOTEBOOK_LIMIT),
+        otherNotebooks: [...filteredNotebooks]
+            .sort((left, right) => new Date(right.lastOpenedAt || 0).getTime() - new Date(left.lastOpenedAt || 0).getTime())
+            .slice(RECENT_NOTEBOOK_LIMIT),
     }), [filteredNotebooks]);
+    const hasSearchQuery = searchQuery.trim().length > 0;
 
     const openNotebookModal = (mode, notebook) => {
         setNotebookModalState({
             mode,
             notebook: notebook || {
                 title: '',
-                emoji: '📒',
-                color: '#8B7355',
             },
         });
     };
@@ -165,8 +220,6 @@ export default function HomePage() {
             setError('');
             const notebook = await appApi.notebooks.update(payload.id, {
                 title: payload.title,
-                emoji: payload.emoji,
-                color: payload.color,
                 tags: payload.tags,
             });
             setNotebooks((prev) => prev.map((item) => (item.id === notebook.id ? { ...item, ...notebook } : item)));
@@ -207,28 +260,34 @@ export default function HomePage() {
         redirectToLogin();
     };
 
-    const renderNotebookGrid = (items) => (
+    const renderNotebookGrid = (items, { includeCreateCard = true } = {}) => (
         <div className="home-grid">
-            <button
-                type="button"
-                className="home-card home-card-new animate-fade-in"
-                onClick={() => openNotebookModal('create')}
-            >
-                <div className="home-card-new-inner">
-                    <div className="home-card-new-icon"><span>+</span></div>
-                    <span className="home-card-new-text">{isCreatingNotebook ? '创建中...' : '新建笔记本'}</span>
-                </div>
-            </button>
+            {includeCreateCard ? (
+                <button
+                    type="button"
+                    className="home-card home-card-new animate-fade-in"
+                    onClick={() => openNotebookModal('create')}
+                >
+                    <div className="home-card-new-inner">
+                        <div className="home-card-new-icon"><span>+</span></div>
+                        <span className="home-card-new-text">{isCreatingNotebook ? '创建中...' : '新建笔记本'}</span>
+                    </div>
+                </button>
+            ) : null}
 
-            {items.map((nb, index) => (
+            {items.map((nb, index) => {
+                const notebookIcon = resolveNotebookIcon(nb);
+                return (
                 <article
                     key={nb.id}
                     className="home-card animate-fade-in"
                     style={{ animationDelay: `${(index + 1) * 0.05}s` }}
                     onClick={() => navigate(`/notebook/${nb.id}`)}
                 >
-                    <div className="home-card-header" style={{ background: nb.color }}>
-                        <span className="home-card-emoji">{nb.emoji}</span>
+                    <div className="home-card-header">
+                        <span className={`home-card-icon ${notebookIcon ? 'emoji' : 'default'}`}>
+                            {notebookIcon || Hc.notebook}
+                        </span>
                         <button
                             className="home-card-menu"
                             onClick={(event) => {
@@ -249,7 +308,8 @@ export default function HomePage() {
                         ) : null}
                     </div>
                 </article>
-            ))}
+                );
+            })}
         </div>
     );
 
@@ -270,8 +330,9 @@ export default function HomePage() {
                     <div className="home-search-wrapper">
                         <span className="home-search-icon">🔍</span>
                         <input
+                            ref={searchInputRef}
                             className="input home-search-input"
-                            placeholder="搜索笔记本标题或标签..."
+                            placeholder="搜索笔记本、文章或标签..."
                             value={searchQuery}
                             onChange={(event) => setSearchQuery(event.target.value)}
                         />
@@ -280,23 +341,45 @@ export default function HomePage() {
 
                 <div className="home-topbar-right">
                     <button className="btn-icon" onClick={toggleTheme} title="切换主题">
-                        {(theme === 'dark' || resolvedTheme === 'dark') ? '☀️' : '🌙'}
+                        {Hc.theme}
                     </button>
-                    <button className="btn-icon" onClick={() => setShowSettings(true)} title="设置">
-                        <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
-                            <path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.64-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.57 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
-                        </svg>
+                    <button
+                        className="btn-icon"
+                        onClick={() => {
+                            setSettingsInitialTab('appearance');
+                            setShowSettings(true);
+                        }}
+                        title="布局"
+                    >
+                        {Hc.layout}
+                    </button>
+                    <button
+                        className="btn-icon"
+                        onClick={() => {
+                            setSettingsInitialTab('language');
+                            setShowSettings(true);
+                        }}
+                        title="设置"
+                    >
+                        {Hc.settings}
                     </button>
                     <div className="home-avatar-wrapper">
                         <button type="button" className="home-avatar-btn" onClick={() => setShowAccountMenu((current) => !current)}>
-                            <div className="home-avatar">{user?.name?.charAt(0) || 'U'}</div>
+                            <div className="home-avatar">
+                                {displayUser?.avatar ? (
+                                    <img className="home-avatar-image" src={displayUser.avatar} alt={displayUser.name || '用户头像'} />
+                                ) : (
+                                    displayUser?.name?.charAt(0) || 'U'
+                                )}
+                            </div>
                         </button>
                         <AccountMenu
                             open={showAccountMenu}
-                            user={user}
+                            user={displayUser}
                             onClose={() => setShowAccountMenu(false)}
                             onOpenSettings={() => {
                                 setShowAccountMenu(false);
+                                setSettingsInitialTab('account');
                                 setShowSettings(true);
                             }}
                             onLogout={handleLogout}
@@ -317,34 +400,38 @@ export default function HomePage() {
                         <EmptyState
                             icon="✨"
                             title="还没有任何笔记本"
-                            description="先创建一个研究空间，再导入网页、PDF 或笔记内容。后续首页会自动为你展示最近打开与分类筛选。"
+                            description="创建笔记本后开始导入来源。"
                             actionLabel="立即创建"
                             onAction={() => openNotebookModal('create')}
                         />
-                    ) : filteredNotebooks.length === 0 ? (
-                        <EmptyState
-                            icon="🔎"
-                            title="没有找到匹配结果"
-                            description="可以试试搜索标题关键词、标签，或者切换 logo 后重新整理你的首页视图。"
-                            actionLabel="清空搜索"
-                            onAction={() => setSearchQuery('')}
-                            compact
-                        />
                     ) : (
                         <>
-                            <section className="home-section">
-                                <div className="home-section-heading">
-                                    <h2 className="home-section-title">最近打开</h2>
-                                    <span className="home-section-caption">优先展示你最近回看的研究空间</span>
-                                </div>
-                                {renderNotebookGrid(recentNotebooks)}
-                            </section>
+                            {availableTags.length > 0 ? (
+                                <section className="home-tag-strip">
+                                    <button
+                                        type="button"
+                                        className={`home-tag-chip ${!activeTag ? 'active' : ''}`}
+                                        onClick={() => setActiveTag('')}
+                                    >
+                                        全部标签
+                                    </button>
+                                    {availableTags.map((tag) => (
+                                        <button
+                                            key={tag}
+                                            type="button"
+                                            className={`home-tag-chip ${activeTag === tag ? 'active' : ''}`}
+                                            onClick={() => setActiveTag((current) => (current === tag ? '' : tag))}
+                                        >
+                                            {tag}
+                                        </button>
+                                    ))}
+                                </section>
+                            ) : null}
 
-                            {searchQuery.trim() ? (
+                            {hasSearchQuery ? (
                                 <section className="home-section">
                                     <div className="home-section-heading">
                                         <h2 className="home-section-title">全局搜索结果</h2>
-                                        <span className="home-section-caption">匹配笔记本标题、标签，以及文章标题与正文</span>
                                     </div>
                                     {isSearchingWorkspace ? (
                                         <div className="home-search-result-state"><Spinner inline label="搜索中..." /></div>
@@ -369,28 +456,56 @@ export default function HomePage() {
                                         <EmptyState
                                             icon="📚"
                                             title="全局搜索暂未命中"
-                                            description="当前没有匹配到笔记本或文章内容，你可以继续输入更具体的关键词。"
+                                            description="没有匹配结果，换个关键词试试。"
                                             compact
                                         />
                                     )}
                                 </section>
                             ) : null}
 
-                            {otherNotebooks.length > 0 ? (
-                                <section className="home-section">
-                                    <div className="home-section-heading">
-                                        <h2 className="home-section-title">全部笔记本</h2>
-                                        <span className="home-section-caption">按更新时间与搜索条件自动筛选</span>
-                                    </div>
-                                    {renderNotebookGrid(otherNotebooks)}
-                                </section>
-                            ) : null}
+                            {hasSearchQuery ? (
+                                filteredNotebooks.length > 0 ? (
+                                    <section className="home-section">
+                                        <div className="home-section-heading">
+                                            <h2 className="home-section-title">笔记本标题与标签命中</h2>
+                                        </div>
+                                        {renderNotebookGrid(filteredNotebooks, { includeCreateCard: false })}
+                                    </section>
+                                ) : null
+                            ) : filteredNotebooks.length > 0 ? (
+                                <>
+                                    <section className="home-section">
+                                        <div className="home-section-heading">
+                                            <h2 className="home-section-title">最近打开</h2>
+                                        </div>
+                                        {renderNotebookGrid(recentNotebooks, { includeCreateCard: true })}
+                                    </section>
+
+                                    {otherNotebooks.length > 0 ? (
+                                        <section className="home-section">
+                                            <div className="home-section-heading">
+                                                <h2 className="home-section-title">全部笔记本</h2>
+                                            </div>
+                                            {renderNotebookGrid(otherNotebooks, { includeCreateCard: false })}
+                                        </section>
+                                    ) : null}
+                                </>
+                            ) : (
+                                <EmptyState
+                                    icon="🔎"
+                                    title="还没有笔记本"
+                                    description="先创建一个笔记本。"
+                                    actionLabel="立即创建"
+                                    onAction={() => openNotebookModal('create')}
+                                    compact
+                                />
+                            )}
                         </>
                     )}
                 </div>
             </main>
 
-            {showSettings ? <SettingsModal onClose={() => setShowSettings(false)} /> : null}
+            {showSettings ? <SettingsModal initialTab={settingsInitialTab} onClose={() => setShowSettings(false)} /> : null}
             {notebookModalState ? (
                 <NotebookModal
                     mode={notebookModalState.mode}
@@ -399,6 +514,7 @@ export default function HomePage() {
                     onSave={notebookModalState.mode === 'create' ? handleCreateNotebook : handleUpdateNotebook}
                     onDelete={notebookModalState.mode === 'edit' ? handleDeleteNotebook : undefined}
                     existingTitles={notebooks.map((item) => ({ id: item.id, title: item.title }))}
+                    availableTags={availableTags}
                 />
             ) : null}
         </div>

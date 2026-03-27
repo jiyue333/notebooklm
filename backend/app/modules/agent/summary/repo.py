@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from sqlalchemy import desc, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent.summary.models import SummaryCache
@@ -16,21 +17,21 @@ async def get_cached_summary(
     article_id: str,
     content_hash: str,
     prompt_version: str,
-    model_provider: str,
-    model_name: str,
-    output_language: str,
+    model_provider: str | None = None,
+    model_name: str | None = None,
+    output_language: str | None = None,
 ) -> SummaryCache | None:
-    result = await session.execute(
-        select(SummaryCache).where(
+    stmt = (
+        select(SummaryCache)
+        .where(
             SummaryCache.article_id == article_id,
             SummaryCache.content_hash == content_hash,
             SummaryCache.prompt_version == prompt_version,
-            SummaryCache.model_provider == model_provider,
-            SummaryCache.model_name == model_name,
-            SummaryCache.output_language == output_language,
         )
+        .order_by(desc(SummaryCache.created_at))
     )
-    return result.scalar_one_or_none()
+    result = await session.execute(stmt)
+    return result.scalars().first()
 
 
 async def list_cached_summaries_by_article_ids(
@@ -64,32 +65,41 @@ async def save_summary_cache(
     output_language: str,
     summary_text: str,
 ) -> SummaryCache:
-    existing = await get_cached_summary(
-        session,
-        article_id=article_id,
-        content_hash=content_hash,
-        prompt_version=prompt_version,
-        model_provider=model_provider,
-        model_name=model_name,
-        output_language=output_language,
+    now = datetime.now(UTC)
+    stmt = (
+        insert(SummaryCache)
+        .values(
+            article_id=article_id,
+            content_hash=content_hash,
+            prompt_version=prompt_version,
+            model_provider=model_provider,
+            model_name=model_name,
+            output_language=output_language,
+            summary_text=summary_text,
+            created_at=now,
+        )
+        .on_conflict_do_update(
+            index_elements=[
+                SummaryCache.article_id,
+                SummaryCache.content_hash,
+                SummaryCache.prompt_version,
+            ],
+            set_={
+                "model_provider": model_provider,
+                "model_name": model_name,
+                "output_language": output_language,
+                "summary_text": summary_text,
+                "created_at": now,
+            },
+        )
+        .returning(SummaryCache.id)
     )
-    if existing is not None:
-        existing.summary_text = summary_text
-        await session.flush()
-        return existing
-
-    entry = SummaryCache(
-        article_id=article_id,
-        content_hash=content_hash,
-        prompt_version=prompt_version,
-        model_provider=model_provider,
-        model_name=model_name,
-        output_language=output_language,
-        summary_text=summary_text,
-        created_at=datetime.now(UTC),
-    )
-    session.add(entry)
-    await session.flush()
+    result = await session.execute(stmt)
+    entry_id = result.scalar_one()
+    entry = await session.get(SummaryCache, entry_id)
+    if entry is None:
+        # Defensive fallback; should not happen with RETURNING id.
+        raise RuntimeError("summary cache upsert succeeded but row not found")
     return entry
 
 

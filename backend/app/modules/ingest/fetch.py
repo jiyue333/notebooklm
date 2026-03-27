@@ -45,15 +45,34 @@ async def fetch_content(inp: IngestInput) -> tuple[bytes, str | None]:
     if not inp.source_url:
         raise ValueError(f"{inp.input_type.value} 类型需要 source_url")
 
-    async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT, follow_redirects=True) as http:
-        resp = await http.get(inp.source_url)
+    try:
+        return await _download_url(inp.source_url, verify=True)
+    except httpx.HTTPError as exc:
+        if _should_retry_without_tls_verification(inp.source_url, exc):
+            logger.warning(
+                "fetch.ssl_verify_failed_retry_insecure",
+                url=inp.source_url,
+                error=str(exc)[:200],
+            )
+            return await _download_url(inp.source_url, verify=False)
+        raise
+
+
+async def _download_url(source_url: str, *, verify: bool) -> tuple[bytes, str]:
+    async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT, follow_redirects=True, verify=verify) as http:
+        resp = await http.get(source_url)
         resp.raise_for_status()
         data = resp.content
         if len(data) > _MAX_DOWNLOAD_BYTES:
             raise ValueError(f"文件过大: {len(data)} bytes")
+        file_name = _guess_filename(source_url, resp.headers.get("content-type", ""))
+        return data, file_name
 
-    file_name = _guess_filename(inp.source_url, resp.headers.get("content-type", ""))
-    return data, file_name
+
+def _should_retry_without_tls_verification(source_url: str, exc: Exception) -> bool:
+    if not source_url.lower().startswith("https://"):
+        return False
+    return "CERTIFICATE_VERIFY_FAILED" in str(exc)
 
 
 def _guess_filename(url: str, content_type: str) -> str:

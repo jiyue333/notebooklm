@@ -1,1 +1,1 @@
-"""Note module placeholders."""
+"""Notes module."""

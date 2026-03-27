@@ -19,7 +19,13 @@ export default function AccountMenu({ open, user, onClose, onOpenSettings, onLog
     return (
         <div className="ui-account-menu" ref={menuRef} role="menu">
             <div className="ui-account-menu-profile">
-                <div className="ui-account-menu-avatar">{user?.name?.charAt(0) || 'U'}</div>
+                <div className="ui-account-menu-avatar">
+                    {user?.avatar ? (
+                        <img className="ui-account-menu-avatar-image" src={user.avatar} alt={user?.name || '用户头像'} />
+                    ) : (
+                        user?.name?.charAt(0) || 'U'
+                    )}
+                </div>
                 <div className="ui-account-menu-meta">
                     <strong>{user?.name || '未登录用户'}</strong>
                     <span>{user?.email || '点击设置完善资料'}</span>

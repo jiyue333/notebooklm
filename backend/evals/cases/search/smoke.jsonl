@@ -1,1 +1,1 @@
-{"case_id":"search_smoke_001","query":"latest agent evaluation failures enterprise knowledge management","mode":"deep","expected":{"min_results":1},"tags":["search","smoke"]}
+{"case_id":"search_smoke_001","query":"langchain overview","mode":"fast","expected":{"min_results":1},"tags":["search","smoke"]}

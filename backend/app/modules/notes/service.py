@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import AppError
@@ -87,5 +89,6 @@ async def export_note_markdown(
     note = await repo.get_note(session, user_id=user_id, notebook_id=notebook_id, note_id=note_id)
     if note is None:
         raise AppError(404, "未找到对应笔记", code="note_not_found")
-    filename = f"{note.title or 'note'}.md"
+    normalized_title = re.sub(r"[\\/\r\n]+", "-", (note.title or "note")).strip() or "note"
+    filename = f"{normalized_title}.md"
     return filename, note.content_markdown

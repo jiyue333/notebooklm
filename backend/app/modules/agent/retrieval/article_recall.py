@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections import defaultdict
 
 import structlog
@@ -27,18 +26,17 @@ async def article_recall(
 ) -> list[ArticleRecallResult]:
     """在 notebook 内按 article 粒度召回。"""
 
-    dense_task = _article_dense(db, query=query, notebook_id=notebook_id, top_k=top_k * 2)
-    sparse_task = _article_sparse(db, query=query, notebook_id=notebook_id, top_k=top_k * 2)
+    dense_results: list[ArticleRecallResult] = []
+    try:
+        dense_results = await _article_dense(db, query=query, notebook_id=notebook_id, top_k=top_k * 2)
+    except Exception as exc:
+        logger.warning("article_recall.dense_failed", error=str(exc)[:200])
 
-    dense_results, sparse_results = await asyncio.gather(
-        dense_task, sparse_task, return_exceptions=True,
-    )
-    if isinstance(dense_results, BaseException):
-        logger.warning("article_recall.dense_failed", error=str(dense_results)[:200])
-        dense_results = []
-    if isinstance(sparse_results, BaseException):
-        logger.warning("article_recall.sparse_failed", error=str(sparse_results)[:200])
-        sparse_results = []
+    sparse_results: list[ArticleRecallResult] = []
+    try:
+        sparse_results = await _article_sparse(db, query=query, notebook_id=notebook_id, top_k=top_k * 2)
+    except Exception as exc:
+        logger.warning("article_recall.sparse_failed", error=str(exc)[:200])
 
     scores: dict[str, float] = defaultdict(float)
     result_map: dict[str, ArticleRecallResult] = {}

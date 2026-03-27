@@ -325,6 +325,45 @@
     box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-color), transparent 50%);
 }
 
+.settings-layout-group {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+}
+
+.settings-layout-btn {
+    border: none;
+    border-radius: var(--radius);
+    background: var(--card-bg);
+    box-shadow: var(--card-shadow);
+    color: var(--text-color);
+    text-align: left;
+    padding: 10px 12px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.settings-layout-btn:hover {
+    background: var(--hover-bg);
+}
+
+.settings-layout-btn.active {
+    background: color-mix(in srgb, var(--accent-color), transparent 90%);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-color), transparent 45%);
+}
+
+.settings-layout-title {
+    font-size: 0.84rem;
+    font-weight: 600;
+}
+
+.settings-layout-desc {
+    font-size: 0.76rem;
+    color: var(--meta-color);
+}
+
 /* Password fields */
 .settings-password-fields {
     display: flex;
@@ -384,4 +423,49 @@
     align-items: center;
     justify-content: center;
     gap: 12px;
+}
+
+.settings-avatar-upload {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: var(--radius);
+    background: var(--hover-bg);
+    border: 1px solid var(--border-color);
+}
+
+.settings-avatar-input {
+    display: none;
+}
+
+.settings-avatar-trigger {
+    flex-shrink: 0;
+    border: none;
+    border-radius: 999px;
+    padding: 8px 12px;
+    background: color-mix(in srgb, var(--accent-color), transparent 88%);
+    color: var(--accent-color);
+    font-size: 0.82rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.settings-avatar-trigger:hover {
+    background: color-mix(in srgb, var(--accent-color), transparent 78%);
+}
+
+.settings-avatar-filename {
+    min-width: 0;
+    color: var(--meta-color);
+    font-size: 0.82rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.settings-avatar-filename.has-file {
+    color: var(--title-color);
 }
