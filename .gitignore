@@ -26,6 +26,10 @@ raw/
 # Benchmark predictions and reports (generated, not committed)
 predictions/
 
+# Eval runs and reports (generated, not committed)
+backend/evals/runs/
+backend/evals/reports/
+
 # Logs
 logs
 *.log
