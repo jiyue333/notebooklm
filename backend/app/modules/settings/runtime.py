@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from hashlib import sha256
+from urllib.parse import urlparse
 
 import structlog
 from cryptography.fernet import InvalidToken
@@ -17,6 +19,9 @@ from app.infra.security.credential_crypto import get_credential_crypto
 from app.modules.settings.defaults import get_default_user_settings
 
 logger = structlog.get_logger(__name__)
+_PREFERRED_SITE_MAX_COUNT = 8
+_PREFERRED_SITE_MAX_LENGTH = 120
+_DOMAIN_PATTERN = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 
 
 @dataclass(slots=True)
@@ -75,8 +80,21 @@ def resolve_preferred_sites(user) -> list[str]:
         normalized = str(site).strip().lower()
         if not normalized:
             continue
-        normalized = normalized.removeprefix("https://").removeprefix("http://").strip("/")
-        sites.append(normalized)
+        normalized = normalized.removeprefix("*.")
+        parsed = urlparse(normalized if "://" in normalized else f"https://{normalized}")
+        domain = parsed.netloc.strip().lower() or parsed.path.strip().lower()
+        domain = domain.split("/")[0].split("?")[0].split("#")[0]
+        if ":" in domain:
+            domain = domain.split(":", 1)[0]
+        if not domain:
+            continue
+        if len(domain) > _PREFERRED_SITE_MAX_LENGTH:
+            continue
+        if not _DOMAIN_PATTERN.match(domain):
+            continue
+        sites.append(domain)
+        if len(sites) >= _PREFERRED_SITE_MAX_COUNT:
+            break
     return list(dict.fromkeys(sites))
 
 
@@ -122,8 +140,24 @@ def resolve_search_api_key(user, settings: Settings | None = None) -> tuple[str 
     return None, "missing"
 
 
-def resolve_tavily_api_key(settings: Settings | None = None) -> tuple[str | None, str]:
+def resolve_tavily_api_key(
+    user=None,
+    settings: Settings | None = None,
+) -> tuple[str | None, str]:
     runtime_settings = settings or get_settings()
+    if user is not None:
+        ciphertext = getattr(user, "tavily_api_key_ciphertext", None)
+        if ciphertext:
+            decrypted = _decrypt_user_key(
+                ciphertext,
+                credential_name="tavily_api_key",
+            )
+            if decrypted:
+                return decrypted, "user"
+        user_settings = get_merged_user_settings(user)
+        plain = str(user_settings.get("tavilyApiKey") or "").strip()
+        if plain:
+            return plain, "user"
     if runtime_settings.tavily_default_api_key:
         return runtime_settings.tavily_default_api_key, "default"
     return None, "missing"

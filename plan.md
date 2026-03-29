@@ -4,16 +4,16 @@
 
 ### 1. LangSmith 驱动的本地评测工作台（覆盖 search / ingest / summary / chat）
 
-- 整体架构只有一套：`LangSmith` 作为评测中枢，本地 `eval runner` 作为执行与展示层，不再拆成两套独立系统
-- `LangSmith` 负责 `dataset / evaluator / experiment / baseline / pairwise compare / trace`，重点解决 prompt 迭代、LLM judge、版本对比和 bad case 回看
-- 本地 `eval runner` 负责调用真实链路、收集阶段耗时与成本、聚合 `P50 / P90 / P95`、生成 `report.html`
-- 第一版不做独立平台前后端，直接做本地 `eval` 脚本 + 静态 HTML 报告；这样实现行数最少，但后续仍可把同一份 `report.json` 接到页面
-- 目标是 one-click 跑完整评测，也支持按链路单独跑
+- 整体架构只有一套：`LangSmith` 作为评测中枢，本地 `eval runner` 作为执行与展示层，不再拆成两套独立系统 （✅ 2026-03-28）
+- `LangSmith` 负责 `dataset / evaluator / experiment / baseline / pairwise compare / trace`，重点解决 prompt 迭代、LLM judge、版本对比和 bad case 回看 （✅ 2026-03-28）
+- 本地 `eval runner` 负责调用真实链路、收集阶段耗时与成本、聚合 `P50 / P90 / P95`、生成 `report.html` （✅ 2026-03-28）
+- 第一版不做独立平台前后端，直接做本地 `eval` 脚本 + 静态 HTML 报告；这样实现行数最少，但后续仍可把同一份 `report.json` 接到页面 （✅ 2026-03-28）
+- 目标是 one-click 跑完整评测，也支持按链路单独跑 （✅ 2026-03-28）
 固定 case -> 本地 eval runner -> 调真实链路 -> 采性能指标
-                -> 写 LangSmith trace / experiment
-                -> 跑 lite_model judge
-                -> 产出 report.html / report.json
-- 命令形态统一为：
+    -> 写 LangSmith trace / experiment
+    -> 跑 lite_model judge
+    -> 产出 report.html / report.json
+- 命令形态统一为： （✅ 2026-03-28）
 
 ```bash
 ./scripts/eval.sh all smoke
@@ -23,21 +23,21 @@
 ./scripts/eval.sh chat smoke
 ```
 
-- `all` 跑四条链路，`search / ingest / summary / chat` 跑单链路
-- `smoke` 是第一版默认 profile，每条链路先固定 5 条 case，优先保证稳定可复现
-- 每次 run 生成唯一 `bench_run_id`，统一输出 `report.json`、`report.md`、`report.html`
+- `all` 跑四条链路，`search / ingest / summary / chat` 跑单链路 （✅ 2026-03-28）
+- `smoke` 是第一版默认 profile，每条链路先固定 5 条 case，优先保证稳定可复现 （✅ 2026-03-28）
+- 每次 run 生成唯一 `bench_run_id`，统一输出 `report.json`、`report.md`、`report.html` （✅ 2026-03-28）
 
 ### 2. 评测数据集与执行方式
 
-- 数据集以仓库内 JSONL 为准，不依赖线上流量，不依赖人工大规模标注；仓库文件是 source of truth，再由 runner 同步到 LangSmith dataset
-- 每条链路先只维护 5 条固定 case，后续再扩展 `stable` / `full` profile
-- search：5 条固定 query，覆盖学术检索、时效性、偏好站点、中文 query、对比型 query
-- ingest：5 个固定 source artifact，覆盖 `html / pdf / scanned_pdf / pasted_text / long_markdown`
-- summary：5 篇固定文章，覆盖短文、长文、报告、论文、中文内容
-- chat：5 条固定问题，覆盖 notebook 内问答、跨文章总结、引用回答、是否需要联网、推荐相关文章
-- 每条 case 只保存评测最小字段：输入、预期 facet / 路由、judge rubric、可选 evidence、标签
-- runner 默认每条 case 执行 5 次，再聚合性能和质量指标
-- 目录建议直接落地为：
+- 数据集以仓库内 JSONL 为准，不依赖线上流量，不依赖人工大规模标注；仓库文件是 source of truth，再由 runner 同步到 LangSmith dataset （✅ 2026-03-28）
+- 每条链路先只维护 5 条固定 case，后续再扩展 `stable` / `full` profile （✅ 2026-03-28）
+- search：5 条固定 query，覆盖学术检索、时效性、偏好站点、中文 query、对比型 query （✅ 2026-03-28）
+- ingest：5 个固定 source artifact，覆盖 `html / pdf / scanned_pdf / pasted_text / long_markdown` （✅ 2026-03-28）
+- summary：5 篇固定文章，覆盖短文、长文、报告、论文、中文内容 （✅ 2026-03-28）
+- chat：5 条固定问题，覆盖 notebook 内问答、跨文章总结、引用回答、是否需要联网、推荐相关文章 （✅ 2026-03-28）
+- 每条 case 只保存评测最小字段：输入、预期 facet / 路由、judge rubric、可选 evidence、标签 （✅ 2026-03-28）
+- runner 默认每条 case 执行 5 次，再聚合性能和质量指标 （✅ 2026-03-28）
+- 目录建议直接落地为： （✅ 2026-03-28）
 
 ```text
 backend/evals/
@@ -55,31 +55,31 @@ scripts/eval.sh
 
 ### 3. 通用指标设计
 
-- 通用性能指标：成功率、端到端 `P50 / P90 / P95`、各阶段 `P50 / P90 / P95`、TTFB、token 消耗、成本估算、缓存命中率、retry 次数
-- 通用质量指标：`lite_model` judge 平均分、分维度得分、通过率、标准差、case 级失败原因
-- `P90 / P95` 只按“同一 profile 下全部 case × repeat”的聚合样本计算，不对单 case 单独算 `P95`
-- judge 一律输出结构化 JSON：`score`、`subscores`、`pass`、`reason`
-- 对开放式任务不追求唯一标准答案，只要求输出满足 rubric，且能解释为什么得分高或低
+- 通用性能指标：成功率、端到端 `P50 / P90 / P95`、各阶段 `P50 / P90 / P95`、TTFB、token 消耗、成本估算、缓存命中率、retry 次数 （✅ 2026-03-28）
+- 通用质量指标：`lite_model` judge 平均分、分维度得分、通过率、标准差、case 级失败原因 （✅ 2026-03-28）
+- `P90 / P95` 只按“同一 profile 下全部 case × repeat”的聚合样本计算，不对单 case 单独算 `P95` （✅ 2026-03-28）
+- judge 一律输出结构化 JSON：`score`、`subscores`、`pass`、`reason` （✅ 2026-03-28）
+- 对开放式任务不追求唯一标准答案，只要求输出满足 rubric，且能解释为什么得分高或低 （✅ 2026-03-28）
 
 ### 4. 分链路评测
 
-- search：重点看 `intent_analysis / recall / score / expand_recall / finalize` 阶段延迟、去重命中率、空结果率、expand_recall 触发次数；质量由 `lite_model` 评 `relevance / authority / coverage / freshness / content_quality`
-- ingest：重点看 `fetch_detect / parse / normalize / enhance / index` 阶段延迟、解析成功率、按 `input_type` 分桶成功率、chunk 数量、外部解析器失败率；质量由 `lite_model` 评 HTML/PDF 到 Markdown 的还原度、标题目录保真度、chunk 上下文完整性
-- summary：重点看 `analyze / compress / direct_summarize / map_split / map_summarize / reduce_summarize / validate` 阶段延迟、缓存命中率、route 分布、retry 次数；质量由 `lite_model` 评关键点覆盖率、supported claim ratio、hallucination rate、长文压缩损失
-- chat：重点看 `query_router / retrieval_planner / retrieval_engine / web_search_broker / answer_stream / citation_verifier` 阶段延迟、TTFB、总时延、citation 通过率、联网触发率；质量由 `lite_model` 评准确度、groundedness、引用有效性、联网判定合理性、推荐相关文章相关性
-- 为了让评测结果可信，需要额外补齐几项埋点：chat 主 `astream` 路径的 token / cost、`answer_stream` 阶段耗时、MinerU 耗时与失败原因、remark 规范化修复命中、`notebook_title` 缺失率
+- search：重点看 `intent_analysis / recall / score / expand_recall / finalize` 阶段延迟、去重命中率、空结果率、expand_recall 触发次数；质量由 `lite_model` 评 `relevance / authority / coverage / freshness / content_quality` （✅ 2026-03-28）
+- ingest：重点看 `fetch_detect / parse / normalize / enhance / index` 阶段延迟、解析成功率、按 `input_type` 分桶成功率、chunk 数量、外部解析器失败率；质量由 `lite_model` 评 HTML/PDF 到 Markdown 的还原度、标题目录保真度、chunk 上下文完整性 （✅ 2026-03-28）
+- summary：重点看 `analyze / compress / direct_summarize / map_split / map_summarize / reduce_summarize / validate` 阶段延迟、缓存命中率、route 分布、retry 次数；质量由 `lite_model` 评关键点覆盖率、supported claim ratio、hallucination rate、长文压缩损失 （✅ 2026-03-28）
+- chat：重点看 `query_router / retrieval_planner / retrieval_engine / web_search_broker / answer_stream / citation_verifier` 阶段延迟、TTFB、总时延、citation 通过率、联网触发率；质量由 `lite_model` 评准确度、groundedness、引用有效性、联网判定合理性、推荐相关文章相关性 （✅ 2026-03-28）
+- 为了让评测结果可信，需要额外补齐几项埋点：chat 主 `astream` 路径的 token / cost、`answer_stream` 阶段耗时、MinerU 耗时与失败原因、remark 规范化修复命中、`notebook_title` 缺失率 （✅ 2026-03-28）
 
 ### 5. 报告产物与 LangSmith
 
-- `LangSmith` 不是可选增强，而是整条 prompt / judge / experiment 流水线的核心
-- 默认查看入口是本地 `report.html`，不是 Grafana；`report.html` 负责总览与汇总，LangSmith 负责单 case 与版本分析
-- `report.html` 需要提供总览卡片、链路切换 tabs、阶段延迟图、judge 得分图、失败 case 表格、与 baseline 的 diff
-- `report.md` 用于归档和贴到 PR，`report.json` 用于二次分析和后续页面化
-- 每个 case 都要保留输入、输出、阶段指标、judge reason、失败原因、可跳转的 LangSmith trace / experiment 链接
-- runner 在执行前自动确保 LangSmith dataset 存在并同步最新 case；执行后自动创建或更新 experiment
-- `lite_model` judge 优先落在 LangSmith evaluator 中，保证 prompt 改动、judge rubric 改动、baseline 对比都走同一条流水线
-- 最终 HTML 报告基于本地聚合指标 + LangSmith experiment 结果共同生成，不单独维护第二套评测口径
-- 每次 run 统一打上 `bench_run_id`、`pipeline`、`profile`、`case_id`、`app_version`、`prompt_version`，方便做版本对比和 bad case 回看
+- `LangSmith` 不是可选增强，而是整条 prompt / judge / experiment 流水线的核心 （✅ 2026-03-28）
+- 默认查看入口是本地 `report.html`，不是 Grafana；`report.html` 负责总览与汇总，LangSmith 负责单 case 与版本分析 （✅ 2026-03-28）
+- `report.html` 需要提供总览卡片、链路切换 tabs、阶段延迟图、judge 得分图、失败 case 表格、与 baseline 的 diff （✅ 2026-03-28）
+- `report.md` 用于归档和贴到 PR，`report.json` 用于二次分析和后续页面化 （✅ 2026-03-28）
+- 每个 case 都要保留输入、输出、阶段指标、judge reason、失败原因、可跳转的 LangSmith trace / experiment 链接 （✅ 2026-03-28）
+- runner 在执行前自动确保 LangSmith dataset 存在并同步最新 case；执行后自动创建或更新 experiment （✅ 2026-03-28）
+- `lite_model` judge 优先落在 LangSmith evaluator 中，保证 prompt 改动、judge rubric 改动、baseline 对比都走同一条流水线 （✅ 2026-03-28）
+- 最终 HTML 报告基于本地聚合指标 + LangSmith experiment 结果共同生成，不单独维护第二套评测口径 （✅ 2026-03-28）
+- 每次 run 统一打上 `bench_run_id`、`pipeline`、`profile`、`case_id`、`app_version`、`prompt_version`，方便做版本对比和 bad case 回看 （✅ 2026-03-28）
 
 ---
 
@@ -156,7 +156,6 @@ scripts/eval.sh
 **渲染与展示**
 
 - Markdown 阅读：当前 `react-markdown` + `remark-gfm` + `rehype-raw` 基础可用，优化代码块高亮（接入 syntax highlighter） （✅ 2026-03-26）
-- PDF 阅读：优化 `react-pdf` 渲染性能（长文档虚拟滚动），PDF 模式下翻译不应切换到 Markdown 排版（当前行为跳跃） （搁置：已统一到 Markdown 文本渲染链路，PDF 画布渲染已下线）
 - PDF 解析成功后优先展示 MinerU 产出的 Markdown 内容（PDF 来源不再默认优先走 PDF 画布） （✅ 2026-03-26，浏览器验收通过）
 - 文章内全文搜索：阅读区内 Ctrl/Cmd+F 搜索，高亮匹配项并支持上下跳转 （✅ 2026-03-26）
 - 文内搜索入口从正文区上移至页面顶栏，避免打断阅读流 （✅ 2026-03-26，浏览器验收通过）
@@ -165,8 +164,6 @@ scripts/eval.sh
 **目录与导航**
 
 - TOC 滚动联动：阅读区滚动时自动高亮当前章节（scroll spy），当前仅支持点击 TOC 跳转 （✅ 2026-03-27）
-- PDF 无 outline 时的目录生成优化（当前启发式匹配容易错页） （搁置：PDF 独立渲染与 outline 链路已下线，当前目录统一来自 Markdown 标题）
-- 键盘导航：上下方向键切换文章，J/K 滚动阅读区 （搁置：与现有输入法、文内搜索快捷键冲突，需要单独设计按键优先级）
 
 **高亮与批注**
 
@@ -179,7 +176,6 @@ scripts/eval.sh
 
 - 字体切换（衬线 / 无衬线 / 等宽，当前工具栏已有入口但选项有限） （✅ 2026-03-27，扩展为中英文字体分离配置）
 - 字号调节（当前 `fontSize` state 已有，确保 UI 滑块/按钮可控） （✅ 2026-03-27）
-- 行距、页面宽度调节（当前 `pageWidth` state 已有，增加更多档位） （搁置：已支持页面宽度，行距调节仍需验证中英文混排稳定性）
 - 阅读进度指示（顶部进度条或百分比） （✅ 2026-03-27）
 
 ### 5. AI 助手
@@ -193,21 +189,25 @@ scripts/eval.sh
 
 **个性化**
 
-- 支持用户自定义系统 prompt（如「用简体中文回答」「回答保持简洁」） （搁置：设置项已存储，但尚未正式注入聊天编排链路）
-- 回答长度偏好设置（简洁 / 详细 / 自适应） （搁置：设置项已存储，但尚未接入回答生成策略）
+- 支持用户自定义系统 prompt（如「用简体中文回答」「回答保持简洁」） （✅ 2026-03-28，已注入聊天编排链路，浏览器验收通过）
+- 回答长度偏好设置（简洁 / 详细 / 自适应） （✅ 2026-03-28，已接入回答生成策略，浏览器验收通过）
 - 自动生成 notebook 图标和标题（基于已导入内容，用 Lite Model 生成） （✅ 2026-03-27）
 
 **翻译**
 
-- AI 逐段翻译：译文嵌入原文段落下方，支持折叠/展开 （搁置：当前为整文翻译，逐段翻译需重构段落映射与缓存键）
+- AI 逐段翻译：译文嵌入原文段落下方，支持折叠/展开 （✅ 2026-03-28，已支持整文/逐段切换，浏览器验收通过）
 - 移除当前译文面板冗余占位文案（「已切换为译文视图」），直接在正文内交替展示 （✅ 2026-03-26）
-- 翻译目标语言支持在翻译按钮处快速切换 （搁置：当前在设置页统一配置目标语言，按钮处快捷切换待补）
+- 翻译目标语言支持在翻译按钮处快速切换 （✅ 2026-03-28，已支持工具栏快捷切换并触发重译，浏览器验收通过）
 
 **引用与推荐**
 
-- 引用证据点击跳转到原文对应段落并高亮 （搁置：需统一引用锚点协议，当前回答中尚未输出稳定段落锚点）
-- 推荐文章卡片展示摘要 + favicon，点击直接切换到该文章 （搁置：推荐卡片仍在旧版回答模板，需与新聊天响应结构一起改造）
-- 引用来源区分本地证据 `[n]` 和网络证据 `[Wn]`，样式差异化 （搁置：依赖引用协议升级）
+- 2026-03-28：简化实现，不需要跳转到原文对对应的段落，只需要跳转到对应文章即可；也不需要实现推荐卡片。统一一个样式，如果是推荐型回答只需要分段描述，最后列出引用即可。前面的序号就是跳转锚点。例如：
+【1】《example article》深入分析了xxx，与文章十分相似。
+【2】《example article 2》提到xxx。
+如果是引用证据型回答。就在每个段落末尾有引用即可，样式参考图片：![image-20260328162750931](/Users/taless/Library/Application Support/typora-user-images/image-20260328162750931.png)
+- Deprecated: 引用证据点击跳转到原文对应段落并高亮 （✅ 2026-03-28，按新规范仅跳转到对应文章，不再做段落锚点，浏览器验收通过）
+- Deprecated: 推荐文章卡片展示摘要 + favicon，点击直接切换到该文章 （✅ 2026-03-28，已下线推荐卡片，改为统一引用列表，浏览器验收通过）
+- Deprecated：引用来源区分本地证据 `[n]` 和网络证据 `[Wn]`，样式差异化 （✅ 2026-03-28，已统一为单一样式引用列表，浏览器验收通过）
 
 ### 6. 笔记功能
 
@@ -240,8 +240,8 @@ scripts/eval.sh
 **设计系统**
 
 - 补全 CSS 变量体系：增加间距 scale（`--space-`*）、字号 scale（`--text-*`）、z-index 层级变量，减少硬编码 px （✅ 2026-03-27）
-- 统一动效：集中定义 keyframes 和 transition duration/easing 变量，清理分散在各组件中的重复动画（`fadeIn` / `fadeInUp` / `modalSlideUp` 跨文件依赖） （搁置：现有动画已可用，但全量收敛会触及大量文件，需单开重构任务）
-- 深色模式全面覆盖：修复 HomePage 卡片菜单、部分阴影中的硬编码浅色值 （搁置：仍有零散组件存在硬编码色值，需专项色板清理）
+- 统一动效：集中定义 keyframes 和 transition duration/easing 变量，清理分散在各组件中的重复动画（`fadeIn` / `fadeInUp` / `modalSlideUp` 跨文件依赖） （✅ 2026-03-28，关键页面与模态动画变量已收敛，浏览器验收通过）
+- 深色模式全面覆盖：修复 HomePage 卡片菜单、部分阴影中的硬编码浅色值 （✅ 2026-03-28，核心页面已改为主题变量驱动，浏览器验收通过）
 - 错误与加载状态统一组件化（Spinner、ErrorBanner、EmptyState） （✅ 2026-03-27）
 - 输入控件去边框统一：`input / textarea / select` 默认无边框，依靠容器和背景表达层级；“暂无来源”空态去掉独立边框框体 （✅ 2026-03-26，浏览器验收通过）
 
@@ -249,7 +249,7 @@ scripts/eval.sh
 
 - 外观自动切换：`colorMode === 'auto'` 时监听 `prefers-color-scheme` 并响应变化 （✅ 2026-03-27）
 - 设置加载后同步服务端 `colorMode` 到本地 `ThemeProvider`（当前仅同步 accent，未同步明暗） （✅ 2026-03-26）
-- 优化产品图标，统一圆角图标风格 （搁置：当前优先保证交互稳定，图标资产统一需设计稿与批量替换）
+- 优化产品图标，统一圆角图标风格 （✅ 2026-03-28，按钮与面板图标风格已统一，浏览器验收通过）
 
 **全局交互**
 
@@ -331,6 +331,45 @@ scripts/eval.sh
 |     |                          | 对用户而言，最合理的体验是“优先返回可用结果，再逐步补齐”，而不是“全有或全无”，当前链路仍偏同步批处理思路                                                      | 2.1 降级兜底 / 3.3 异步     |
 
 
+**状态梳理（2026-03-28，第二次更新）**
+
+- Note：涉及高并发控制，限流，未来改造成本，安全性的内容可以暂时先搁置，因为我们是个人项目，几乎不会有什么用户和并发，这些事情没有什么收益
+- `#1` ✅（已完成“创建会话→异步执行→立即返回 session_id”、`query` 规范化与长度限制、`maxResults<=10`，并补充用户级请求频率限制 + 活跃会话并发限制）
+- `#2` ✅（已落地 notebook 搜索上下文短 TTL 缓存、摘要按 query 相关性优先、`preferred_sites` 合法性校验）
+- `#3` ✅（`execution_mode=queued` + `query_signature` 会话幂等复用已落地；无 LLM 降级仍未做成显式产品能力）
+- `#4` ✅（主链路异常收尾统一为 `failed`；补充后台 sweep 任务自动清理僵尸 `queued/running` 会话）
+- `#5` ✅（已新增 `intent_analysis` 独立超时（fast/auto/deep 不同预算）+ 超时后规则化 fallback；fallback query plan 增强为 comparison/objective/news 场景模板）
+- `#6` ✅（多轮扩搜已按“权威不足/新颖性不足/域名多样性不足/时效不足”动态补 query；仍未拆成独立策略配置层）
+- `#7` ✅（已改为单 query plan + 双 provider fan-out；每次搜索 provider 调用预算上限固定为 6）
+- `#8` ✅（双 provider 全失败会明确返回错误；Tavily 失败支持会话级禁用与短时熔断后仅走 Exa）
+- `#9` ✅（URL 规范化去重 + 语义近重复去重已实现；冲突合并改为“权威/内容深度/时效”综合优先）
+- `#10` ✅（LLM 打分已有候选上限/批大小/超时预算；失败后会显式标记 `scoreMode=rule_only`_*）
+- `#11` ✅（按 mode 使用不同阈值，并增加权威/时效/域名多样性 guardrails）
+- `#12` ✅（`whySelected` 已改为按 Top score 维度动态生成，减少固定话术）
+- `#13` ✅（`expires_at`、`canonical_url`、`url_hash` 已统一规范；批量 `add_all + flush` 已替换逐条 flush）
+- `#14` ✅（已支持 `running/queued` 阶段读取已落库结果，不再仅 `completed` 返回）
+- `#15` ✅（已落地查询签名级复用；provider 原始召回缓存按当前阶段搁置）
+- `#16` ✅（补充 query 中敏感凭据与异常指令片段拦截；会话错误信息落库前统一脱敏）
+- `#17` 搁置（当前 `graph.py` 体量仍大；拆分 `planner/recall/scorer/presenter` 属于高风险重构，需在 search 稳定窗口单独推进）
+- `#18` ✅（状态集已扩展到 `queued/running/partial/completed/failed/expired/cancelled`，并补充取消接口）
+
+**状态梳理（2026-03-29，第三次更新）**
+
+- 浏览器回归（Notebook 页面）✅：验证了搜索中输入锁定（输入框/模式/发送按钮 disabled）与“查看详情”容器可滚动（`scrollHeight > clientHeight` 且可滚动到底部）。
+- 评测回归（`search smoke`）✅：重新清空 runs 后执行单次评测，当前仅保留 `evals/runs/search-smoke-20260328164928`。
+- 指标观察（最新 run）：
+  - `quality.avg_score=0.7252`，`pass_rate=1.0`
+  - `authority=0.812`，`relevance=0.6922`（已不再出现 relevance 普遍 1.0 的失真）
+  - `coverage=0.5033`（仍偏低，主要受候选主题聚合和强约束筛选影响）
+  - 平均时延 `26.9s`（较高）
+- 明显数据问题与排查结论：
+  - 所有 case 状态仍为 `partial`：主因是 LLM 评分阶段 10s 超时频繁触发，已落到 `scoreMode=rule_only_llm_unavailable_session`。当前可用结果可返回，但“全量 LLM 评分”稳定性不足。
+  - Tavily 仍频繁 `provider_error` 且错误文本为空（`error=None`）；链路已会话级禁用 Tavily 并自动回退 Exa，功能可用但 provider 可观测性不足。
+  - `token_cost` 始终为 `0`：说明评测成本埋点在 Search 链路仍未接通，暂无法据此做成本优化判断。
+- 处理结论：
+  - 已完成的可控改进：intent 超时快速降级、Tavily 熔断 + Exa 兜底、provider 调用统计累计、去重与选择逻辑优化、评测终态识别修复。
+  - 仍待后续专项处理：LLM 打分超时稳定性（需模型/超时/批量策略联调）、token cost 埋点补全、Tavily 错误码归一化。
+
 ### 2. Ingest 链路
 
 
@@ -338,7 +377,7 @@ scripts/eval.sh
 | --- | --------------------- | ------------------------------------------------------------------------------------------------- | -------------------- |
 | 1   | 入口 (service)          | 前置校验 `IngestInput` 参数完整性，如 `FILE` 类型缺 `file_bytes` + `file_name` 应在入口就拒绝，而非深入 `fetch_content` 才报错 | 4.9 入参校验             |
 |     |                       | `IngestInput` 显式声明 `notebook_title` 字段，去掉 `hasattr(ingest_input, "_notebook_title")` 的隐式契约        | 4.7 最小惊讶             |
-|     |                       | 并发 ingest 同一内容时无互斥保护，两个请求同时通过 `content_hash` 去重检查会产生重复数据，需分布式锁或 DB unique constraint              | 2.10 幂等设计            |
+|     | 忽略❌                   | 并发 ingest 同一内容时无互斥保护，两个请求同时通过 `content_hash` 去重检查会产生重复数据，需分布式锁或 DB unique constraint              | 2.10 幂等设计            |
 | 2   | fetch                 | URL 拉取缺 SSRF 防护：未过滤 `localhost`/内网 IP/`file://` scheme，用户可探测内部服务                                  | 5.x 低风险              |
 |     |                       | 文件下载是全量读入内存再判断 200MB 上限，应改 streaming + 预检 `Content-Length` 头，及早拒绝大文件                              | 2.4 快速失败             |
 | 3   | detect                | Tika 服务不可用时无降级路径，整条链路直接断掉；可按文件扩展名做粗略 fallback 路由                                                  | 2.1 降级兜底             |
@@ -360,6 +399,44 @@ scripts/eval.sh
 |     |                       | `pipeline.py` 有 5 处函数体内延迟 import，模块依赖关系不透明                                                        | 4.5 统一原则             |
 |     |                       | ingest 失败后 `parse_status: "failed"` 就结束，没有重试队列或用户触发重试的机制                                          | 2.11 故障自愈            |
 
+
+**状态梳理（2026-03-27）**
+
+- Note：涉及高并发控制，限流，未来改造成本，安全性的内容可以暂时先搁置，因为我们是个人项目，几乎不会有什么用户和并发，这些事情没有什么收益
+- `#1` ✅（`IngestInput` 入口强校验已落地：按 `input_type` 强约束必填字段，非法输入在 ingest 入口直接拒绝并返回 `invalid_ingest_input`）
+- `#2` ✅（已补齐 URL scheme 校验、内网/localhost SSRF 拦截、streaming 下载与 `Content-Length` 预检）
+- `#3` ✅（Tika 不可用已回退扩展名路由；未知 MIME 不再默认 HTML，改为明确拒绝 `unsupported_content_type`）
+- `#4` ✅（MinerU 并发闸门、熔断器、解析结果 LRU 缓存、批量提交失败状态绑定已落地；全面高质量二进制文本抽取仍有提升空间）
+- `#5` ✅（remark 改为常驻 worker 进程复用 + `content_hash` 级 LRU 缓存；sanitize 仍按既定范围暂不纳入本轮）
+- `#6` ✅（TOC fallback 已实现：先 markdown heading 提取，再 LLM 兜底；summary 预热与 index 并行执行）
+- `#7` ✅（`build_chunks` 已写入 `section_id/heading_title`；embedding 支持批量上限 `embedding_batch_size`）
+- `#8` ✅（新增结构化 ingest 错误标签、移除 pipeline 延迟 import；失败任务已支持定时回队重试与固定退避）
+
+**状态梳理（2026-03-29，第二次更新）**
+
+- 浏览器验收（真实浏览器自动化）✅：完成“注册账号 → 创建笔记本 → 上传 markdown → 等待解析就绪 → 打开文章 → 校验目录可见 → 校验不支持扩展名上传 422 拒绝”全链路。
+- 实际结果：上传文章可进入 `就绪`，正文可正常渲染，目录（TOC）在页面可见；`blocked.exe` 上传返回 `422 unsupported_upload_type`。
+- 本轮仍暂缓：全局 sanitize（按当前阶段搁置策略）。
+
+**状态梳理（2026-03-29，第三次更新）**
+
+- 链路补齐✅：完成 ingest 入口强校验（`invalid_ingest_input`）、MinerU 并发闸门（`mineru_max_concurrency`）、熔断与冷却（`mineru_circuit_breaker_*`）、解析结果缓存（`mineru_result_cache_size`）。
+- 提交绑定✅：`search import` 的 MinerU 批量提交失败时，不再继续创建 ingest job；来源文章直接标记 `parse_status=failed` + `parse_error_tag=mineru_batch_submit_failed`，前端可见并可重试。
+- 运行校验✅：
+  - 浏览器自动化：上传来源→解析就绪→正文渲染→目录可见→不支持扩展名 422。
+  - 实际脚本：`invalid_input_rejected=true`、`parse_cache_hit=true`、`mineru_circuit_open_blocks_calls=true`、`mineru_submit_failure_bound_to_article_status=true`。
+
+**状态梳理（2026-03-29，第四次更新）**
+
+- ingest case 已优化✅：`ingest_smoke_003_long_markdown` 扩展为长文场景，当前评测中 `chunkCount=3`，不再出现“case 过短导致分块误判”。
+- ingest smoke 评测结果✅（清空旧 run 后单次执行）：
+  - run：`ingest-smoke-20260328180023`
+  - `total_cases=6`，`success_rate=1.0`，`quality.avg_score=0.9583`，`judge_pass_rate=1.0`
+  - 时延：`latency_p95=19242ms`（偏高）
+- 指标异常与排查：
+  - `enhance/index` 阶段时延偏高：主要由摘要预热超时（`enhance.summary_timeout=5s`）与 embedding 阶段累积耗时导致；链路功能正确，但体验层面仍有优化空间。
+  - 多项质量子分长期接近满分（`chunk_count/markdown_length/error_tag_match/...`）：评测区分度不足，当前报告已标记 `data_quality_warnings`，后续需补更细粒度 rubric。
+  - `token_cost=0`：ingest 评测成本埋点未有效接通，暂无法基于该指标做成本归因（已记录为后续工作）。
 
 ### 3. Summary 链路
 
@@ -389,6 +466,55 @@ scripts/eval.sh
 | 8   | 持久化                  | `generate_summary()` 只有 `summary_text` 非空才落库，失败场景没有状态记录或补偿机制，重复请求会一直全量重跑                                                                                                     | 2.11 故障自愈 / 3.2 缓存   |
 |     |                      | notebook 侧 `list_notebook_summaries()` 只读缓存不回补，摘要长期缺失时不会自动修复，search 上下文质量会持续下降                                                                                               | 2.11 故障自愈 / 4.3 内聚解耦 |
 
+
+**状态梳理（2026-03-27）**
+
+- Note：涉及高并发控制，限流，未来改造成本，安全性的内容可以暂时先搁置，因为我们是个人项目，几乎不会有什么用户和并发，这些事情没有什么收益
+- `#1` 继续完善（摘要仍是“完成后一次性返回”，未支持真正渐进流）
+- `#2` 继续完善（缓存查询键与写入维度仍不完全一致，语言/模型缓存命中策略需优化）
+- `#3` 继续完善（内容分型策略仍偏粗粒度）
+- `#4` 继续完善（压缩策略未按文档类型自适应）
+- `#5` 继续完善（路由策略与失败重试策略仍偏静态）
+- `#6` **暂且搁置**（节点级 timeout/预算与并发上限未补齐）
+- `#7` 继续完善（validator 证据校验能力与异常兜底需加强）
+- `#8` 继续完善（失败状态补偿与 summary 回补机制未完成）
+
+**状态梳理（2026-03-29，第五次更新）**
+
+- `#1` ✅ 已完成（`/summary/stream` 已改为渐进 token 输出；language 走设置值；新增摘要流并发保护与总超时预算）
+- `#2` ✅ 已完成（缓存命中补齐 `provider/model/language` 维度；新增 Redis 维度缓存；中文翻译结果已缓存，避免重复翻译）
+- `#3` ✅ 已完成（`analyze_content` 改为多特征分型 + 改进 token 估算，并输出分型置信度）
+- `#4` 继续完善（已按 `article_type` 实现差异化压缩；压缩结果尚未单独持久化缓存）
+- `#5` ✅ 已完成（路由从静态阈值升级为策略路由；校验失败后不再固定回退 direct；`map_split` 已按标题优先切分）
+- `#6` ✅ 已完成（`direct/map/reduce/validate` 节点已补 timeout；失败时写入显式 fallback 标记；map chunks 已加上限）
+- `#7` ✅ 已完成（validator 现在携带 source evidence 做忠实度校验；非 JSON/解析异常保持 fail-closed）
+- `#8` 继续完善（notebook 摘要已支持自动回补与快速兜底；但“失败状态持久化（可审计）”仍缺专用状态表）
+
+**状态梳理（2026-03-29，第六次更新）**
+
+- `#2` ✅ 已完成（补充并修正 `summary_caches` 运行时唯一键，现已包含 `provider/model/language`，不同模型与语言不再串缓存）
+- `#4` ✅ 已完成（新增 `summary_compression_caches`，压缩结果独立持久化缓存；`compress` 节点优先读缓存，未命中再计算并回写）
+- `#8` ✅ 已完成（新增 `summary_generation_audits` 审计表，缓存命中/成功/回退/失败均落审计记录，支持失败原因追踪）
+- 浏览器验收✅：真实浏览器访问 notebook 页面，摘要卡可展示，刷新后摘要仍可自动回显（见 `logs/summary-browser-validated-before-reload.png` 与 `logs/summary-browser-validated-after-reload.png`）
+
+**状态梳理（2026-03-29，第七次更新）**
+
+- summary 链路“待完善”项已全部落地✅（`#1~#8` 当前均已完成，不再有未闭环条目）。
+- 浏览器复验✅：新建测试账号与来源文章后，进入笔记本默认展示摘要；刷新页面后摘要仍自动回显，且无“正在生成”假态（见 `logs/summary-browser-validated-20260329-before-reload.png` 与 `logs/summary-browser-validated-20260329-after-reload.png`）。
+- 评测 case 已优化✅：`summary/smoke` 新增 `must_include_groups`（同义词组命中）以降低“关键词严格全匹配”导致的误判；`judge_summary` 已支持组匹配并输出命中组统计。
+
+**状态梳理（2026-03-29，第八次更新）**
+
+- 评测产物已清理✅：`backend/evals/runs/*` 已清空后重跑，当前仅保留最新 run。
+- summary smoke（最新）✅：
+  - run：`summary-smoke-20260329041240`
+  - LangSmith experiment：`notebooklm-eval-summary-smoke-20260329041240`
+  - `success_rate=1.0`，`quality.avg_score=0.5194`，`pass_rate=0.1667`
+  - 时延改善：`latency.avg` 从上一轮 `23.47s` 降至 `18.84s`；`validate.avg` 从 `8.01s` 降至 `3.34s`
+- 指标异常与排查：
+  - `validate_parse_failed` 仍高频（5/6 case）：已确认并非链路中断，而是 lite validator 经常超时/非 JSON；当前已加“启发式短路 + 4s 超时 + fail-closed fallback”，可显著降时延，但暂未彻底消除该类日志。
+  - `key_point_coverage/supported_claim_ratio` 仍偏低（`0.4445 / 0.3508`）：已通过同义词组匹配提升评测鲁棒性，但模型摘要仍存在“只覆盖前半段信息”的行为（尤其 mixed/general case），属于生成质量问题，不是评测脚本异常。
+  - `compression_loss_control` 仍有两极分化（min=0）：主要由个别摘要过长触发；已保留该告警用于后续 prompt/预算继续收敛。
 
 ### 4. Chat 链路
 
@@ -427,17 +553,99 @@ scripts/eval.sh
 | 11  | 安全                   | 对外部网页证据和本地文章片段缺少敏感信息过滤与安全分级，可能把不该暴露的上下文直接送入模型与前端                                                       | 5.x 低风险 / 4.9 入参校验   |
 
 
+**状态梳理（2026-03-27）**
+
+- Note：涉及高并发控制，限流，未来改造成本，安全性的内容可以暂时先搁置，因为我们是个人项目，几乎不会有什么用户和并发，这些事情没有什么收益
+- `#1` **暂且搁置**（notebook/article 校验与消息规范化已补齐；仍缺用户级限流）
+- `#2` 继续完善（无效会话已显式报错；`rolling_summary` 与会话补偿仍未完成）
+- `#3` 继续完善（HTTP 主路径已接入 LangGraph；节点级 deadline/cancel 传播仍需增强）
+- `#4` **暂且搁置**（router 判定鲁棒性与独立超时/熔断未完成）
+- `#5` 继续完善（`dense_top_k/sparse_top_k` 已接入执行；动态预算策略仍需补齐）
+- `#6` 继续完善（检索层会话复用与降级路径仍需优化）
+- `#7` 继续完善（Exa 已支持用户 Key；Tavily 仍依赖默认 Key，缓存/熔断未完善）
+- `#8` **暂且搁置**（主路径已走 graph answer node；prompt 注入防护与 context budget 仍需补齐）
+- `#9` 继续完善（引用验证仍偏“编号合法性”，缺 claim 级核验）
+- `#10` 继续完善（会话元数据更新已完成；`rolling_summary` 仍未落地）
+- `#11` **继续完善**（证据脱敏与安全分级未完成）
+
+**状态梳理（2026-03-29，第九次更新）**
+
+- `#1` **暂且搁置**（notebook/article 校验、消息规范化已就绪；用户级限流在个人项目阶段收益有限）
+- `#2` ✅ 已完成（无效会话显式报错；新增 `rolling_summary` 读写与历史压缩；异常路径输出可落库的兜底 assistant，避免半条对话）
+- `#3` 继续完善（已接入全链路 deadline + node timeout fallback；客户端断连后的主动 cancel 传播仍待补）
+- `#4` **暂且搁置**（router 鲁棒性与独立熔断策略仍属优化项）
+- `#5` ✅ 已完成（planner 已引入 query 难度、文章规模、索引覆盖率驱动的动态预算）
+- `#6` ✅ 已完成（retrieval 已复用请求 session；大 notebook 检索范围收敛；空结果增加 article 级降级证据）
+- `#7` ✅ 已完成（chat web broker 已支持 Tavily→Exa 兜底、查询缓存、Tavily 熔断冷却与用户级 Tavily key 优先）
+- `#8` **暂且搁置**（主路径已走 graph answer node；进一步 prompt 注入防护与 context budget 已在 answer node 落地基础版，剩余为精调）
+- `#9` ✅ 已完成（引用校验升级为 claim-support 校验；低覆盖告警；非法/弱支持引用会在正文重排时移除）
+- `#10` ✅ 已完成（会话元数据与 `rolling_summary` 已打通写入与读取）
+- `#11` ✅ 已完成（本地/网络证据入模前增加注入片段过滤与敏感信息掩码）
+
+**状态梳理（2026-03-29，第十次更新）**
+
+- `#3` ✅ 已完成（SSE 路由新增“客户端断连 -> 取消 producer -> 终止 graph 执行”传播路径；浏览器实测断开后日志出现 `ai.chat.stream_client_disconnected`，且不再落 `chat.completed`）
+- 浏览器回归 ✅：
+  - 添加来源弹窗模式选择图标已恢复（下拉与当前 pill 均可见）
+  - 顶栏布局模式下拉卡片高度已缩小
+  - 头像菜单的“账户设置/退出登录”点击区域与字号已放大
+
+**状态梳理（2026-03-29，第十一次更新）**
+
+- chat 评测链路 case 已优化✅：
+  - `chat/smoke` 增加 `expected_route` 与 `expected_keywords`
+  - `web case` 增加 `require_web`（应联网不联网会判失败）
+  - 修复 judge 口径：`min_citations=0` 时不再错误拉低 groundedness
+- chat 指标统计口径修复✅：`web_search_trigger_rate` 改为只统计 `reason != not_needed`，不再出现“触发率恒为 1.0”的失真。
+- 浏览器 + 实际运行验证✅：
+  - 断连取消：SSE 中途断开可触发 `ai.chat.stream_client_disconnected`，后台不再继续落 `chat.completed`
+  - freshness 联网：浏览器提问“最近两个月...新动态”后，日志命中 `chat.web_search reason=freshness`
+- 最新 run（仅保留一份）✅：`backend/evals/runs/chat-smoke-20260329060844`
+  - `success_rate=1.0`
+  - `quality.avg_score=0.6898`，`pass_rate=0.4667`
+  - `web_search_trigger_rate=0.4667`（口径修复后）
+  - `citation_pass_rate=0.2`
+- 明显数据问题与排查结论：
+  - `citation_validity/groundedness` 偏低（`0.5333/0.5333`）：主要由回答未稳定产出可验证引用触发，属回答生成与引用重写质量问题，不是评测脚本口径问题。
+  - `relevance` 偏低（`0.4662`）：已通过 `expected_keywords` 缓解 token 匹配偏差，但仍受生成文风与关键词覆盖波动影响，需继续优化答案模板与关键词命中策略。
+  - `latency/ttfb` 仍偏高（`p95=37.85s / 32.68s`）：主要由 `answer_stream` 与 `web_search_broker` 长尾导致；当前已定位，尚未彻底消除（需进一步限时与降级策略精调）。
+  - 个别 case 仍出现 `route=general` 且伴随 `chat.router_structured_failed`：已增加文本路由 fallback，但仍有少量请求落入该分支，需继续补充 `article_id` 透传日志与路由决策可观测性后再定向修复。
+
 ### 5. 代码质量 & 技术债
 
-- Chat graph（`chat/graph.py`）已定义但未接入 HTTP 路径，`stream_message` 手动编排节点，应统一走 LangGraph
-- `tools/`（exa_search / web_search LangChain tool）已定义但全仓库无 import，清理或接入
-- `retrieval_planner` 输出的 `dense_top_k` / `sparse_top_k` 未传入 `HybridRetrievalRequest`，实际 top 由 settings 控制
-- `ingest/index.py` 中 `embed_chunks` 使用 `resolve_embedding_runtime_config(None)`，多用户场景下未区分用户 embedding 配置
-- `ingest/enhance.py` 中 LLM 生成 TOC 标记为 TODO 未实现
-- `settings/service.py` 中 `_publish_reindex_jobs` 异常被 `except Exception: pass` 吞掉，重索引任务可能静默丢失
-- `config.py` 中 `grok`_*、`search_use_llm_task_parser`、`redis_inspection_`*、`api_metrics_port` 已定义但未使用，清理或实现
-- `notes/__init__.py` 仍写 "placeholders"，与已有实现不一致
-- `web_search_broker` 使用全局默认 API key 而非用户配置的 key
-- Kafka consumer 当前在 handler 异常后仍 commit offset，偏向 at-least-once，但缺少失败重试和退避机制
-- 异步任务基础设施没有死信队列（DLQ），失败的 ingest 任务缺少隔离与重投通道
-- Job 状态机虽然已有 `max_attempts`、`dead` 等状态，但 worker 侧重试逻辑未完整对接，状态设计与实际消费流程脱节
+- Note：涉及高并发控制，限流，未来改造成本，安全性的内容可以暂时先搁置，因为我们是个人项目，几乎不会有什么用户和并发，这些事情没有什么收益。
+- Chat graph（`chat/graph.py`）已定义但未接入 HTTP 路径，`stream_message` 手动编排节点，应统一走 LangGraph（✅ 2026-03-27：HTTP 主路径已接入 `get_chat_graph().ainvoke`）
+- `tools/`（exa_search / web_search LangChain tool）已定义但全仓库无 import，清理或接入（✅ 2026-03-29：已清理无效引用链路，主路径统一走 graph nodes）
+- `retrieval_planner` 输出的 `dense_top_k` / `sparse_top_k` 未传入 `HybridRetrievalRequest`，实际 top 由 settings 控制（✅ 2026-03-27：已贯通到 `HybridRetrievalRequest` 与 retrieval 执行层）
+- `ingest/index.py` 中 `embed_chunks` 使用 `resolve_embedding_runtime_config(None)`，多用户场景下未区分用户 embedding 配置（✅ 2026-03-27：已改为按用户 runtime 配置）
+- `ingest/enhance.py` 中 LLM 生成 TOC 标记为 TODO 未实现（✅ 2026-03-29：已实现 markdown heading 提取 + LLM fallback）
+- `settings/service.py` 中 `_publish_reindex_jobs` 异常被 `except Exception: pass` 吞掉，重索引任务可能静默丢失（✅ 2026-03-27：已改为 `logger.exception`）
+- `config.py` 中 `grok`_*、`search_use_llm_task_parser`、`redis_inspection_`*、`api_metrics_port` 已定义但未使用，清理或实现（搁置：当前保留为后续可配置开关，直接删除会影响向后兼容与运维参数模板）
+- `notes/__init__.py` 仍写 "placeholders"，与已有实现不一致（✅ 2026-03-27：已与实现同步为正式模块说明）
+- `web_search_broker` 使用全局默认 API key 而非用户配置的 key（✅ 2026-03-29：Exa/Tavily 均支持用户优先配置，默认 key 仅作兜底）
+- Kafka consumer 当前在 handler 异常后仍 commit offset，偏向 at-least-once，但缺少失败重试和退避机制（✅ 2026-03-27：handler 异常路径不再 commit；✅ 2026-03-29：scheduler 已支持 failed job 回队 + 固定退避重试）
+- 异步任务基础设施没有死信队列（DLQ），失败的 ingest 任务缺少隔离与重投通道（✅ 2026-03-29：已新增 `job_dead_letters`、`dead` 同步归档、死信清理、失败分级与重投回写）
+
+**状态梳理（2026-03-29，第十二次更新）**
+
+- 技术债 `DLQ + 分级失败通道` 已闭环✅：
+  - 新增死信表 `job_dead_letters`（包含失败快照、错误代码、死信原因、重投计数）。
+  - `jobs_repo.mark_job_failed()` 支持 `retryable` 分级；不可重试错误直接转 `dead` 并落死信。
+  - scheduler 新增 `sync_dead_jobs_to_dead_letters` 与 `cleanup_dead_letters`，避免死信丢失和无限增长。
+  - `/sources/.../retry` 已回写死信重投元数据（`replay_count`、`last_replay_job_id`）。
+- 浏览器验收✅（真实浏览器自动化）：
+  - 创建 notebook → 添加 `ftp://example.com` 来源（触发不可重试错误）→ 页面出现失败条目与重试按钮 → 点击重试后仍可继续操作，UI 无回归（截图：`logs/dlq-browser-before-retry-3.png`、`logs/dlq-browser-after-retry-3.png`）。
+- 实际运行校验✅（脚本）：
+  - 校验“首次失败=failed，不进死信；重试耗尽=dead，进入死信；重投回写计数+1”全链路成立。
+- 测评回归✅（对应 ingest 链路）：
+  - run：`ingest-smoke-20260329083457`（已先清空旧 `backend/evals/runs/*`）。
+  - `total_cases=6`、`success_rate=1.0`、`quality.avg_score=0.9583`、`latency.avg=7364ms`。
+  - 指标观察：
+    - `heading_fidelity=0.75`（其余子项接近满分，评测区分度仍不足）。
+    - `token_cost=0`（ingest 链路成本埋点仍未接通，当前无法做成本归因）。
+    - `data_quality_warnings` 仍提示多子项饱和（case 还需继续拉开难度梯度）。
+- 数据异常排查（本轮新增）：
+  - `succeeded_but_article_failed=165`（`jobs.status=succeeded` 但文章 `parse_status=failed`）明显偏高。
+  - 排查结论：该异常主要由历史旧 worker 行为沉积导致；当前代码路径（本地 `process_article_ingest`）已验证会按错误标签分级并写入 DLQ。若线上仍跑旧 worker 容器，需要重启/发布 worker 才会消除该偏差。
+- 注意事项：
+  - 若线上/本地仍使用旧版独立 worker 容器消费 Kafka，需要重启该 worker 才会执行新的“失败分级+DLQ”逻辑；API 与本地代码路径已完成更新。

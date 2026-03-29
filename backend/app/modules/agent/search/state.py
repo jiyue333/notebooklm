@@ -115,4 +115,10 @@ class SearchGraphState(TypedDict, total=False):
     selected_candidates: list[SearchCandidate]
     seen_urls: list[str]
     recall_summary: dict[str, Any]
+    provider_call_budget: int
+    provider_calls_used: int
+    provider_call_counts: dict[str, int]
+    tavily_disabled: bool
+    tavily_disable_reason: str
+    forced_include_domains: list[str]
     debug: dict[str, Any]

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 from time import perf_counter
 from typing import Any, Literal
@@ -109,6 +110,20 @@ async def query_router_node(state: ChatGraphState) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("chat.router_structured_failed", error=str(exc)[:200])
         observe_chat_error(node="query_router")
+        try:
+            fallback_prompt = HumanMessage(
+                content=(
+                    "只输出一个路由标签，不要解释："
+                    "article_qa / notebook_search / recommendation / general。"
+                )
+            )
+            raw = await model.ainvoke([*messages, fallback_prompt])
+            route = _extract_route_from_text(_message_text(raw))
+            if route:
+                observe_chat_stage(stage="query_router", route=route, status="llm_text", duration_ms=_ms(t0))
+                return _build_result(route)
+        except Exception as plain_exc:
+            logger.warning("chat.router_text_fallback_failed", error=str(plain_exc)[:200])
 
     # fallback
     route = "article_qa" if article_id else "general"
@@ -117,12 +132,13 @@ async def query_router_node(state: ChatGraphState) -> dict[str, Any]:
 
 
 def _rule_match(query: str, query_lower: str, article_id: str | None) -> str | None:
-    if article_id and any(h in query for h in _ARTICLE_HINTS):
-        return "article_qa"
     if any(h in query for h in _RECOMMEND_HINTS):
         return "recommendation"
     if any(h in query_lower for h in _NOTEBOOK_HINTS):
         return "notebook_search"
+    if article_id:
+        # 当前文章上下文存在时，默认优先走 article_qa，避免轻问句被误路由到 general。
+        return "article_qa"
     return None
 
 
@@ -144,6 +160,42 @@ def _format_history(history: list[dict]) -> str:
         content = turn.get("content", "")[:200]
         lines.append(f"{role}: {content}")
     return "\n".join(lines)
+
+
+def _message_text(message: Any) -> str:
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(parts)
+    return str(content)
+
+
+def _extract_route_from_text(text: str) -> str | None:
+    lowered = (text or "").strip().lower()
+    if not lowered:
+        return None
+    match = re.search(r"\b(article_qa|notebook_search|recommendation|general)\b", lowered)
+    if match:
+        return match.group(1)
+    alias_map = {
+        "article": "article_qa",
+        "notebook": "notebook_search",
+        "recommend": "recommendation",
+    }
+    for alias, mapped in alias_map.items():
+        if alias in lowered:
+            return mapped
+    return None
 
 
 def _ms(start: float) -> float:

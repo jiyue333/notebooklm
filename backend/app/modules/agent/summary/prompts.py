@@ -3,7 +3,7 @@
 遵循「稳定前缀 + 变化后缀」结构以利用 prompt caching。
 """
 
-PROMPT_VERSION = "v5.0"
+PROMPT_VERSION = "v5.1"
 
 # ── 稳定前缀（System） ──────────────────────────────────────────────
 
@@ -20,6 +20,8 @@ Rules:
 6. For tutorials: include the topic, prerequisites, key steps, and takeaways.
 7. For code-heavy content: focus on purpose, architecture, and key APIs rather than code details.
 8. Write clearly and professionally.
+9. Prioritize heading-level coverage: keep the document's main sections and avoid dropping risk/limitation/conclusion information.
+10. Do not stop at introduction; ensure the summary is complete and ends naturally.
 """
 
 # ── 变化后缀（User）按 article_type 分模板 ─────────────────────────
@@ -63,6 +65,7 @@ Content:
 
 USER_PROMPT_GENERAL = """\
 Summarize this document.
+Focus on: background/objective, key methods or process, risks/limitations, and final conclusions or recommendations.
 
 Title: {title}
 
@@ -101,13 +104,17 @@ Section summaries:
 # ── Validate ───────────────────────────────────────────────────────
 
 VALIDATE_PROMPT = """\
-Evaluate this summary against the original title. Return a JSON object:
+Evaluate this summary against the title and source evidence. Return ONLY a JSON object:
 {{"passed": true/false, "issues": ["issue1", ...]}}
 
 Checks:
 1. Does the summary cover the main topic of "{title}"?
 2. Is it between 100-500 words?
-3. Does it contain any fabricated information not implied by the title?
+3. Does it contain fabricated information not supported by source evidence?
+4. Is terminology consistent with the source?
 
 Summary:
-{summary}"""
+{summary}
+
+Source evidence excerpt:
+{source_excerpt}"""

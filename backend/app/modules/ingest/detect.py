@@ -7,6 +7,7 @@ import hashlib
 import structlog
 
 from app.infra.providers.tika.client import detect_mime_async
+from app.modules.ingest.errors import UnsupportedContentTypeError
 from app.modules.ingest.types import DocRoute, FetchedContent, TikaMetadata
 
 logger = structlog.get_logger(__name__)
@@ -52,8 +53,15 @@ async def detect_and_route(
 ) -> FetchedContent:
     """检测 MIME 类型并生成路由决策。"""
 
-    mime_type = await detect_mime_async(raw_bytes)
+    mime_type = "application/octet-stream"
+    try:
+        mime_type = await detect_mime_async(raw_bytes)
+    except Exception as exc:
+        logger.warning("detect.tika_failed_fallback_ext", error=str(exc)[:200], file_name=file_name)
+
     route = _resolve_route(mime_type, file_name)
+    if route is None:
+        raise UnsupportedContentTypeError(mime_type=mime_type, file_name=file_name)
     content_hash = hashlib.sha256(raw_bytes).hexdigest()
 
     return FetchedContent(
@@ -66,13 +74,19 @@ async def detect_and_route(
     )
 
 
-def _resolve_route(mime_type: str, file_name: str | None) -> DocRoute:
+def _resolve_route(mime_type: str, file_name: str | None) -> DocRoute | None:
     """优先按 MIME 路由，MIME 不明确时回退到扩展名。"""
 
-    mime_lower = mime_type.lower()
+    mime_lower = (mime_type or "").lower()
     for prefix, route in _MIME_ROUTE:
         if mime_lower.startswith(prefix):
             return route
+
+    # Tika 不可用或类型粗糙时，常见文本类型按 text 路由
+    if mime_lower.startswith("text/"):
+        return DocRoute.TEXT
+    if mime_lower in {"application/json", "application/xml", "application/javascript"}:
+        return DocRoute.TEXT
 
     if file_name:
         ext = _get_ext(file_name)
@@ -80,7 +94,7 @@ def _resolve_route(mime_type: str, file_name: str | None) -> DocRoute:
             return _EXT_ROUTE[ext]
 
     logger.warning("detect.unknown_type", mime=mime_type, file_name=file_name)
-    return DocRoute.HTML
+    return None
 
 
 def _get_ext(name: str) -> str:

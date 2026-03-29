@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
+from urllib.parse import urlparse
 
 from sqlalchemy import delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +44,17 @@ def _coerce_datetime(value: Any) -> datetime | None:
         return datetime.fromisoformat(normalized)
     except ValueError:
         return None
+
+
+def _normalize_canonical_url(url: str | None) -> str:
+    normalized = (url or "").strip().lower()
+    if not normalized:
+        return ""
+    parsed = urlparse(normalized)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    path = parsed.path.rstrip("/") or "/"
+    return f"{parsed.scheme}://{parsed.netloc}{path}"
 
 
 # ── SearchSession CRUD ─────────────────────────────────────────────────────
@@ -116,6 +128,65 @@ async def get_search_session_by_id(
     return result.scalar_one_or_none()
 
 
+async def find_reusable_search_session(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    notebook_id: str,
+    query_signature: str,
+) -> SearchSession | None:
+    result = await session.execute(
+        select(SearchSession)
+        .where(
+            SearchSession.user_id == user_id,
+            SearchSession.notebook_id == notebook_id,
+            SearchSession.status.in_(["queued", "running", "completed"]),
+        )
+        .order_by(SearchSession.created_at.desc())
+        .limit(20),
+    )
+    now = datetime.now(UTC)
+    for row in result.scalars().all():
+        if row.expires_at and row.expires_at <= now:
+            continue
+        request_json = row.provider_request_json or {}
+        if str(request_json.get("querySignature") or "") == query_signature:
+            return row
+    return None
+
+
+async def count_active_sessions(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    notebook_id: str,
+) -> int:
+    result = await session.execute(
+        select(SearchSession.id)
+        .where(
+            SearchSession.user_id == user_id,
+            SearchSession.notebook_id == notebook_id,
+            SearchSession.status.in_(["queued", "running"]),
+        )
+        .limit(10)
+    )
+    return len(result.scalars().all())
+
+
+async def list_pending_sessions_for_sweep(
+    session: AsyncSession,
+    *,
+    limit: int = 200,
+) -> list[SearchSession]:
+    result = await session.execute(
+        select(SearchSession)
+        .where(SearchSession.status.in_(["queued", "running"]))
+        .order_by(SearchSession.created_at.asc())
+        .limit(max(1, min(limit, 500)))
+    )
+    return list(result.scalars().all())
+
+
 async def update_session_status(
     session: AsyncSession,
     *,
@@ -154,15 +225,16 @@ async def save_agent_search_results(
     await session.execute(
         delete(SearchResult).where(SearchResult.search_session_id == search_session_id)
     )
-    ids: list[str] = []
+    rows: list[SearchResult] = []
     for card in cards:
         url = card.get("url", "")
-        url_hash = sha256(url.encode()).hexdigest() if url else ""
+        canonical_url = _normalize_canonical_url(url)
+        url_hash = sha256(canonical_url.encode()).hexdigest() if canonical_url else ""
         sr = SearchResult(
             search_session_id=search_session_id,
             provider_result_id=None,
             raw_url=url,
-            canonical_url=url.split("?")[0].split("#")[0] if url else url,
+            canonical_url=canonical_url or url,
             url_hash=url_hash,
             title=_sanitize_text(card.get("title", "")) or "Untitled",
             description=_sanitize_text(card.get("description")),
@@ -188,10 +260,11 @@ async def save_agent_search_results(
             }),
             created_at=ts,
         )
-        session.add(sr)
+        rows.append(sr)
+    if rows:
+        session.add_all(rows)
         await session.flush()
-        ids.append(sr.id)
-    return ids
+    return [row.id for row in rows]
 
 
 async def list_search_results(

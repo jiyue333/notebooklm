@@ -17,6 +17,7 @@ import structlog
 from app.core.config import get_settings
 from app.infra.db.session import get_session_manager
 from app.infra.telemetry.metrics import observe_mq_job_skip
+from app.modules.auth.models import User
 from app.modules.ingest.types import IngestInput, InputType
 from app.modules.ingest.service import build_article_chunk_rows, build_article_fields, ingest
 from app.modules.jobs import repo as jobs_repo
@@ -27,6 +28,18 @@ from app.modules.notebooks.service import invalidate_notebook_detail_cache
 logger = structlog.get_logger(__name__)
 
 _TERMINAL_STATES = frozenset({"succeeded", "dead"})
+_NON_RETRYABLE_INGEST_ERROR_TAGS = frozenset(
+    {
+        "duplicate",
+        "invalid_ingest_input",
+        "unsupported_content_type",
+        "unsupported_upload_type",
+        "fetch_invalid_scheme",
+        "fetch_invalid_url",
+        "fetch_ssrf_blocked",
+        "parse_empty",
+    }
+)
 
 JobProcessor = Callable[[str], Awaitable[None]]
 
@@ -51,6 +64,13 @@ async def _replace_article_chunks(
     for row in chunk_rows:
         session.add(ArticleChunk(article_id=article_id, **row))
     await session.flush()
+
+
+def _is_retryable_ingest_failure(tag: str | None) -> bool:
+    normalized = (tag or "").strip().lower()
+    if not normalized:
+        return True
+    return normalized not in _NON_RETRYABLE_INGEST_ERROR_TAGS
 
 
 async def process_article_ingest(job_id: str) -> None:
@@ -81,13 +101,25 @@ async def process_article_ingest(job_id: str) -> None:
         payload = job.payload_json or {}
         article_id = payload.get("articleId") or job.article_id
         if not article_id:
-            await jobs_repo.mark_job_failed(job, error="missing articleId")
+            await jobs_repo.mark_job_failed(
+                job,
+                error="missing articleId",
+                session=session,
+                retryable=False,
+                error_code="missing_article_id",
+            )
             await session.commit()
             return
 
         article = await notebooks_repo.get_article_by_id(session, article_id=article_id)
         if article is None:
-            await jobs_repo.mark_job_failed(job, error="article not found")
+            await jobs_repo.mark_job_failed(
+                job,
+                error="article not found",
+                session=session,
+                retryable=False,
+                error_code="article_not_found",
+            )
             await session.commit()
             return
 
@@ -103,6 +135,7 @@ async def process_article_ingest(job_id: str) -> None:
                 article_id=article.id,
             )
             notebook = await notebooks_repo.get_notebook(session, user_id=article.user_id, notebook_id=article.notebook_id)
+            user = await session.get(User, article.user_id)
             ingest_input = IngestInput(
                 input_type=input_type,
                 notebook_id=article.notebook_id,
@@ -129,6 +162,7 @@ async def process_article_ingest(job_id: str) -> None:
                 existing_dedupe_keys=existing_dedupe_keys,
                 mineru_batch_id=payload.get("mineruBatchId"),
                 mineru_data_id=payload.get("mineruDataId"),
+                user=user,
             )
 
             if result.is_duplicate:
@@ -137,6 +171,7 @@ async def process_article_ingest(job_id: str) -> None:
                 article.parse_error_message = "该来源与当前笔记本中的已有文章重复，已跳过解析。"
                 article.chunk_status = "failed"
                 article.index_status = "failed"
+                await jobs_repo.mark_job_succeeded(job)
             elif result.clean_markdown:
                 fields = build_article_fields(result)
                 for key, value in fields.items():
@@ -151,15 +186,25 @@ async def process_article_ingest(job_id: str) -> None:
                 article.chunk_status = "completed" if chunk_rows else "failed"
                 article.index_status = "completed" if chunk_rows else "failed"
                 # 补写 article_vector
-                await _try_embed_article_vector(article)
+                await _try_embed_article_vector(article, user=user)
+                await jobs_repo.mark_job_succeeded(job)
             else:
                 article.parse_status = "failed"
-                article.parse_error_tag = "no_content"
-                article.parse_error_message = "解析未生成可用正文。"
+                article.parse_error_tag = result.parse_error_tag or "no_content"
+                article.parse_error_message = (
+                    result.parse_error_message
+                    or "解析未生成可用正文。"
+                )
                 article.chunk_status = "failed"
                 article.index_status = "failed"
-
-            await jobs_repo.mark_job_succeeded(job)
+                retryable = _is_retryable_ingest_failure(article.parse_error_tag)
+                await jobs_repo.mark_job_failed(
+                    job,
+                    error=article.parse_error_message,
+                    session=session,
+                    retryable=retryable,
+                    error_code=article.parse_error_tag,
+                )
             await session.commit()
             await invalidate_notebook_detail_cache(
                 user_id=article.user_id,
@@ -173,7 +218,13 @@ async def process_article_ingest(job_id: str) -> None:
         except Exception as exc:
             await session.rollback()
             job = await jobs_repo.get_job(session, job_id) or job
-            await jobs_repo.mark_job_failed(job, error=str(exc)[:500])
+            await jobs_repo.mark_job_failed(
+                job,
+                error=str(exc)[:500],
+                session=session,
+                retryable=True,
+                error_code="worker_exception",
+            )
             article = await notebooks_repo.get_article_by_id(session, article_id=article_id)
             if article:
                 article.parse_status = "failed"
@@ -186,7 +237,7 @@ async def process_article_ingest(job_id: str) -> None:
             )
 
 
-async def _try_embed_article_vector(article: Article) -> None:
+async def _try_embed_article_vector(article: Article, *, user=None) -> None:
     """对 article_retrieval_text 做 embedding 写入 article_vector。"""
     text = article.article_retrieval_text
     if not text:
@@ -195,7 +246,7 @@ async def _try_embed_article_vector(article: Article) -> None:
         from app.modules.settings.runtime import resolve_embedding_runtime_config
         from app.infra.ai.embedder import Embedder
 
-        runtime_config = resolve_embedding_runtime_config(None)
+        runtime_config = resolve_embedding_runtime_config(user)
         embedder = Embedder(runtime_config)
         if not embedder.is_configured:
             return

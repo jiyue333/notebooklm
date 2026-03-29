@@ -12,6 +12,7 @@ from urllib.parse import unquote, urlparse
 from fastapi import APIRouter, Depends, File, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
+import structlog
 
 from app.api.deps import current_user_dep, db_session_dep
 from app.api.errors import AppError
@@ -26,6 +27,7 @@ from app.modules.notebooks.service import get_notebook_detail, invalidate_notebo
 from app.modules.agent.search import repo as search_repo
 
 router = APIRouter(tags=["sources"])
+logger = structlog.get_logger(__name__)
 
 _SUPPORTED_UPLOAD_EXTENSIONS = {".pdf", ".doc", ".docx", ".txt", ".md"}
 _AUTO_TITLE_MODEL_TIMEOUT_SECONDS = 6.0
@@ -251,6 +253,7 @@ async def import_sources_endpoint(
 
     # ====== step 2 batch 提交所有 URL 到 MinerU ======
     mineru_batch_id: str | None = None
+    mineru_submit_failed = False
     if articles_for_batch:
         try:
             from app.infra.providers.mineru.client import MinerUCloudClient
@@ -262,21 +265,41 @@ async def import_sources_endpoint(
             mineru_batch_id = await mineru.submit_url_batch(
                 batch_items, model_version="MinerU-HTML",
             )
-        except Exception:
-            import structlog
-            structlog.get_logger(__name__).warning(
+        except Exception as exc:
+            mineru_submit_failed = True
+            logger.warning(
                 "sources.import.mineru_batch_submit_failed",
                 count=len(articles_for_batch),
+                error=str(exc)[:200],
                 exc_info=True,
             )
+
+    if mineru_submit_failed or not mineru_batch_id:
+        for article, _url in articles_for_batch:
+            article.parse_status = "failed"
+            article.parse_error_tag = "mineru_batch_submit_failed"
+            article.parse_error_message = "来源批量提交解析任务失败，请稍后重试。"
+            article.chunk_status = "failed"
+            article.index_status = "failed"
+        await session.commit()
+        await invalidate_notebook_detail_cache(user_id=current_user.id, notebook_id=notebook_id)
+        item = await get_notebook_detail(session, user_id=current_user.id, notebook_id=notebook_id)
+        return success_response(
+            item=item,
+            message="来源导入成功，但批量解析提交失败，请重试失败条目。",
+            meta={
+                "queuedCount": 0,
+                "failedCount": len(articles_for_batch),
+                "failedReason": "mineru_batch_submit_failed",
+            },
+        )
 
     # ====== step 3 创建 Job，带上 batch 信息 ======
     jobs = []
     for article, _url in articles_for_batch:
         payload_json: dict = {"articleId": article.id}
-        if mineru_batch_id:
-            payload_json["mineruBatchId"] = mineru_batch_id
-            payload_json["mineruDataId"] = article.id
+        payload_json["mineruBatchId"] = mineru_batch_id
+        payload_json["mineruDataId"] = article.id
         job = await jobs_repo.create_article_ingest_job(
             session,
             article_id=article.id,
@@ -484,6 +507,11 @@ async def retry_article_endpoint(
         dedupe_key=f"retry-ingest:{article.id}:{int(now.timestamp())}",
         payload_json={"articleId": article.id},
         created_at=now,
+    )
+    await jobs_repo.mark_dead_letter_replayed_for_article(
+        session,
+        article_id=article.id,
+        replay_job_id=job.id,
     )
     await session.commit()
     await job_publisher.publish_jobs(session, [job])

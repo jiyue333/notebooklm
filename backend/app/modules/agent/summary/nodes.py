@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from time import perf_counter
@@ -23,8 +24,10 @@ from app.infra.telemetry.metrics import (
     observe_summary_validation_result,
 )
 from app.modules.agent.summary.compress import compress_content
+from app.modules.agent.summary import repo
 from app.modules.agent.summary.prompts import (
     MAP_PROMPT,
+    PROMPT_VERSION,
     REDUCE_PROMPT,
     SYSTEM_PROMPT,
     USER_PROMPTS,
@@ -34,6 +37,22 @@ from app.modules.agent.summary.state import SummaryGraphState
 
 logger = structlog.get_logger(__name__)
 
+_HEADING_LINE_RE = re.compile(r"^#{1,6}\s+\S+", re.MULTILINE)
+_NEWS_HINTS = (
+    "breaking", "reported", "announced", "statement", "press release",
+    "据报道", "发布会", "通告", "公告", "消息称",
+)
+_RESEARCH_HINTS = (
+    "abstract", "methodology", "references", "conclusion", "dataset", "experiment",
+    "摘要", "方法", "参考文献", "实验", "结论",
+)
+_TUTORIAL_HINTS = (
+    "tutorial", "how to", "step", "installation", "prerequisite",
+    "教程", "步骤", "安装", "实践", "快速开始",
+)
+_MAX_VALIDATE_SOURCE_CHARS = 5000
+_COMPRESS_VERSION = "v1"
+
 
 def _extract_token_cost(resp) -> int:
     meta = getattr(resp, "response_metadata", {}) or {}
@@ -41,74 +60,340 @@ def _extract_token_cost(resp) -> int:
     return int(usage.get("total_tokens", 0))
 
 
+def _estimate_token_count(text: str) -> int:
+    if not text:
+        return 1
+    cjk_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
+    latin_words = len(re.findall(r"[A-Za-z0-9_]+", text))
+    punctuation = len(re.findall(r"[.,;:!?，。；：！？]", text))
+    rough = cjk_chars + int(latin_words * 1.25) + int(punctuation * 0.2)
+    return max(1, rough)
+
+
+def _derive_article_type(text: str, *, code_ratio: float, heading_count: int) -> tuple[str, float]:
+    sample = text[:12000].lower()
+    research_hits = sum(1 for hint in _RESEARCH_HINTS if hint in sample)
+    tutorial_hits = sum(1 for hint in _TUTORIAL_HINTS if hint in sample)
+    news_hits = sum(1 for hint in _NEWS_HINTS if hint in sample)
+
+    if code_ratio >= 0.26:
+        return "code_heavy", min(0.98, 0.62 + code_ratio)
+    if research_hits >= 2:
+        return "research", min(0.95, 0.55 + research_hits * 0.10 + heading_count * 0.01)
+    if tutorial_hits >= 2:
+        return "tutorial", min(0.93, 0.50 + tutorial_hits * 0.11)
+    if news_hits >= 2:
+        return "news", min(0.9, 0.48 + news_hits * 0.12)
+    return "general", 0.45
+
+
+def _resolve_model_tier(*, token_count: int, code_ratio: float, table_count: int) -> str:
+    if token_count <= 2500 and code_ratio < 0.12 and table_count <= 2:
+        return "lite"
+    return "standard"
+
+
+def _resolve_stage_timeout(state: SummaryGraphState, *, stage: str) -> int:
+    tier = state.get("model_tier", "standard")
+    if stage == "map":
+        return 18 if tier == "lite" else 28
+    if stage == "validate":
+        return 4
+    return 30 if tier == "lite" else 45
+
+
+async def _emit_token(token_sink, text: str) -> None:
+    if not token_sink or not text:
+        return
+    try:
+        maybe = token_sink(text)
+        if asyncio.iscoroutine(maybe):
+            await maybe
+    except Exception:
+        logger.debug("summary.token_sink_emit_failed")
+
+
+def _extract_chunk_text(chunk: Any) -> str:
+    content = getattr(chunk, "content", "")
+    if isinstance(content, list):
+        parts = [str(part.get("text", "")) if isinstance(part, dict) else str(part) for part in content]
+        return "".join(parts)
+    return str(content or "")
+
+
+async def _invoke_model(
+    model,
+    *,
+    messages: list[Any],
+    timeout_s: int,
+    token_sink=None,
+) -> tuple[str, int]:
+    if token_sink:
+        streamed_parts: list[str] = []
+        try:
+            async with asyncio.timeout(timeout_s):
+                async for chunk in model.astream(messages):
+                    piece = _extract_chunk_text(chunk)
+                    if not piece:
+                        continue
+                    streamed_parts.append(piece)
+                    await _emit_token(token_sink, piece)
+            streamed_text = "".join(streamed_parts).strip()
+            if streamed_text:
+                return streamed_text, 0
+        except Exception:
+            logger.debug("summary.streaming_fallback_to_invoke")
+
+    resp = await asyncio.wait_for(model.ainvoke(messages), timeout=timeout_s)
+    return (resp.content or "").strip(), _extract_token_cost(resp)
+
+
+def _build_validate_source_excerpt(state: SummaryGraphState) -> str:
+    content = state.get("compressed_content") or state.get("clean_markdown") or ""
+    content = content.strip()
+    if not content:
+        return ""
+    lines = [line.strip() for line in content.splitlines() if line.strip()]
+    excerpt = "\n".join(lines[:120])
+    return excerpt[:_MAX_VALIDATE_SOURCE_CHARS]
+
+
+def _heuristic_validate_summary(summary: str, source_excerpt: str, title: str) -> tuple[bool, list[str], float]:
+    normalized_summary = (summary or "").strip()
+    if not normalized_summary:
+        return False, ["empty_summary"], 0.0
+    summary_terms = _tokenize_for_validation(normalized_summary)
+    source_terms = _tokenize_for_validation(f"{title}\n{source_excerpt}")
+    if not summary_terms or not source_terms:
+        return False, ["insufficient_tokens"], 0.0
+    overlap = sum(1 for term in summary_terms if term in source_terms) / max(len(summary_terms), 1)
+    issues: list[str] = []
+    if overlap < 0.28:
+        issues.append("low_source_overlap")
+    if len(normalized_summary) < 80:
+        issues.append("too_short")
+    if len(normalized_summary) > max(2800, int(len(source_excerpt) * 1.2)):
+        issues.append("too_long")
+    passed = not issues
+    return passed, issues, overlap
+
+
+def _tokenize_for_validation(text: str) -> list[str]:
+    lowered = (text or "").lower()
+    terms = re.findall(r"[\u4e00-\u9fff]{2,}|[a-z0-9_]{3,}", lowered)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for term in terms:
+        if term in seen:
+            continue
+        seen.add(term)
+        deduped.append(term)
+    return deduped
+
+
+def _fallback_summary_text(state: SummaryGraphState) -> str:
+    title = (state.get("title") or "文档摘要").strip()
+    content = (state.get("compressed_content") or state.get("clean_markdown") or "").strip()
+    if not content:
+        return f"{title}\n\n暂未提取到可用内容。"
+    paragraphs = [p.strip() for p in re.split(r"\n{2,}", content) if p.strip()]
+    head = paragraphs[:3]
+    snippet = "\n\n".join(head)[:900]
+    return f"{title}\n\n{snippet}".strip()
+
+
+def _enforce_summary_budget(summary_text: str, state: SummaryGraphState) -> str:
+    text = (summary_text or "").strip()
+    if not text:
+        return text
+    source = (state.get("compressed_content") or state.get("clean_markdown") or "").strip()
+    if not source:
+        return text
+    article_type = str(state.get("article_type") or "general")
+    ratio_limit = 0.58
+    if article_type == "code_heavy":
+        ratio_limit = 0.62
+    elif article_type == "research":
+        ratio_limit = 0.60
+    elif article_type == "news":
+        ratio_limit = 0.52
+    max_chars = max(300, int(len(source) * ratio_limit))
+    if len(text) <= max_chars:
+        return text
+    cut = max_chars
+    for marker in ("\n\n", "\n", "。", ". ", "；", ";"):
+        pos = text.rfind(marker, max_chars // 2, max_chars)
+        if pos > max_chars // 2:
+            cut = pos + (0 if marker in ("\n\n", "\n") else len(marker))
+            break
+    return text[:cut].strip()
+
+
+def _split_by_heading_blocks(content: str) -> list[str]:
+    if not content:
+        return []
+    parts = re.split(r"(?m)(?=^#{1,6}\s+\S+)", content)
+    normalized = [part.strip() for part in parts if part and part.strip()]
+    return normalized or [content.strip()]
+
+
+def _build_map_chunks(content: str, *, max_chunk_chars: int, max_chunks: int) -> list[str]:
+    raw_sections = _split_by_heading_blocks(content)
+    chunks: list[str] = []
+
+    for section in raw_sections:
+        if len(section) <= max_chunk_chars:
+            chunks.append(section)
+            continue
+        start = 0
+        while start < len(section):
+            end = min(len(section), start + max_chunk_chars)
+            piece = section[start:end]
+            if end < len(section):
+                break_pos = piece.rfind("\n\n")
+                if break_pos > max_chunk_chars // 3:
+                    end = start + break_pos
+                    piece = section[start:end]
+            trimmed = piece.strip()
+            if trimmed:
+                chunks.append(trimmed)
+            start = end
+
+    if len(chunks) <= max_chunks:
+        return chunks
+
+    kept = chunks[: max_chunks - 1]
+    merged_tail = "\n\n".join(chunks[max_chunks - 1 :]).strip()
+    if merged_tail:
+        kept.append(merged_tail)
+    return kept
+
+
 # ========== Node 1: analyze_content ==========
+
 
 def analyze_content(state: SummaryGraphState) -> dict[str, Any]:
     """分析文章类型、统计内容指标、选择模型档位。"""
     t0 = perf_counter()
     text = state["clean_markdown"]
-
     total_chars = len(text)
+
     code_chars = sum(
-        len(m.group(0)) for m in re.finditer(r"```\w*\n.*?```", text, re.DOTALL)
+        len(m.group(0))
+        for m in re.finditer(r"```(?:\w+)?\n.*?```", text, re.DOTALL)
     )
     code_ratio = code_chars / max(total_chars, 1)
     table_count = len(re.findall(r"^\|.*\|$", text, re.MULTILINE)) // 3
     image_count = len(re.findall(r"!\[", text))
-    token_count = max(1, total_chars // 4)
+    heading_count = len(_HEADING_LINE_RE.findall(text))
+    bullet_count = len(re.findall(r"(?m)^\s*[-*+]\s+\S+", text))
+    token_count = _estimate_token_count(text)
 
-    text_lower = text[:3000].lower()
-
-    if code_ratio > 0.30:
-        article_type = "code_heavy"
-    elif any(kw in text_lower for kw in ("abstract", "methodology", "references", "conclusion", "摘要", "方法论", "参考文献")):
-        article_type = "research"
-    elif any(kw in text_lower for kw in ("step ", "tutorial", "how to", "教程", "步骤")):
-        article_type = "tutorial"
-    elif any(kw in text_lower for kw in ("reported", "announced", "according to", "据报道", "消息称")):
-        article_type = "news"
-    else:
-        article_type = "general"
-
-    model_tier = "lite" if token_count < 4000 else "standard"
+    article_type, confidence = _derive_article_type(
+        text,
+        code_ratio=code_ratio,
+        heading_count=heading_count,
+    )
+    model_tier = _resolve_model_tier(
+        token_count=token_count,
+        code_ratio=code_ratio,
+        table_count=table_count,
+    )
+    summary_strategy = (
+        "map_reduce"
+        if token_count > get_settings().summary_map_reduce_threshold_tokens or heading_count >= 14
+        else "direct"
+    )
 
     observe_summary_stage(stage="analyze", status="ok", duration_ms=_ms(t0))
     observe_summary_model_tier(tier=model_tier)
-    observe_summary_strategy(
-        strategy="map_reduce" if token_count > get_settings().summary_map_reduce_threshold_tokens else "direct",
-    )
+    observe_summary_strategy(strategy=summary_strategy)
 
     return {
         "article_type": article_type,
+        "article_type_confidence": round(confidence, 3),
         "content_stats": {
             "token_count": token_count,
             "code_ratio": round(code_ratio, 3),
             "table_count": table_count,
             "image_count": image_count,
+            "heading_count": heading_count,
+            "bullet_count": bullet_count,
         },
         "model_tier": model_tier,
+        "summary_strategy": summary_strategy,
     }
 
 
 # ========== Node 2: compress_content_node ==========
 
-def compress_content_node(state: SummaryGraphState) -> dict[str, Any]:
+
+async def compress_content_node(state: SummaryGraphState) -> dict[str, Any]:
     t0 = perf_counter()
     settings = get_settings()
     original = state["clean_markdown"]
+    article_id = str(state.get("article_id") or "")
+    content_hash = str(state.get("content_hash") or "")
+    article_type = state.get("article_type", "general")
+    db_session = state.get("db_session")
+
+    if db_session and article_id and content_hash:
+        try:
+            cached = await repo.get_compression_cache(
+                db_session,
+                article_id=article_id,
+                content_hash=content_hash,
+                prompt_version=PROMPT_VERSION,
+                article_type=article_type,
+                compress_version=_COMPRESS_VERSION,
+                compress_code_blocks=bool(settings.summary_compress_code_blocks),
+            )
+            if cached and str(cached.compressed_content or "").strip():
+                observe_summary_stage(stage="compress", status="cache_hit", duration_ms=_ms(t0))
+                return {
+                    "compressed_content": str(cached.compressed_content),
+                    "compression_cache_hit": True,
+                }
+        except Exception as exc:
+            logger.debug("summary.compress_cache_read_failed", error=str(exc)[:160])
+
     compressed = compress_content(
         original,
         compress_code=settings.summary_compress_code_blocks,
+        article_type=article_type,
     )
+
+    if db_session and article_id and content_hash and compressed:
+        try:
+            await repo.save_compression_cache(
+                db_session,
+                article_id=article_id,
+                content_hash=content_hash,
+                prompt_version=PROMPT_VERSION,
+                article_type=article_type,
+                compress_version=_COMPRESS_VERSION,
+                compress_code_blocks=bool(settings.summary_compress_code_blocks),
+                compressed_content=compressed,
+                original_length=len(original),
+                compressed_length=len(compressed),
+            )
+            await db_session.commit()
+        except Exception as exc:
+            logger.debug("summary.compress_cache_write_failed", error=str(exc)[:160])
+            try:
+                await db_session.rollback()
+            except Exception:
+                logger.debug("summary.compress_cache_write_rollback_failed")
 
     observe_summary_stage(stage="compress", status="ok", duration_ms=_ms(t0))
     if original:
         observe_summary_compression_ratio(ratio=len(compressed) / max(len(original), 1))
 
-    return {"compressed_content": compressed}
+    return {"compressed_content": compressed, "compression_cache_hit": False}
 
 
 # ========== Node 3: direct_summarize ==========
+
 
 async def direct_summarize(state: SummaryGraphState) -> dict[str, Any]:
     """直接调用 LLM 生成摘要。"""
@@ -116,75 +401,88 @@ async def direct_summarize(state: SummaryGraphState) -> dict[str, Any]:
     model = _resolve_model(state)
     if model is None:
         observe_summary_stage(stage="direct_summarize", status="skip", duration_ms=_ms(t0))
-        return {"summary_text": ""}
+        return {
+            "summary_text": _fallback_summary_text(state),
+            "fallback_used": True,
+            "fallback_reason": "model_missing",
+            "summary_strategy": "direct",
+        }
 
     article_type = state.get("article_type", "general")
     user_template = USER_PROMPTS.get(article_type, USER_PROMPTS["general"])
 
     system = SYSTEM_PROMPT
-    language = state.get("language", "auto")
-    if language == "zh":
+    if state.get("language", "auto") == "zh":
         system += "\n\nIMPORTANT: Write the summary in 简体中文."
 
     content = state.get("compressed_content") or state["clean_markdown"]
-    max_chars = 48000
-    content = content[:max_chars]
-
     messages = [
         SystemMessage(content=system),
         HumanMessage(content=user_template.format(
             title=state.get("title", ""),
-            content=content,
+            content=content[:64000],
         )),
     ]
 
     try:
-        resp = await model.ainvoke(messages)
-        tokens = _extract_token_cost(resp)
+        text, tokens = await _invoke_model(
+            model,
+            messages=messages,
+            timeout_s=_resolve_stage_timeout(state, stage="direct"),
+            token_sink=state.get("token_sink"),
+        )
         if tokens:
             observe_summary_token_cost(tokens=tokens)
         observe_summary_stage(stage="direct_summarize", status="ok", duration_ms=_ms(t0))
-        return {"summary_text": (resp.content or "").strip()}
+        if text:
+            text = _enforce_summary_budget(text, state)
+            return {
+                "summary_text": text,
+                "fallback_used": False,
+                "fallback_reason": "",
+                "summary_strategy": "direct",
+            }
     except Exception as exc:
         logger.exception("summary.direct_failed", error=str(exc)[:200])
-        observe_summary_stage(stage="direct_summarize", status="error", duration_ms=_ms(t0))
-        return {"summary_text": ""}
+
+    observe_summary_stage(stage="direct_summarize", status="error", duration_ms=_ms(t0))
+    return {
+        "summary_text": _fallback_summary_text(state),
+        "fallback_used": True,
+        "fallback_reason": "direct_failed",
+        "summary_strategy": "direct",
+    }
 
 
 # ========== Node 4: map_split ==========
 
+
 def map_split(state: SummaryGraphState) -> dict[str, Any]:
-    """将压缩后内容按 ~4k tokens 分块，供 map 阶段并行摘要。"""
+    """按标题优先切块，供 map 阶段摘要。"""
     t0 = perf_counter()
     content = state.get("compressed_content") or state["clean_markdown"]
-    chunk_char_size = 16000  # ~4k tokens
-    chunks: list[str] = []
-    start = 0
-    while start < len(content):
-        end = start + chunk_char_size
-        chunk = content[start:end]
-        if end < len(content):
-            break_pos = chunk.rfind("\n\n")
-            if break_pos > chunk_char_size // 2:
-                end = start + break_pos
-                chunk = content[start:end]
-        stripped = chunk.strip()
-        if stripped:
-            chunks.append(stripped)
-        start = end
+    settings = get_settings()
+    threshold = int(settings.summary_map_reduce_threshold_tokens)
+
+    max_chunk_chars = 12000 if threshold <= 8000 else 14000
+    max_chunks = 8
+    chunks = _build_map_chunks(
+        content,
+        max_chunk_chars=max_chunk_chars,
+        max_chunks=max_chunks,
+    )
 
     observe_summary_stage(stage="map_split", status="ok", duration_ms=_ms(t0))
-    return {"map_chunks": chunks}
+    return {"map_chunks": chunks, "summary_strategy": "map_reduce"}
 
 
 # ========== Node 5: map_summarize ==========
 
+
 async def map_summarize(state: SummaryGraphState) -> dict[str, Any]:
     """对单个 map chunk 生成摘要。"""
     t0 = perf_counter()
-    model = build_lite_llm()
-    if model is None:
-        model = _resolve_model(state)
+    model = build_lite_llm() or _resolve_model(state)
     if model is None:
         observe_summary_stage(stage="map_summarize", status="skip", duration_ms=_ms(t0))
         return {"chunk_summaries": [""]}
@@ -203,12 +501,15 @@ async def map_summarize(state: SummaryGraphState) -> dict[str, Any]:
     ]
 
     try:
-        resp = await model.ainvoke(messages)
-        tokens = _extract_token_cost(resp)
+        text, tokens = await _invoke_model(
+            model,
+            messages=messages,
+            timeout_s=_resolve_stage_timeout(state, stage="map"),
+        )
         if tokens:
             observe_summary_token_cost(tokens=tokens)
         observe_summary_stage(stage="map_summarize", status="ok", duration_ms=_ms(t0))
-        return {"chunk_summaries": [(resp.content or "").strip()]}
+        return {"chunk_summaries": [text]}
     except Exception as exc:
         logger.warning("summary.map_failed", error=str(exc)[:200])
         observe_summary_stage(stage="map_summarize", status="error", duration_ms=_ms(t0))
@@ -217,16 +518,25 @@ async def map_summarize(state: SummaryGraphState) -> dict[str, Any]:
 
 # ========== Node 6: reduce_summarize ==========
 
+
 async def reduce_summarize(state: SummaryGraphState) -> dict[str, Any]:
     """合并 map 阶段的中间摘要为最终摘要。"""
     t0 = perf_counter()
     model = _resolve_model(state)
     if model is None:
         observe_summary_stage(stage="reduce_summarize", status="skip", duration_ms=_ms(t0))
-        return {"summary_text": "\n\n".join(state.get("chunk_summaries", []))}
+        fallback = "\n\n".join(item for item in state.get("chunk_summaries", []) if item).strip()
+        return {
+            "summary_text": fallback or _fallback_summary_text(state),
+            "fallback_used": True,
+            "fallback_reason": "reduce_model_missing",
+            "summary_strategy": "map_reduce",
+        }
 
     summaries_text = "\n\n---\n\n".join(
-        f"[Section {i+1}]\n{s}" for i, s in enumerate(state.get("chunk_summaries", [])) if s
+        f"[Section {index + 1}]\n{item}"
+        for index, item in enumerate(state.get("chunk_summaries", []))
+        if item
     )
 
     system = SYSTEM_PROMPT
@@ -237,31 +547,57 @@ async def reduce_summarize(state: SummaryGraphState) -> dict[str, Any]:
         SystemMessage(content=system),
         HumanMessage(content=REDUCE_PROMPT.format(
             title=state.get("title", ""),
-            summaries=summaries_text[:32000],
+            summaries=summaries_text[:36000],
         )),
     ]
 
     try:
-        resp = await model.ainvoke(messages)
-        tokens = _extract_token_cost(resp)
+        text, tokens = await _invoke_model(
+            model,
+            messages=messages,
+            timeout_s=_resolve_stage_timeout(state, stage="reduce"),
+            token_sink=state.get("token_sink"),
+        )
         if tokens:
             observe_summary_token_cost(tokens=tokens)
         observe_summary_stage(stage="reduce_summarize", status="ok", duration_ms=_ms(t0))
-        return {"summary_text": (resp.content or "").strip()}
+        if text:
+            text = _enforce_summary_budget(text, state)
+            return {
+                "summary_text": text,
+                "fallback_used": False,
+                "fallback_reason": "",
+                "summary_strategy": "map_reduce",
+            }
     except Exception as exc:
         logger.warning("summary.reduce_failed", error=str(exc)[:200])
-        observe_summary_stage(stage="reduce_summarize", status="error", duration_ms=_ms(t0))
-        return {"summary_text": "\n\n".join(state.get("chunk_summaries", []))}
+
+    observe_summary_stage(stage="reduce_summarize", status="error", duration_ms=_ms(t0))
+    fallback = "\n\n".join(item for item in state.get("chunk_summaries", []) if item).strip()
+    return {
+        "summary_text": fallback or _fallback_summary_text(state),
+        "fallback_used": True,
+        "fallback_reason": "reduce_failed",
+        "summary_strategy": "map_reduce",
+    }
 
 
 # ========== Node 7: validate_summary ==========
+
 
 async def validate_summary(state: SummaryGraphState) -> dict[str, Any]:
     """用 lite_model 校验摘要质量。"""
     t0 = perf_counter()
     retry_count = state.get("retry_count", 0) + 1
+    summary = state.get("summary_text", "").strip()
+    source_excerpt = _build_validate_source_excerpt(state)
 
-    summary = state.get("summary_text", "")
+    heuristic_passed, heuristic_issues, heuristic_overlap = _heuristic_validate_summary(
+        summary,
+        source_excerpt,
+        str(state.get("title") or ""),
+    )
+
     if not summary:
         observe_summary_stage(stage="validate", status="ok", duration_ms=_ms(t0))
         observe_summary_validation_result(passed=False)
@@ -274,48 +610,98 @@ async def validate_summary(state: SummaryGraphState) -> dict[str, Any]:
     model = build_lite_llm()
     if model is None:
         observe_summary_stage(stage="validate", status="skip", duration_ms=_ms(t0))
+        observe_summary_validation_result(passed=heuristic_passed)
+        return {
+            "validation_passed": heuristic_passed,
+            "validation_issues": heuristic_issues + ["validator_skipped_heuristic"],
+            "retry_count": retry_count,
+        }
+
+    # Heuristic 已经足够可靠时直接通过，避免 validator 额外高延迟。
+    if heuristic_passed and heuristic_overlap >= 0.42:
+        observe_summary_stage(stage="validate", status="heuristic_ok", duration_ms=_ms(t0))
         observe_summary_validation_result(passed=True)
-        return {"validation_passed": True, "validation_issues": [], "retry_count": retry_count}
+        return {
+            "validation_passed": True,
+            "validation_issues": ["validator_short_circuit_heuristic"],
+            "retry_count": retry_count,
+        }
+
+    # 明显长度异常时直接 fail-closed，避免浪费一次慢校验调用。
+    if "too_short" in heuristic_issues or "too_long" in heuristic_issues:
+        observe_summary_stage(stage="validate", status="heuristic_reject", duration_ms=_ms(t0))
+        observe_summary_validation_result(passed=False)
+        for issue in heuristic_issues[:3]:
+            observe_summary_judge_reject(reason=issue[:32])
+        return {
+            "validation_passed": False,
+            "validation_issues": heuristic_issues + ["validator_short_circuit_heuristic"],
+            "retry_count": max(retry_count, get_settings().summary_max_retries),
+        }
 
     messages = [
         SystemMessage(content="You are a summary quality evaluator. Return ONLY valid JSON."),
         HumanMessage(content=VALIDATE_PROMPT.format(
             title=state.get("title", ""),
             summary=summary,
+            source_excerpt=source_excerpt,
         )),
     ]
 
     try:
-        resp = await model.ainvoke(messages)
-        raw = (resp.content or "").strip()
+        text, tokens = await _invoke_model(
+            model,
+            messages=messages,
+            timeout_s=_resolve_stage_timeout(state, stage="validate"),
+        )
+        if tokens:
+            observe_summary_token_cost(tokens=tokens)
+        raw = text.strip()
         json_match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group(0))
-            passed = bool(result.get("passed", True))
-            issues = result.get("issues", [])
-            observe_summary_stage(stage="validate", status="ok", duration_ms=_ms(t0))
-            observe_summary_validation_result(passed=passed)
-            if not passed:
-                for issue in issues[:3]:
-                    observe_summary_judge_reject(reason=str(issue)[:32])
-            return {"validation_passed": passed, "validation_issues": issues, "retry_count": retry_count}
+        if not json_match:
+            raise ValueError("judge_output_not_json")
+        result = json.loads(json_match.group(0))
+        passed = bool(result.get("passed", False))
+        issues_raw = result.get("issues", [])
+        issues = [str(item).strip() for item in issues_raw if str(item).strip()]
+        observe_summary_stage(stage="validate", status="ok", duration_ms=_ms(t0))
+        observe_summary_validation_result(passed=passed)
+        if not passed:
+            for issue in issues[:3]:
+                observe_summary_judge_reject(reason=issue[:32])
+        return {"validation_passed": passed, "validation_issues": issues, "retry_count": retry_count}
     except Exception as exc:
-        logger.debug("summary.validate_parse_failed", error=str(exc)[:120])
+        logger.debug("summary.validate_parse_failed", error=str(exc)[:160])
+        observe_summary_stage(stage="validate", status="fallback", duration_ms=_ms(t0))
+        observe_summary_validation_result(passed=heuristic_passed)
+        if not heuristic_passed:
+            for issue in heuristic_issues[:3]:
+                observe_summary_judge_reject(reason=issue[:32])
+        return {
+            "validation_passed": heuristic_passed,
+            "validation_issues": heuristic_issues + ["validator_fallback_heuristic"],
+            "retry_count": max(retry_count, get_settings().summary_max_retries),
+        }
 
     observe_summary_stage(stage="validate", status="error", duration_ms=_ms(t0))
     observe_summary_validation_result(passed=False)
     observe_summary_judge_reject(reason="invalid_judge_output")
-    return {"validation_passed": False, "validation_issues": ["invalid_judge_output"], "retry_count": retry_count}
+    return {
+        "validation_passed": False,
+        "validation_issues": ["invalid_judge_output"],
+        "retry_count": max(retry_count, get_settings().summary_max_retries),
+    }
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────
 
+
 def _resolve_model(state: SummaryGraphState):
     tier = state.get("model_tier", "standard")
     if tier == "lite":
-        m = build_lite_llm()
-        if m is not None:
-            return m
+        lite = build_lite_llm()
+        if lite is not None:
+            return lite
     user = state.get("user")
     return build_user_chat_model(user) if user else None
 

@@ -108,6 +108,20 @@ async def list_recent_messages(
     return rows
 
 
+async def update_conversation_rolling_summary(
+    session: AsyncSession,
+    *,
+    conversation_id: str,
+    rolling_summary: str,
+) -> None:
+    conversation = await session.get(Conversation, conversation_id)
+    if conversation is None:
+        return
+    conversation.rolling_summary = rolling_summary
+    conversation.updated_at = datetime.now(UTC)
+    await session.flush()
+
+
 
 
 async def list_conversations(

@@ -310,13 +310,13 @@
 }
 
 .home-card-menu {
-    background: rgba(255, 255, 255, 0.2);
+    background: color-mix(in srgb, var(--panel-bg), transparent 16%);
     backdrop-filter: blur(10px);
-    border: none;
-    color: rgba(255, 255, 255, 0.9);
+    border: 1px solid color-mix(in srgb, var(--border-color), transparent 6%);
+    color: var(--title-color);
     width: 28px;
     height: 28px;
-    border-radius: 8px;
+    border-radius: 10px;
     cursor: pointer;
     display: flex;
     align-items: center;

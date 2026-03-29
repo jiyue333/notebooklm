@@ -12,7 +12,7 @@
     z-index: 1100;
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
-    animation: fadeIn 0.18s ease-out;
+    animation: fadeIn var(--duration-fast) var(--ease-standard);
 }
 
 .source-action-modal {
@@ -23,7 +23,7 @@
     border-radius: var(--radius-lg, 18px);
     box-shadow: 0 24px 64px rgba(0, 0, 0, 0.28), 0 0 0 1px var(--border-color);
     overflow: hidden;
-    animation: modalSlideUp 0.22s ease-out;
+    animation: modalSlideUp var(--duration-normal) var(--ease-standard);
 }
 
 [data-theme="dark"] .source-action-modal {

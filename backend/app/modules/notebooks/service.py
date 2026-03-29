@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +11,7 @@ from app.core.config import get_settings
 from app.infra.ai.lite_models import build_lite_llm
 from app.infra.cache import delete_keys, get_json, notebook_detail_key, set_json
 from app.infra.storage.file_store import is_object_storage_enabled
+from app.modules.highlights import repo as highlights_repo
 from app.modules.notes import repo as notes_repo
 from app.modules.notebooks import assembler, repo
 
@@ -344,6 +346,98 @@ async def update_notebook(
     await session.refresh(notebook)
     await invalidate_notebook_detail_cache(user_id=user_id, notebook_id=notebook_id)
     return assembler.build_notebook_summary(notebook)
+
+
+def _sanitize_markdown_heading(value: str | None, fallback: str) -> str:
+    cleaned = re.sub(r"[\r\n#]+", " ", str(value or "")).strip()
+    return cleaned or fallback
+
+
+def _sanitize_markdown_filename(value: str | None) -> str:
+    cleaned = re.sub(r"[\\/\r\n:*?\"<>|]+", "-", str(value or "notebook")).strip(" .")
+    return cleaned or "notebook"
+
+
+def _highlight_color_label(color: str | None) -> str:
+    mapping = {
+        "yellow": "黄色",
+        "blue": "蓝色",
+        "green": "绿色",
+        "pink": "粉色",
+        "purple": "紫色",
+        "orange": "橙色",
+    }
+    return mapping.get(str(color or "").lower(), "默认")
+
+
+async def export_notebook_markdown(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    notebook_id: str,
+) -> tuple[str, str]:
+    notebook = await repo.get_notebook(session, user_id=user_id, notebook_id=notebook_id)
+    if notebook is None:
+        raise AppError(404, "未找到对应的笔记本", code="notebook_not_found")
+
+    notes = await notes_repo.list_notes(session, user_id=user_id, notebook_id=notebook_id)
+    articles = await repo.list_articles_by_notebook(session, user_id=user_id, notebook_id=notebook_id)
+    highlights = await highlights_repo.list_notebook_highlights(session, user_id=user_id, notebook_id=notebook_id)
+
+    article_title_map = {
+        article.id: _sanitize_markdown_heading(article.title, "未命名文章")
+        for article in articles
+    }
+
+    lines: list[str] = []
+    lines.append(f"# {_sanitize_markdown_heading(notebook.title, '未命名笔记本')}")
+    lines.append("")
+    lines.append(f"- 导出时间：{datetime.now(UTC).astimezone().isoformat(timespec='seconds')}")
+    lines.append(f"- 笔记数量：{len(notes)}")
+    lines.append(f"- 高亮数量：{len(highlights)}")
+    lines.append("")
+
+    lines.append("## 笔记")
+    lines.append("")
+    if not notes:
+        lines.append("_暂无笔记_")
+        lines.append("")
+    else:
+        for idx, note in enumerate(notes, 1):
+            lines.append(f"### {idx}. {_sanitize_markdown_heading(note.title, '无标题笔记')}")
+            if note.tags_json:
+                lines.append(f"- 标签：{', '.join(note.tags_json)}")
+            lines.append(f"- 类型：{note.note_type}")
+            lines.append(f"- 来源数：{note.source_count}")
+            lines.append("")
+            content = (note.content_markdown or "").strip()
+            lines.append(content if content else "_（空内容）_")
+            lines.append("")
+
+    lines.append("## 高亮汇总")
+    lines.append("")
+    if not highlights:
+        lines.append("_暂无高亮_")
+        lines.append("")
+    else:
+        grouped: dict[str, list] = {}
+        for item in highlights:
+            grouped.setdefault(item.article_id, []).append(item)
+
+        for article_id, items in grouped.items():
+            lines.append(f"### {article_title_map.get(article_id, '未命名文章')}")
+            lines.append("")
+            for idx, item in enumerate(items, 1):
+                quote = (item.selected_text or "").strip().replace("\n", " ")
+                lines.append(f"{idx}. [{_highlight_color_label(item.color)}] {quote}")
+                if item.comment_text:
+                    lines.append(f"   - 批注：{item.comment_text.strip()}")
+                lines.append(f"   - 创建时间：{item.created_at.astimezone().isoformat(timespec='seconds')}")
+            lines.append("")
+
+    content = "\n".join(lines).strip() + "\n"
+    filename = f"{_sanitize_markdown_filename(notebook.title)}.md"
+    return filename, content
 
 
 async def delete_notebook(session: AsyncSession, *, user_id: str, notebook_id: str) -> None:

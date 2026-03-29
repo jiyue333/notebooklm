@@ -11,7 +11,7 @@
     z-index: 1000;
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
-    animation: fadeIn 0.2s ease-out;
+    animation: fadeIn var(--duration-fast) var(--ease-standard);
 }
 
 .note-modal {
@@ -26,23 +26,11 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    animation: modalSlideUp 0.25s ease-out;
+    animation: modalSlideUp var(--duration-normal) var(--ease-standard);
 }
 
 [data-theme="dark"] .note-modal {
     background: color-mix(in srgb, var(--bg-color), #fff 6%);
-}
-
-@keyframes modalSlideUp {
-    from {
-        opacity: 0;
-        transform: translateY(20px) scale(0.96);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-    }
 }
 
 /* Header */
@@ -249,6 +237,26 @@
 .note-modal-preview a {
     color: var(--accent-color);
     text-decoration: underline;
+}
+
+.note-source-marker-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--accent-color), transparent 55%);
+    background: color-mix(in srgb, var(--accent-color), transparent 90%);
+    color: var(--accent-color);
+    cursor: pointer;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    transition: background var(--duration-fast) var(--ease-standard), transform var(--duration-fast) var(--ease-standard);
+}
+
+.note-source-marker-link:hover {
+    transform: translateY(-1px);
+    background: color-mix(in srgb, var(--accent-color), transparent 84%);
 }
 
 .note-modal-empty {

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from collections import Counter
 from time import perf_counter
 from typing import Any
 
+import httpx
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +22,14 @@ from app.infra.telemetry.metrics import (
     observe_ingest_stage,
     observe_ingest_synthetic_toc,
 )
+from app.modules.ingest.contextualize import contextualize_chunks
+from app.modules.ingest.detect import detect_and_route
+from app.modules.ingest.enhance import ensure_toc, warm_summary
+from app.modules.ingest.errors import IngestPipelineError
+from app.modules.ingest.fetch import fetch_content
+from app.modules.ingest.index import build_chunks, embed_chunks
+from app.modules.ingest.normalize import process_markdown
+from app.modules.ingest.parse import parse_to_markdown
 from app.modules.ingest.types import (
     DocRoute,
     FetchedContent,
@@ -70,9 +80,43 @@ async def run_pipeline(
 
     # ========== phase 1 接入层：拉取 + Tika 检测 + 路由 ==========
     t0 = perf_counter()
-    content, phase1_ms, fetch_url_fallback = await _phase1_fetch_and_detect(
-        ingest_input, skip_fetch=bool(mineru_batch_id)
-    )
+    try:
+        content, phase1_ms, fetch_url_fallback = await _phase1_fetch_and_detect(
+            ingest_input, skip_fetch=bool(mineru_batch_id)
+        )
+    except IngestPipelineError as exc:
+        timings["fetch_detect"] = _ms(t0)
+        observe_ingest_stage(
+            stage="fetch_detect",
+            input_type=input_type,
+            status="failed",
+            duration_ms=timings["fetch_detect"],
+        )
+        observe_ingest_e2e(input_type=input_type, duration_ms=_ms(pipeline_start))
+        return _failed_result(
+            content_hash="",
+            tika_mime=None,
+            elapsed_stages=timings,
+            tag=exc.tag,
+            message=exc.message,
+        )
+    except Exception as exc:
+        timings["fetch_detect"] = _ms(t0)
+        observe_ingest_stage(
+            stage="fetch_detect",
+            input_type=input_type,
+            status="failed",
+            duration_ms=timings["fetch_detect"],
+        )
+        observe_ingest_e2e(input_type=input_type, duration_ms=_ms(pipeline_start))
+        return _failed_result(
+            content_hash="",
+            tika_mime=None,
+            elapsed_stages=timings,
+            tag="fetch_failed",
+            message=str(exc)[:500] or "获取来源失败",
+        )
+
     timings["fetch_detect"] = _ms(t0)
     content_type_label = (content.tika.mime_type or "").strip() or content.route.value
 
@@ -102,14 +146,30 @@ async def run_pipeline(
         )
 
     # ========== phase 2 解析层：MinerU / 直通 → raw markdown ==========
-    from app.modules.ingest.parse import parse_to_markdown
-
     t0 = perf_counter()
-    raw_markdown = await parse_to_markdown(
-        content,
-        mineru_batch_id=mineru_batch_id,
-        mineru_data_id=mineru_data_id,
-    )
+    try:
+        raw_markdown = await parse_to_markdown(
+            content,
+            mineru_batch_id=mineru_batch_id,
+            mineru_data_id=mineru_data_id,
+        )
+    except Exception as exc:
+        timings["parse"] = _ms(t0)
+        observe_ingest_stage(
+            stage="parse",
+            input_type=input_type,
+            status="failed",
+            duration_ms=timings["parse"],
+        )
+        observe_ingest_parse_success(input_type=input_type, parser=content.route.value, result="failed")
+        observe_ingest_e2e(input_type=input_type, duration_ms=_ms(pipeline_start))
+        return _failed_result(
+            content_hash=content.content_hash,
+            tika_mime=content.tika.mime_type,
+            elapsed_stages=timings,
+            tag="parse_failed",
+            message=str(exc)[:500] or "文档解析失败",
+        )
     timings["parse"] = _ms(t0)
 
     if not raw_markdown:
@@ -126,50 +186,93 @@ async def run_pipeline(
             result="empty",
         )
         observe_ingest_e2e(input_type=input_type, duration_ms=_ms(pipeline_start))
-        return IngestResult(
-            tika_mime=content.tika.mime_type,
+        return _failed_result(
             content_hash=content.content_hash or "",
+            tika_mime=content.tika.mime_type,
             elapsed_stages=timings,
+            tag="parse_empty",
+            message="解析未生成可用正文",
         )
 
     # ========== phase 3 规范化 + 渲染：remark ==========
-    from app.modules.ingest.normalize import process_markdown
-
     t0 = perf_counter()
-    remark = await process_markdown(raw_markdown)
+    try:
+        remark = await process_markdown(raw_markdown)
+    except Exception as exc:
+        timings["normalize"] = _ms(t0)
+        observe_ingest_stage(
+            stage="normalize",
+            input_type=input_type,
+            status="failed",
+            duration_ms=timings["normalize"],
+        )
+        observe_ingest_e2e(input_type=input_type, duration_ms=_ms(pipeline_start))
+        return _failed_result(
+            content_hash=content.content_hash or "",
+            tika_mime=content.tika.mime_type,
+            elapsed_stages=timings,
+            tag="normalize_failed",
+            message=str(exc)[:500] or "正文规范化失败",
+        )
     timings["normalize"] = _ms(t0)
 
-    # ====== 增强：summary + TOC fallback ======
-    from app.modules.ingest.enhance import enhance
-
-    t0 = perf_counter()
     title = ingest_input.title or content.tika.title or ""
-    await enhance(
-        db,
-        remark=remark,
-        article_id=article_id or "",
-        title=title,
-        language=content.tika.language or None,
-        user=user,
+    # ====== 增强：优先补 TOC，随后 summary 与 index 并行 ======
+    toc_t0 = perf_counter()
+    try:
+        await ensure_toc(
+            remark=remark,
+            title=title,
+            language=content.tika.language or None,
+        )
+    except Exception as exc:
+        logger.warning("pipeline.ensure_toc_failed", error=str(exc)[:200])
+    timings["enhance_toc"] = _ms(toc_t0)
+
+    summary_t0 = perf_counter()
+    summary_task = asyncio.create_task(
+        warm_summary(
+            db,
+            remark=remark,
+            article_id=article_id or "",
+            title=title,
+            language=content.tika.language or None,
+            user=user,
+        )
     )
-    timings["enhance"] = _ms(t0)
 
     # ========== phase 4 索引层：分块 + 上下文增强 + 向量化 ==========
-    from app.modules.ingest.index import build_chunks, embed_chunks
-    from app.modules.ingest.contextualize import contextualize_chunks
-
     t0 = perf_counter()
-    chunks = build_chunks(remark.clean_markdown)
-    # ====== step 1 notebook 标题需由调用方传入，pipeline 内无法获取 ======
-    chunks = await contextualize_chunks(
-        chunks,
-        notebook_title=notebook_title,
-        article_title=title,
-        toc=remark.toc,
-        clean_markdown=remark.clean_markdown,
-    )
-    chunks = await embed_chunks(chunks)
+    try:
+        chunks = build_chunks(remark.clean_markdown, toc=remark.toc)
+        chunks = await contextualize_chunks(
+            chunks,
+            notebook_title=notebook_title,
+            article_title=title,
+            toc=remark.toc,
+            clean_markdown=remark.clean_markdown,
+        )
+        chunks = await embed_chunks(chunks, user=user)
+    except Exception as exc:
+        timings["index"] = _ms(t0)
+        observe_ingest_stage(
+            stage="index",
+            input_type=input_type,
+            status="failed",
+            duration_ms=timings["index"],
+        )
+        await summary_task
+        observe_ingest_e2e(input_type=input_type, duration_ms=_ms(pipeline_start))
+        return _failed_result(
+            content_hash=content.content_hash or "",
+            tika_mime=content.tika.mime_type,
+            elapsed_stages=timings,
+            tag="index_failed",
+            message=str(exc)[:500] or "索引阶段失败",
+        )
     timings["index"] = _ms(t0)
+    await summary_task
+    timings["enhance"] = _ms(summary_t0)
 
     total_ms = _ms(pipeline_start)
     parser_name = (
@@ -232,6 +335,7 @@ async def run_pipeline(
         content_hash=hashlib.sha256(remark.clean_markdown.encode("utf-8")).hexdigest(),
         tika_mime=content.tika.mime_type,
         elapsed_stages=timings,
+        remark_fixes_applied=remark.fixes_applied,
     )
 
 
@@ -257,14 +361,11 @@ async def _phase1_fetch_and_detect(
             False,
         )
 
-    from app.modules.ingest.fetch import fetch_content
-    from app.modules.ingest.detect import detect_and_route
-
     fetch_t0 = perf_counter()
     try:
         raw_bytes, file_name = await fetch_content(inp)
     except Exception as exc:
-        if is_url_source and inp.source_url:
+        if is_url_source and inp.source_url and _allow_url_fallback(exc):
             logger.warning("pipeline.fetch_failed_url_fallback", url=inp.source_url, error=str(exc)[:200])
             return (
                 FetchedContent(
@@ -293,3 +394,27 @@ async def _phase1_fetch_and_detect(
 
 def _ms(start: float) -> float:
     return round((perf_counter() - start) * 1000, 2)
+
+
+def _allow_url_fallback(exc: Exception) -> bool:
+    if isinstance(exc, IngestPipelineError):
+        return False
+    return isinstance(exc, httpx.HTTPError)
+
+
+def _failed_result(
+    *,
+    content_hash: str,
+    tika_mime: str | None,
+    elapsed_stages: dict[str, float],
+    tag: str,
+    message: str,
+) -> IngestResult:
+    return IngestResult(
+        clean_markdown=None,
+        content_hash=content_hash,
+        tika_mime=tika_mime,
+        elapsed_stages=elapsed_stages,
+        parse_error_tag=tag,
+        parse_error_message=message[:500],
+    )

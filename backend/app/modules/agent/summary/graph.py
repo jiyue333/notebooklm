@@ -23,10 +23,13 @@ from app.modules.agent.summary.nodes import (
 from app.modules.agent.summary.state import SummaryGraphState
 
 
-def _route_by_length(state: SummaryGraphState) -> Literal["direct_summarize", "map_split"]:
+def _route_by_strategy(state: SummaryGraphState) -> Literal["direct_summarize", "map_split"]:
     settings = get_settings()
-    token_count = state.get("content_stats", {}).get("token_count", 0)
-    if token_count > settings.summary_map_reduce_threshold_tokens:
+    strategy = (state.get("summary_strategy") or "").strip().lower()
+    if strategy == "map_reduce":
+        return "map_split"
+    token_count = int(state.get("content_stats", {}).get("token_count", 0) or 0)
+    if token_count > int(settings.summary_map_reduce_threshold_tokens):
         return "map_split"
     return "direct_summarize"
 
@@ -47,6 +50,13 @@ def _check_validation(state: SummaryGraphState) -> Literal["end", "retry"]:
     return "retry"
 
 
+def _route_retry_target(state: SummaryGraphState) -> Literal["direct_summarize", "reduce_summarize"]:
+    strategy = (state.get("summary_strategy") or "").strip().lower()
+    if strategy == "map_reduce" and state.get("chunk_summaries"):
+        return "reduce_summarize"
+    return "direct_summarize"
+
+
 def build_summary_graph() -> Any:
     builder = StateGraph(SummaryGraphState)
 
@@ -60,15 +70,14 @@ def build_summary_graph() -> Any:
 
     builder.add_edge(START, "analyze_content")
     builder.add_edge("analyze_content", "compress_content")
-    builder.add_conditional_edges("compress_content", _route_by_length)
-    builder.add_conditional_edges("map_split", _fan_out_map, ["map_summarize"])
+    builder.add_conditional_edges("compress_content", _route_by_strategy)
+    builder.add_conditional_edges("map_split", _fan_out_map, ["map_summarize", "reduce_summarize"])
     builder.add_edge("map_summarize", "reduce_summarize")
     builder.add_edge("reduce_summarize", "validate_summary")
     builder.add_edge("direct_summarize", "validate_summary")
-    builder.add_conditional_edges("validate_summary", _check_validation, {
-        "end": END,
-        "retry": "direct_summarize",
-    })
+    builder.add_conditional_edges("validate_summary", _check_validation, {"end": END, "retry": "retry_router"})
+    builder.add_node("retry_router", lambda state: state)
+    builder.add_conditional_edges("retry_router", _route_retry_target)
 
     return builder.compile()
 

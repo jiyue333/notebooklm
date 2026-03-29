@@ -130,6 +130,21 @@
     height: 18px;
 }
 
+.add-source-pill-icon,
+.add-source-mode-option-icon {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    color: var(--accent-color);
+}
+
+.add-source-pill-icon svg,
+.add-source-mode-option-icon svg {
+    width: 18px;
+    height: 18px;
+    display: block;
+}
+
 .add-source-pill-static {
     opacity: 1;
 }

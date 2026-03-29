@@ -18,6 +18,7 @@ class ExaSearchRequest:
     freshness_hours: int | None = None
     include_domains: list[str] | None = None
     exclude_domains: list[str] | None = None
+    timeout_seconds: float | None = None
 
 
 class ExaSearchClient:
@@ -67,6 +68,7 @@ class ExaSearchClient:
             "/search",
             json=payload,
             headers={"x-api-key": api_key},
+            timeout=request.timeout_seconds or self._client.timeout,
         )
         response.raise_for_status()
         return response.json()

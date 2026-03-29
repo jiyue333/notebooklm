@@ -64,6 +64,8 @@ async def hybrid_retrieval(
     observe_retrieval_stage(stage="embed_query", duration_ms=_ms(t_embed))
 
     dense_results: list[RetrievalResult] = []
+    dense_top_k = max(request.dense_top_k or request.top_k, 1)
+    sparse_top_k = max(request.sparse_top_k or request.top_k, 1)
     if query_vec:
         t_dense = perf_counter()
         try:
@@ -71,7 +73,7 @@ async def hybrid_retrieval(
                 db,
                 query_embedding=query_vec,
                 scope_article_ids=request.scope_article_ids,
-                top_k=request.top_k * 2,
+                top_k=dense_top_k * 2,
             )
         except Exception as exc:
             logger.warning("hybrid.dense_failed", error=str(exc)[:200])
@@ -84,7 +86,7 @@ async def hybrid_retrieval(
             db,
             query=request.query,
             scope_article_ids=request.scope_article_ids,
-            top_k=request.top_k * 2,
+            top_k=sparse_top_k * 2,
         )
     except Exception as exc:
         logger.warning("hybrid.sparse_failed", error=str(exc)[:200])

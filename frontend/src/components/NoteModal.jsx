@@ -20,7 +20,21 @@ const TOOLBAR_ACTIONS = [
     { label: '代码块', token: '```\n代码\n```' },
 ];
 
-export default function NoteModal({ note, onClose, onSave, onDelete, onExport }) {
+function parseNotebookMarkerHref(href) {
+    if (!href || typeof href !== 'string') return null;
+    if (!href.startsWith('notebook://article/')) return null;
+    try {
+        const parsed = new URL(href);
+        const articleId = parsed.pathname.replace(/^\/+/, '').trim();
+        if (!articleId) return null;
+        const highlightId = parsed.searchParams.get('highlight') || null;
+        return { articleId, highlightId };
+    } catch {
+        return null;
+    }
+}
+
+export default function NoteModal({ note, onClose, onSave, onDelete, onExport, onOpenSourceMarker }) {
     const [title, setTitle] = useState(note?.title || '');
     const [content, setContent] = useState(note?.content || '');
     const [tagsText, setTagsText] = useState(Array.isArray(note?.tags) ? note.tags.join(', ') : '');
@@ -136,7 +150,28 @@ export default function NoteModal({ note, onClose, onSave, onDelete, onExport })
                         </div>
                         <div className="note-modal-preview">
                             {content ? (
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+                                <ReactMarkdown
+                                    remarkPlugins={[remarkGfm]}
+                                    components={{
+                                        a({ href, children, ...props }) {
+                                            const marker = parseNotebookMarkerHref(href);
+                                            if (!marker) {
+                                                return <a href={href} {...props}>{children}</a>;
+                                            }
+                                            return (
+                                                <button
+                                                    type="button"
+                                                    className="note-source-marker-link"
+                                                    onClick={() => onOpenSourceMarker?.(marker)}
+                                                >
+                                                    {children}
+                                                </button>
+                                            );
+                                        },
+                                    }}
+                                >
+                                    {content}
+                                </ReactMarkdown>
                             ) : (
                                 <p className="note-modal-empty">开始输入后，这里会实时显示预览效果</p>
                             )}

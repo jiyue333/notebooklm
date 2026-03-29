@@ -9,11 +9,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
 import re
+from collections import OrderedDict
+from hashlib import sha256
+from threading import Lock
+from time import monotonic
+from typing import Awaitable, Callable
 
 import structlog
 
+from app.core.config import get_settings
 from app.infra.providers.mineru.client import MinerUCloudClient
 from app.modules.ingest.types import DocRoute, FetchedContent
 
@@ -25,6 +32,14 @@ _ROUTE_MODEL_MAP: dict[DocRoute, str] = {
     DocRoute.IMAGE: "vlm",
     DocRoute.HTML: "MinerU-HTML",
 }
+
+_MINERU_SEMAPHORE: asyncio.Semaphore | None = None
+_MINERU_STATE_LOCK = Lock()
+_MINERU_FAILURE_STREAK = 0
+_MINERU_CIRCUIT_OPEN_UNTIL = 0.0
+
+_PARSE_CACHE_LOCK = Lock()
+_PARSE_RESULT_CACHE: OrderedDict[str, str] = OrderedDict()
 
 
 async def parse_to_markdown(
@@ -43,6 +58,13 @@ async def parse_to_markdown(
     if content.route == DocRoute.TEXT:
         return content.raw_bytes.decode("utf-8", errors="replace")
 
+    cache_key = _build_cache_key(content)
+    if cache_key:
+        cached = _read_cached_markdown(cache_key)
+        if cached:
+            logger.debug("parse.cache_hit", route=content.route.value, key=cache_key[:24])
+            return cached
+
     client = mineru_client or MinerUCloudClient()
     model_version = _ROUTE_MODEL_MAP.get(content.route, "vlm")
     file_name = content.file_name or f"input{_default_ext(content.route)}"
@@ -58,38 +80,86 @@ async def parse_to_markdown(
 
     # ====== 已有 batch (search import 预提交) ======
     if mineru_batch_id and mineru_data_id:
-        return await _poll_existing_batch(client, mineru_batch_id, mineru_data_id)
+        md = await _run_mineru_call(
+            "poll_existing_batch",
+            lambda: _poll_existing_batch(client, mineru_batch_id, mineru_data_id),
+        )
+        if md and cache_key:
+            _write_cached_markdown(cache_key, md)
+        return md
 
     # ====== URL 来源: URL batch 优先，回退文件 batch ======
     if content.source_url:
         url_model = _infer_model_from_url(content.source_url) or model_version
-        md = await _try_url_batch(client, content.source_url, data_id=data_id, model_version=url_model)
+        md = await _run_mineru_call(
+            "parse_url_batch",
+            lambda: _try_url_batch(
+                client,
+                content.source_url,
+                data_id=data_id,
+                model_version=url_model,
+            ),
+        )
         if md:
+            if cache_key:
+                _write_cached_markdown(cache_key, md)
             return md
         # URL batch 失败 + 有 bytes → 回退文件 batch
         if content.raw_bytes:
             logger.info("parse.url_failed_fallback_upload", url=content.source_url)
-            try:
-                md = await client.parse_file(
-                    content.raw_bytes, file_name=file_name,
-                    data_id=data_id, model_version=model_version,
-                )
-                if md:
-                    return md
-            except Exception as exc:
-                logger.info("parse.file_batch_failed", url=content.source_url, error=str(exc)[:200])
+            md = await _run_mineru_call(
+                "parse_file_batch_fallback",
+                lambda: client.parse_file(
+                    content.raw_bytes,
+                    file_name=file_name,
+                    data_id=data_id,
+                    model_version=model_version,
+                ),
+            )
+            if md:
+                if cache_key:
+                    _write_cached_markdown(cache_key, md)
+                return md
             if content.route == DocRoute.HTML:
                 fallback = _fallback_html_bytes_to_markdown(content.raw_bytes, source_url=content.source_url)
                 if fallback:
                     logger.warning("parse.local_html_fallback", url=content.source_url)
+                    if cache_key:
+                        _write_cached_markdown(cache_key, fallback)
                     return fallback
+            fallback = _fallback_binary_bytes_to_markdown(
+                content.raw_bytes,
+                file_name=file_name,
+                source_url=content.source_url,
+            )
+            if fallback:
+                logger.warning("parse.local_binary_fallback", url=content.source_url)
+                if cache_key:
+                    _write_cached_markdown(cache_key, fallback)
+                return fallback
         return None
 
     # ====== FILE 来源: 文件 batch ======
-    return await client.parse_file(
-        content.raw_bytes, file_name=file_name,
-        data_id=data_id, model_version=model_version,
+    md = await _run_mineru_call(
+        "parse_file_batch",
+        lambda: client.parse_file(
+            content.raw_bytes,
+            file_name=file_name,
+            data_id=data_id,
+            model_version=model_version,
+        ),
     )
+    if md:
+        if cache_key:
+            _write_cached_markdown(cache_key, md)
+        return md
+    fallback = _fallback_binary_bytes_to_markdown(content.raw_bytes, file_name=file_name, source_url=None)
+    if fallback:
+        logger.warning("parse.local_binary_fallback", file_name=file_name)
+        if cache_key:
+            _write_cached_markdown(cache_key, fallback)
+        return fallback
+    return None
 
 
 async def _poll_existing_batch(
@@ -123,6 +193,31 @@ async def _try_url_batch(
         return None
 
 
+async def _run_mineru_call(
+    op_name: str,
+    task_factory: Callable[[], Awaitable[str | None]],
+) -> str | None:
+    if _is_mineru_circuit_open():
+        logger.warning("parse.mineru_circuit_open", operation=op_name)
+        return None
+
+    semaphore = _get_mineru_semaphore()
+    async with semaphore:
+        try:
+            result = await task_factory()
+        except Exception as exc:  # pragma: no cover - 依赖外部 provider
+            _record_mineru_failure(op_name=op_name, reason=str(exc)[:200] or "unknown")
+            logger.warning("parse.mineru_call_failed", operation=op_name, error=str(exc)[:200])
+            return None
+
+    if result:
+        _record_mineru_success()
+        return result
+
+    _record_mineru_failure(op_name=op_name, reason="empty_result")
+    return None
+
+
 def _infer_model_from_url(url: str) -> str | None:
     """从 URL 后缀推断 MinerU model_version。"""
     from urllib.parse import urlparse
@@ -151,6 +246,76 @@ def _default_ext(route: DocRoute) -> str:
         DocRoute.IMAGE: ".png",
         DocRoute.HTML: ".html",
     }.get(route, ".bin")
+
+
+def _get_mineru_semaphore() -> asyncio.Semaphore:
+    global _MINERU_SEMAPHORE
+    if _MINERU_SEMAPHORE is None:
+        limit = max(1, int(get_settings().mineru_max_concurrency))
+        _MINERU_SEMAPHORE = asyncio.Semaphore(limit)
+    return _MINERU_SEMAPHORE
+
+
+def _is_mineru_circuit_open() -> bool:
+    with _MINERU_STATE_LOCK:
+        return monotonic() < _MINERU_CIRCUIT_OPEN_UNTIL
+
+
+def _record_mineru_success() -> None:
+    global _MINERU_FAILURE_STREAK, _MINERU_CIRCUIT_OPEN_UNTIL
+    with _MINERU_STATE_LOCK:
+        _MINERU_FAILURE_STREAK = 0
+        _MINERU_CIRCUIT_OPEN_UNTIL = 0.0
+
+
+def _record_mineru_failure(*, op_name: str, reason: str) -> None:
+    global _MINERU_FAILURE_STREAK, _MINERU_CIRCUIT_OPEN_UNTIL
+    settings = get_settings()
+    threshold = max(1, int(settings.mineru_circuit_breaker_failures))
+    cooldown = max(1, int(settings.mineru_circuit_breaker_cooldown_seconds))
+
+    with _MINERU_STATE_LOCK:
+        _MINERU_FAILURE_STREAK += 1
+        failure_streak = _MINERU_FAILURE_STREAK
+        if _MINERU_FAILURE_STREAK >= threshold:
+            _MINERU_CIRCUIT_OPEN_UNTIL = monotonic() + cooldown
+            _MINERU_FAILURE_STREAK = 0
+            logger.warning(
+                "parse.mineru_circuit_opened",
+                operation=op_name,
+                reason=reason,
+                cooldown_seconds=cooldown,
+            )
+            return
+    logger.warning("parse.mineru_failure", operation=op_name, reason=reason, failure_streak=failure_streak)
+
+
+def _build_cache_key(content: FetchedContent) -> str | None:
+    route = content.route.value
+    if content.content_hash:
+        return f"{route}:hash:{content.content_hash}"
+    if content.source_url:
+        url_hash = sha256(content.source_url.encode("utf-8")).hexdigest()
+        return f"{route}:url:{url_hash}"
+    return None
+
+
+def _read_cached_markdown(cache_key: str) -> str | None:
+    with _PARSE_CACHE_LOCK:
+        value = _PARSE_RESULT_CACHE.get(cache_key)
+        if value is None:
+            return None
+        _PARSE_RESULT_CACHE.move_to_end(cache_key)
+        return value
+
+
+def _write_cached_markdown(cache_key: str, markdown: str) -> None:
+    max_size = max(16, int(get_settings().mineru_result_cache_size))
+    with _PARSE_CACHE_LOCK:
+        _PARSE_RESULT_CACHE[cache_key] = markdown
+        _PARSE_RESULT_CACHE.move_to_end(cache_key)
+        while len(_PARSE_RESULT_CACHE) > max_size:
+            _PARSE_RESULT_CACHE.popitem(last=False)
 
 
 def _fallback_html_bytes_to_markdown(raw_bytes: bytes, *, source_url: str | None) -> str:
@@ -184,6 +349,33 @@ def _fallback_html_bytes_to_markdown(raw_bytes: bytes, *, source_url: str | None
     if source_url:
         stripped = f"来源：{source_url}\n\n{stripped}".strip()
     return stripped
+
+
+def _fallback_binary_bytes_to_markdown(
+    raw_bytes: bytes,
+    *,
+    file_name: str | None,
+    source_url: str | None,
+) -> str | None:
+    utf8_text = raw_bytes.decode("utf-8", errors="ignore")
+    utf8_text = re.sub(r"\r\n?", "\n", utf8_text)
+    utf8_text = re.sub(r"\n{3,}", "\n\n", utf8_text).strip()
+
+    extracted = utf8_text
+    if len(extracted) < 120:
+        latin = raw_bytes.decode("latin-1", errors="ignore")
+        snippets = re.findall(r"[A-Za-z0-9][A-Za-z0-9 ,.;:()/_\-]{24,}", latin)
+        extracted = "\n".join(snippets[:40]).strip()
+
+    if len(extracted) < 120:
+        return None
+
+    title = (file_name or "导入文档").strip()
+    lines = [f"# {title}", "", "> MinerU 解析暂不可用，以下为降级文本抽取结果。", ""]
+    if source_url:
+        lines.extend([f"来源：{source_url}", ""])
+    lines.append(extracted[:12000])
+    return "\n".join(lines).strip()
 
 
 def _strip_html_inline(value: str) -> str:

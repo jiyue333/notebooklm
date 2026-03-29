@@ -20,6 +20,7 @@ class TavilySearchRequest:
     exclude_paths: list[str] = field(default_factory=list)
     chunks_per_source: int = 3
     include_raw_content: bool | str = False
+    timeout_seconds: float | None = None
 
 
 class TavilySearchClient:
@@ -40,7 +41,7 @@ class TavilySearchClient:
             "max_results": max(1, min(request.max_results, 20)),
             "include_raw_content": request.include_raw_content,
             "chunks_per_source": max(1, min(request.chunks_per_source, 5)),
-            "timeout": 30.0,
+            "timeout": request.timeout_seconds or 30.0,
         }
         if request.time_range:
             kwargs["time_range"] = request.time_range

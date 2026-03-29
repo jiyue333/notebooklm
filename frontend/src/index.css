@@ -215,8 +215,8 @@ a:hover {
   height: 34px;
   padding: 0;
   border: none;
-  border-radius: 50%;
-  background: transparent;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-bg), transparent 14%);
   color: var(--meta-color);
   cursor: pointer;
   display: inline-flex;
@@ -537,7 +537,7 @@ a:hover {
 
 .ui-account-menu-item {
   width: 100%;
-  padding: 11px 12px;
+  padding: 14px 14px;
   margin-top: 4px;
   border: none;
   background: transparent;
@@ -545,6 +545,9 @@ a:hover {
   border-radius: var(--radius-sm);
   text-align: left;
   cursor: pointer;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.35;
 }
 
 .ui-account-menu-item:hover {
@@ -631,6 +634,17 @@ a:hover {
   }
 }
 
+@keyframes modalSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 @keyframes uiSpin {
   to { transform: rotate(360deg); }
 }
@@ -640,7 +654,7 @@ a:hover {
 }
 
 .animate-scale-in {
-  animation: fadeIn var(--duration-normal) var(--ease-standard) both;
+  animation: modalSlideUp var(--duration-normal) var(--ease-standard) both;
 }
 
 @media (max-width: 768px) {

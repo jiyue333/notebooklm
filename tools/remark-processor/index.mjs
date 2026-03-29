@@ -7,6 +7,7 @@
  */
 
 import { unified } from "unified";
+import readline from "node:readline";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
 import remarkStringify from "remark-stringify";
@@ -89,17 +90,40 @@ function wrapCounter(pluginFactory, fixes) {
 
 // ── stdin/stdout 通信 ────────────────────────────────────────────
 
-async function main() {
+async function processOne(inputBuffer) {
+  const input = JSON.parse(inputBuffer);
+  return await processMarkdown(input.markdown || "");
+}
+
+async function mainSingle() {
   const chunks = [];
   for await (const chunk of process.stdin) {
     chunks.push(chunk);
   }
-  const input = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
-  const result = await processMarkdown(input.markdown || "");
+  const result = await processOne(Buffer.concat(chunks).toString("utf-8"));
   process.stdout.write(JSON.stringify(result));
 }
 
-main().catch((err) => {
+async function mainServer() {
+  const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+  for await (const line of rl) {
+    const payload = (line || "").trim();
+    if (!payload) {
+      continue;
+    }
+    try {
+      const result = await processOne(payload);
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+    } catch (err) {
+      process.stdout.write(`${JSON.stringify({ error: err?.message || "unknown error" })}\n`);
+    }
+  }
+}
+
+const isServerMode = process.argv.includes("--server");
+const entry = isServerMode ? mainServer : mainSingle;
+
+entry().catch((err) => {
   process.stderr.write(JSON.stringify({ error: err.message }));
   process.exit(1);
 });

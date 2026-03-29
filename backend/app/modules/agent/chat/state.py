@@ -26,6 +26,15 @@ class ChatGraphState(TypedDict):
     notebook_title: str
     article_title: str
     history: list[dict]
+    rolling_summary: str
+    recent_highlights: list[dict]
+    custom_system_prompt: str
+    answer_length_preference: str
+    output_language: str
+    notebook_article_count: int
+    notebook_indexed_article_count: int
+    deadline_monotonic: float
+    db: Any
 
     # ---- Query Router 输出 ----
     route: str                          # article_qa | notebook_search | recommendation | general

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +22,7 @@ from app.modules.notebooks.schemas import ArticleUpdateRequest, NotebookCreateRe
 from app.modules.notebooks.service import (
     create_notebook,
     delete_notebook,
+    export_notebook_markdown,
     get_notebook_detail,
     invalidate_notebook_detail_cache,
     list_notebooks,
@@ -27,6 +31,18 @@ from app.modules.notebooks.service import (
 )
 
 router = APIRouter(prefix='/notebooks', tags=['notebooks'])
+
+
+def _build_content_disposition(filename: str) -> str:
+    normalized = (filename or "notebook.md").strip() or "notebook.md"
+    if not normalized.lower().endswith(".md"):
+        normalized = f"{normalized}.md"
+    ascii_base = re.sub(r"[^A-Za-z0-9._-]+", "_", normalized).strip("._-")
+    if not ascii_base or ascii_base.lower() in {"md", ".md"}:
+        ascii_base = "notebook"
+    ascii_fallback = ascii_base if ascii_base.lower().endswith(".md") else f"{ascii_base}.md"
+    encoded = quote(normalized, safe="")
+    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded}"
 
 
 @router.get('')
@@ -74,6 +90,24 @@ async def get_notebook_detail_endpoint(
 ):
     item = await get_notebook_detail(session, user_id=current_user.id, notebook_id=notebook_id)
     return success_response(item=item)
+
+
+@router.get('/{notebook_id}/export')
+async def export_notebook_endpoint(
+    notebook_id: str,
+    current_user=Depends(current_user_dep),
+    session: AsyncSession = Depends(db_session_dep),
+):
+    filename, content = await export_notebook_markdown(
+        session,
+        user_id=current_user.id,
+        notebook_id=notebook_id,
+    )
+    return Response(
+        content=content,
+        media_type='text/markdown',
+        headers={"Content-Disposition": _build_content_disposition(filename)},
+    )
 
 
 @router.patch('/{notebook_id}')

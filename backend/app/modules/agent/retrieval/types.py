@@ -44,6 +44,8 @@ class HybridRetrievalRequest:
     query: str
     scope_article_ids: list[str] = field(default_factory=list)
     top_k: int = 10
+    dense_top_k: int | None = None
+    sparse_top_k: int | None = None
     dense_weight: float = 0.7
     sparse_weight: float = 0.3
     use_rerank: bool = True

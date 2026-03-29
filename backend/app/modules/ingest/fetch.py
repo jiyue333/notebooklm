@@ -8,20 +8,37 @@
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
+import socket
+from urllib.parse import urljoin, urlparse
+
 import httpx
 import structlog
 
+from app.modules.ingest.errors import FetchContentError
 from app.modules.ingest.types import IngestInput, InputType
 
 # 与 detect._EXT_ROUTE 同步：仅这些后缀才信任 URL 路径中的文件名（避免 arXiv id 等带点串）
 _TRUSTED_PATH_EXTS: frozenset[str] = frozenset(
     (".pdf", ".html", ".htm", ".doc", ".docx", ".ppt", ".pptx", ".png", ".jpg", ".jpeg", ".txt", ".md")
 )
+_BLOCKED_HOSTS: frozenset[str] = frozenset(
+    {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "0.0.0.0",
+        "host.docker.internal",
+        "kubernetes.docker.internal",
+    }
+)
 
 logger = structlog.get_logger(__name__)
 
 _FETCH_TIMEOUT = 30
 _MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024  # 200 MB
+_MAX_REDIRECTS = 5
 
 
 async def fetch_content(inp: IngestInput) -> tuple[bytes, str | None]:
@@ -37,6 +54,7 @@ async def fetch_content(inp: IngestInput) -> tuple[bytes, str | None]:
             return inp.file_bytes, inp.file_name
         if inp.file_name:
             from app.infra.storage.file_store import load_file_bytes
+
             data = load_file_bytes(inp.file_name)
             return data, inp.file_name
         raise ValueError("FILE 类型需要 file_bytes 或 file_name")
@@ -44,6 +62,9 @@ async def fetch_content(inp: IngestInput) -> tuple[bytes, str | None]:
     # URL / SEARCH_RESULT
     if not inp.source_url:
         raise ValueError(f"{inp.input_type.value} 类型需要 source_url")
+
+    _validate_source_url(inp.source_url)
+    await _guard_against_ssrf(inp.source_url)
 
     try:
         return await _download_url(inp.source_url, verify=True)
@@ -59,14 +80,51 @@ async def fetch_content(inp: IngestInput) -> tuple[bytes, str | None]:
 
 
 async def _download_url(source_url: str, *, verify: bool) -> tuple[bytes, str]:
-    async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT, follow_redirects=True, verify=verify) as http:
-        resp = await http.get(source_url)
-        resp.raise_for_status()
-        data = resp.content
-        if len(data) > _MAX_DOWNLOAD_BYTES:
-            raise ValueError(f"文件过大: {len(data)} bytes")
-        file_name = _guess_filename(source_url, resp.headers.get("content-type", ""))
-        return data, file_name
+    current_url = source_url
+    async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT, follow_redirects=False, verify=verify) as http:
+        for _ in range(_MAX_REDIRECTS + 1):
+            _validate_source_url(current_url)
+            await _guard_against_ssrf(current_url)
+
+            async with http.stream("GET", current_url) as resp:
+                if 300 <= resp.status_code < 400:
+                    location = (resp.headers.get("location") or "").strip()
+                    if not location:
+                        raise FetchContentError("fetch_redirect_invalid", "重定向缺少 location 头", retryable=False)
+                    current_url = urljoin(current_url, location)
+                    continue
+
+                resp.raise_for_status()
+
+                length_header = (resp.headers.get("content-length") or "").strip()
+                if length_header:
+                    try:
+                        declared_length = int(length_header)
+                    except ValueError:
+                        declared_length = 0
+                    if declared_length > _MAX_DOWNLOAD_BYTES:
+                        raise FetchContentError(
+                            "fetch_too_large",
+                            f"文件过大（content-length={declared_length} bytes）",
+                            retryable=False,
+                        )
+
+                data = bytearray()
+                async for chunk in resp.aiter_bytes():
+                    if not chunk:
+                        continue
+                    data.extend(chunk)
+                    if len(data) > _MAX_DOWNLOAD_BYTES:
+                        raise FetchContentError(
+                            "fetch_too_large",
+                            f"文件过大（streamed>{_MAX_DOWNLOAD_BYTES} bytes）",
+                            retryable=False,
+                        )
+
+                file_name = _guess_filename(current_url, resp.headers.get("content-type", ""))
+                return bytes(data), file_name
+
+    raise FetchContentError("fetch_redirect_loop", f"重定向次数超过限制（>{_MAX_REDIRECTS}）", retryable=False)
 
 
 def _should_retry_without_tls_verification(source_url: str, exc: Exception) -> bool:
@@ -75,9 +133,51 @@ def _should_retry_without_tls_verification(source_url: str, exc: Exception) -> b
     return "CERTIFICATE_VERIFY_FAILED" in str(exc)
 
 
+def _validate_source_url(source_url: str) -> None:
+    parsed = urlparse(source_url)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise FetchContentError("fetch_invalid_scheme", f"仅支持 http/https 来源：{source_url}", retryable=False)
+    if not parsed.netloc:
+        raise FetchContentError("fetch_invalid_url", f"无效 URL：{source_url}", retryable=False)
+
+
+async def _guard_against_ssrf(source_url: str) -> None:
+    host = (urlparse(source_url).hostname or "").strip().lower()
+    if not host:
+        raise FetchContentError("fetch_invalid_url", f"无效 URL：{source_url}", retryable=False)
+    if host in _BLOCKED_HOSTS:
+        raise FetchContentError("fetch_ssrf_blocked", f"禁止访问内网地址：{host}", retryable=False)
+
+    try:
+        infos = await asyncio.to_thread(socket.getaddrinfo, host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        # 域名解析失败交由上层 HTTP 错误处理，不视为 SSRF
+        return
+
+    for family, _, _, _, sockaddr in infos:
+        if family not in (socket.AF_INET, socket.AF_INET6):
+            continue
+        ip = sockaddr[0]
+        if _is_blocked_ip(ip):
+            raise FetchContentError("fetch_ssrf_blocked", f"禁止访问内网地址：{host} -> {ip}", retryable=False)
+
+
+def _is_blocked_ip(ip_value: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip_value)
+    except ValueError:
+        return False
+    return (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_multicast
+        or addr.is_unspecified
+    )
+
+
 def _guess_filename(url: str, content_type: str) -> str:
     """路径最后一段仅在扩展名可信时使用；arXiv 等 `NNNN.NNNNN` 会误判为文件名，需走 MIME。"""
-    from urllib.parse import urlparse
 
     path = urlparse(url).path.rstrip("/")
     name = path.rsplit("/", 1)[-1] if "/" in path else ""

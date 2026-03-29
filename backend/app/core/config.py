@@ -81,10 +81,13 @@ class Settings(BaseSettings):
     default_embedding_model_name: str = "qwen3-embedding:0.6b"
     default_embedding_api_url: str = "http://127.0.0.1:11434"
     embedding_output_dimensions: int = 1024
+    embedding_batch_size: int = 64
     chunk_target_tokens: int = 600
     chunk_overlap_tokens: int = 80
     summary_cache_ttl_days: int = 30
     scheduler_failed_job_retention_days: int = 14
+    scheduler_failed_job_retry_backoff_seconds: int = 45
+    scheduler_dead_letter_retention_days: int = 30
 
     grok_api_key: str | None = None
     grok_base_url: str = "https://api.x.ai/v1"
@@ -111,6 +114,14 @@ class Settings(BaseSettings):
     summary_compress_code_blocks: bool = True
 
     # ── Chat retrieval ─────────────────────────────────────────────
+    chat_graph_deadline_ms: int = 45_000
+    chat_node_timeout_ms: int = 25_000
+    chat_recent_history_limit: int = 8
+    chat_history_summary_trigger_messages: int = 14
+    chat_history_summary_max_chars: int = 1200
+    chat_notebook_scope_article_cap: int = 36
+    chat_web_search_cache_ttl_seconds: int = 300
+    chat_evidence_context_budget_chars: int = 5200
     chat_dense_top_k: int = 15
     chat_sparse_top_k: int = 15
     chat_rerank_top_n: int = 8
@@ -125,10 +136,15 @@ class Settings(BaseSettings):
     mineru_default_model: str = "vlm"
     mineru_poll_interval_seconds: int = 3
     mineru_poll_timeout_seconds: int = 300
+    mineru_max_concurrency: int = 3
+    mineru_circuit_breaker_failures: int = 5
+    mineru_circuit_breaker_cooldown_seconds: int = 120
+    mineru_result_cache_size: int = 256
 
     # Remark (Node.js subprocess)
     remark_processor_path: str = ""
     remark_timeout_seconds: int = 30
+    remark_cache_size: int = 256
 
     kafka_bootstrap_servers: str = "127.0.0.1:29092"
     kafka_topic: str = "notebook_async"

@@ -46,6 +46,8 @@ const DEFAULT_NOTES_BY_NOTEBOOK_ID = {
     ],
 };
 
+const DEFAULT_HIGHLIGHTS_BY_ARTICLE_ID = {};
+
 const clone = (value) => {
     if (typeof structuredClone === 'function') {
         return structuredClone(value);
@@ -270,6 +272,7 @@ const createMockState = () => ({
     settings: clone(DEFAULT_SETTINGS),
     notebooks: clone(mockNotebooks),
     notesByNotebookId: clone(DEFAULT_NOTES_BY_NOTEBOOK_ID),
+    highlightsByArticleId: clone(DEFAULT_HIGHLIGHTS_BY_ARTICLE_ID),
     searchSessionsById: {},
 });
 
@@ -309,6 +312,13 @@ const ensureNotesBucket = (notebookId) => {
         mockState.notesByNotebookId[notebookId] = [];
     }
     return mockState.notesByNotebookId[notebookId];
+};
+
+const ensureHighlightsBucket = (articleId) => {
+    if (!mockState.highlightsByArticleId[articleId]) {
+        mockState.highlightsByArticleId[articleId] = [];
+    }
+    return mockState.highlightsByArticleId[articleId];
 };
 
 const buildMockSummary = (article) => ({
@@ -496,6 +506,101 @@ const mockProvider = {
             blob: new Blob([note.content || ''], { type: 'text/markdown;charset=utf-8' }),
             filename: `${safeTitle}.md`,
         };
+    },
+
+    async exportNotebook(notebookId) {
+        await wait(180);
+        const notebook = getNotebookRecord(notebookId);
+        const notes = ensureNotesBucket(notebookId);
+        const highlights = (notebook.articles || []).flatMap((article) => (
+            (mockState.highlightsByArticleId[article.id] || []).map((item) => ({
+                ...item,
+                articleTitle: article.title,
+            }))
+        ));
+        const lines = [
+            `# ${notebook.title}`,
+            '',
+            `- 导出时间：${new Date().toISOString()}`,
+            `- 笔记数量：${notes.length}`,
+            `- 高亮数量：${highlights.length}`,
+            '',
+            '## 笔记',
+            '',
+        ];
+        if (!notes.length) {
+            lines.push('_暂无笔记_', '');
+        } else {
+            notes.forEach((note, index) => {
+                lines.push(`### ${index + 1}. ${note.title || '无标题笔记'}`);
+                lines.push(note.content || '_（空内容）_');
+                lines.push('');
+            });
+        }
+        lines.push('## 高亮汇总', '');
+        if (!highlights.length) {
+            lines.push('_暂无高亮_', '');
+        } else {
+            highlights.forEach((item, index) => {
+                lines.push(`${index + 1}. [${item.color || 'yellow'}] ${item.text || ''}`);
+                if (item.comment) {
+                    lines.push(`   - 批注：${item.comment}`);
+                }
+                if (item.articleTitle) {
+                    lines.push(`   - 来源：${item.articleTitle}`);
+                }
+            });
+            lines.push('');
+        }
+        const safeTitle = (notebook.title || 'notebook').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'notebook';
+        return {
+            blob: new Blob([`${lines.join('\n').trim()}\n`], { type: 'text/markdown;charset=utf-8' }),
+            filename: `${safeTitle}.md`,
+        };
+    },
+
+    async listHighlights({ articleId }) {
+        await wait(120);
+        return clone(ensureHighlightsBucket(articleId));
+    },
+
+    async createHighlight({ articleId, text, color, comment, startOffset, endOffset, occurrenceIndex }) {
+        await wait(140);
+        const bucket = ensureHighlightsBucket(articleId);
+        const next = {
+            id: generateId('hl'),
+            articleId,
+            text: text || '',
+            color: color || 'yellow',
+            comment: comment || '',
+            startOffset: Number.isFinite(startOffset) ? startOffset : null,
+            endOffset: Number.isFinite(endOffset) ? endOffset : null,
+            occurrenceIndex: Number.isFinite(occurrenceIndex) ? occurrenceIndex : null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+        };
+        bucket.unshift(next);
+        return clone(next);
+    },
+
+    async updateHighlight({ articleId, highlightId, color, comment }) {
+        await wait(120);
+        const bucket = ensureHighlightsBucket(articleId);
+        const target = bucket.find((item) => item.id === highlightId);
+        if (!target) {
+            throw new Error('未找到对应高亮');
+        }
+        if (color !== undefined) target.color = color || 'yellow';
+        if (comment !== undefined) target.comment = comment || '';
+        target.updatedAt = new Date().toISOString();
+        return clone(target);
+    },
+
+    async deleteHighlight({ articleId, highlightId }) {
+        await wait(100);
+        const bucket = ensureHighlightsBucket(articleId);
+        mockState.highlightsByArticleId[articleId] = bucket.filter((item) => item.id !== highlightId);
+        return { success: true };
     },
 
     async searchSources({ notebookId, query, mode = 'auto', maxResults = 10 }) {
@@ -771,6 +876,18 @@ const mockProvider = {
         const article = notebook.articles.find((item) => item.id === articleId);
         if (!article) throw new Error('未找到对应文章');
         return normalizeSummaryStreamPayload(buildMockSummary(article));
+    },
+
+    async listNotebookSummaries({ notebookId }) {
+        await wait(160);
+        const notebook = getNotebookRecord(notebookId);
+        return (notebook.articles || [])
+            .filter((article) => (article.content || '').trim())
+            .map((article) => ({
+                articleId: article.id,
+                title: article.title,
+                summaryText: buildMockSummary(article).summaryText,
+            }));
     },
 
     async streamSummary({ notebookId, articleId, onToken }) {
@@ -1138,16 +1255,31 @@ const normalizeSummaryStreamPayload = (payload = {}) => {
     };
 };
 
-const normalizeRelatedArticles = (articles = []) => articles.map((article) => ({
-    index: article.index ?? null,
-    articleId: article.articleId || article.article_id || null,
-    title: article.title || '',
-    notebookId: article.notebookId || article.notebook_id || null,
-    notebookTitle: article.notebookTitle || article.notebook_title || '',
-    whySimilar: article.whySimilar || article.why_similar || '',
-    score: article.score ?? 0,
-    snippet: article.snippet || '',
-}));
+const normalizeRelatedArticles = (articles = []) => articles
+    .map((article, listIndex) => {
+        const sourceType = String(
+            article.type
+            || article.sourceType
+            || article.source_type
+            || (article.url ? 'web' : 'local'),
+        ).toLowerCase();
+        const rawIndex = Number(article.index ?? article.id ?? listIndex + 1);
+        const normalizedIndex = Number.isFinite(rawIndex) && rawIndex > 0 ? rawIndex : listIndex + 1;
+        return {
+            index: normalizedIndex,
+            citationLabel: sourceType === 'web' ? `[W${normalizedIndex}]` : `[${normalizedIndex}]`,
+            sourceType,
+            articleId: article.articleId || article.article_id || null,
+            title: article.title || article.article_title || '',
+            notebookId: article.notebookId || article.notebook_id || null,
+            notebookTitle: article.notebookTitle || article.notebook_title || '',
+            whySimilar: article.whySimilar || article.why_similar || '',
+            score: article.score ?? 0,
+            snippet: article.snippet || article.text_preview || '',
+            url: article.url || article.sourceUrl || article.source_url || '',
+        };
+    })
+    .filter((item) => Boolean(item.title || item.snippet || item.url || item.articleId));
 
 const normalizeEvidenceSpans = (spans = []) => spans.map((span) => ({
     index: span.index ?? null,
@@ -1161,7 +1293,12 @@ const normalizeEvidenceSpans = (spans = []) => spans.map((span) => ({
 
 const normalizeChatStreamPayload = (payload = {}) => {
     const answer = payload.answer || payload.reply || '';
-    const relatedArticles = normalizeRelatedArticles(payload.relatedArticles || payload.citations || []);
+    const relatedArticles = normalizeRelatedArticles(
+        payload.relatedArticles
+        || payload.citations
+        || payload.evidence
+        || [],
+    );
     return {
         conversationId: payload.conversationId || null,
         messageId: payload.messageId || null,
@@ -1169,7 +1306,7 @@ const normalizeChatStreamPayload = (payload = {}) => {
         routeBadge: payload.routeBadge || '',
         answer,
         reply: answer,
-        evidenceSpans: normalizeEvidenceSpans(payload.evidenceSpans || []),
+        evidenceSpans: normalizeEvidenceSpans(payload.evidenceSpans || payload.evidence || []),
         relatedArticles,
         citations: relatedArticles,
         confidence: payload.confidence ?? 0,
@@ -1270,6 +1407,27 @@ const backendProvider = {
     async getNotebookDetail(notebookId) {
         const payload = await request(`/notebooks/${notebookId}`);
         return payload.item;
+    },
+
+    async exportNotebook(notebookId) {
+        const response = await fetchWithFallback(`/notebooks/${notebookId}/export`, {
+            headers: { ...(getStoredSession()?.token ? { Authorization: `Bearer ${getStoredSession().token}` } : {}) },
+        });
+        if (!response.ok) {
+            let message = `导出失败 (${response.status})`;
+            try {
+                const payload = await parseResponse(response);
+                message = payload?.error?.message || payload?.message || message;
+            } catch (error) {
+                console.error('notebook.export_parse_failed', error);
+            }
+            const error = new Error(message);
+            error.status = response.status;
+            throw error;
+        }
+        const blob = await response.blob();
+        const filename = parseDownloadFilename(response.headers.get('Content-Disposition'), 'notebook.md');
+        return { blob, filename };
     },
 
     async saveNote(notebookId, note) {
@@ -1456,6 +1614,11 @@ const backendProvider = {
         return backendProvider.streamSummary({ notebookId, articleId });
     },
 
+    async listNotebookSummaries({ notebookId }) {
+        const payload = await request(`/notebooks/${notebookId}/summaries`);
+        return Array.isArray(payload.items) ? payload.items : [];
+    },
+
     async streamSummary({ notebookId, articleId, onToken }) {
         const payload = await requestStream(
             `/notebooks/${notebookId}/articles/${articleId}/summary/stream`,
@@ -1514,6 +1677,44 @@ const backendProvider = {
         });
         return payload.item || payload;
     },
+
+    async listHighlights({ notebookId, articleId }) {
+        const payload = await request(`/notebooks/${notebookId}/articles/${articleId}/highlights`);
+        return payload.items || [];
+    },
+
+    async createHighlight({ notebookId, articleId, text, color, comment, startOffset, endOffset, occurrenceIndex }) {
+        const payload = await request(`/notebooks/${notebookId}/articles/${articleId}/highlights`, {
+            method: 'POST',
+            body: {
+                text,
+                color,
+                comment,
+                startOffset,
+                endOffset,
+                occurrenceIndex,
+            },
+        });
+        return payload.item;
+    },
+
+    async updateHighlight({ notebookId, articleId, highlightId, color, comment }) {
+        const payload = await request(`/notebooks/${notebookId}/articles/${articleId}/highlights/${highlightId}`, {
+            method: 'PATCH',
+            body: {
+                color,
+                comment,
+            },
+        });
+        return payload.item;
+    },
+
+    async deleteHighlight({ notebookId, articleId, highlightId }) {
+        await request(`/notebooks/${notebookId}/articles/${articleId}/highlights/${highlightId}`, {
+            method: 'DELETE',
+        });
+        return { success: true };
+    },
 };
 
 const provider = runtimeConfig.dataSource === 'api' ? backendProvider : mockProvider;
@@ -1537,6 +1738,7 @@ export const appApi = {
         update: provider.updateNotebook,
         remove: provider.deleteNotebook,
         getDetail: provider.getNotebookDetail,
+        exportNotebook: provider.exportNotebook,
     },
     notes: {
         save: provider.saveNote,
@@ -1564,11 +1766,18 @@ export const appApi = {
     },
     ai: {
         generateSummary: provider.generateSummary,
+        listNotebookSummaries: provider.listNotebookSummaries,
         streamSummary: provider.streamSummary,
         askAssistant: provider.askAssistant,
         streamAssistant: provider.streamAssistant,
         trackAiEvent: provider.trackAiEvent,
         translateArticle: provider.translateArticle,
+    },
+    highlights: {
+        list: provider.listHighlights,
+        create: provider.createHighlight,
+        update: provider.updateHighlight,
+        remove: provider.deleteHighlight,
     },
 };
 

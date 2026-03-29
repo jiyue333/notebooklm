@@ -117,3 +117,6 @@ class IngestResult:
     is_duplicate: bool = False
     duplicate_article_id: str | None = None
     elapsed_stages: dict[str, float] = field(default_factory=dict)
+    remark_fixes_applied: int = 0
+    parse_error_tag: str | None = None
+    parse_error_message: str | None = None

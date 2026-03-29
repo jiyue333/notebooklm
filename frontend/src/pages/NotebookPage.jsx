@@ -1,4 +1,5 @@
 import { memo, startTransition, useState, useCallback, useRef, useEffect, useMemo, useDeferredValue } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTheme } from '../contexts/useTheme';
 import { appApi, clearStoredSession, getStoredSession, isAuthError } from '../services/appApi';
@@ -16,6 +17,7 @@ import AddSourceModal from '../components/AddSourceModal';
 import SourcePanel from '../components/SourcePanel';
 import NoteModal from '../components/NoteModal';
 import SourceActionModal from '../components/SourceActionModal';
+import { outputLanguages } from '../data/mockData';
 import './NotebookPage.css';
 
 /* ============================================
@@ -31,6 +33,65 @@ function stripFirstH1(markdown) {
         result.push(line);
     }
     return result.join('\n').replace(/^\n+/, '');
+}
+
+function splitMarkdownBlocks(markdown) {
+    if (!markdown) return [];
+    const lines = String(markdown).split('\n');
+    const blocks = [];
+    let buffer = [];
+    let inFence = false;
+
+    const flush = () => {
+        const block = buffer.join('\n').trim();
+        if (block) {
+            blocks.push(block);
+        }
+        buffer = [];
+    };
+
+    lines.forEach((line) => {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('```')) {
+            inFence = !inFence;
+            buffer.push(line);
+            return;
+        }
+        if (!inFence && trimmed === '') {
+            flush();
+            return;
+        }
+        buffer.push(line);
+    });
+    flush();
+    return blocks;
+}
+
+function toBlockquoteMarkdown(markdown) {
+    return String(markdown || '')
+        .split('\n')
+        .map((line) => `> ${line}`)
+        .join('\n');
+}
+
+function buildInterleavedTranslationMarkdown(originalMarkdown, translatedMarkdown) {
+    const originalBlocks = splitMarkdownBlocks(originalMarkdown);
+    const translatedBlocks = splitMarkdownBlocks(translatedMarkdown);
+    if (!originalBlocks.length) {
+        return translatedMarkdown || '';
+    }
+
+    const chunks = [];
+    originalBlocks.forEach((block, index) => {
+        chunks.push(block);
+        const translated = translatedBlocks[index];
+        if (translated) {
+            chunks.push(
+                `<details class="nb-translated-block">\n<summary>查看译文</summary>\n\n${toBlockquoteMarkdown(translated)}\n</details>`,
+            );
+        }
+    });
+    return chunks.join('\n\n');
 }
 
 function areTocEntriesEqual(left = [], right = []) {
@@ -73,6 +134,138 @@ function isEditableTarget(target) {
 
 function getArticleBodyElement(container) {
     return container?.querySelector('[data-role="article-body"]') || null;
+}
+
+function isRangeInsideRoot(range, root) {
+    if (!range || !root) return false;
+    const startNode = range.startContainer;
+    const endNode = range.endContainer;
+    return root.contains(startNode) && root.contains(endNode);
+}
+
+function buildOffsetsFromRange(root, range) {
+    if (!root || !range) return { startOffset: null, endOffset: null };
+    try {
+        const preRange = document.createRange();
+        preRange.selectNodeContents(root);
+        preRange.setEnd(range.startContainer, range.startOffset);
+        const startOffset = preRange.toString().length;
+        const selectedText = range.toString();
+        const endOffset = startOffset + selectedText.length;
+        if (!Number.isFinite(startOffset) || !Number.isFinite(endOffset)) {
+            return { startOffset: null, endOffset: null };
+        }
+        return { startOffset, endOffset };
+    } catch {
+        return { startOffset: null, endOffset: null };
+    }
+}
+
+function countOccurrenceBeforeOffset(fullText, targetText, startOffset) {
+    if (!fullText || !targetText || !Number.isFinite(startOffset)) return null;
+    let occurrence = 0;
+    let fromIndex = 0;
+    while (true) {
+        const index = fullText.indexOf(targetText, fromIndex);
+        if (index < 0) break;
+        if (index >= startOffset) {
+            return index === startOffset ? occurrence : null;
+        }
+        occurrence += 1;
+        fromIndex = index + targetText.length;
+    }
+    return null;
+}
+
+function resolveRangeByOffsets(root, startOffset, endOffset) {
+    if (!root) return null;
+    if (!Number.isFinite(startOffset) || !Number.isFinite(endOffset) || endOffset <= startOffset) return null;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    let currentOffset = 0;
+    let startNode = null;
+    let endNode = null;
+    let startNodeOffset = 0;
+    let endNodeOffset = 0;
+    while (walker.nextNode()) {
+        const textNode = walker.currentNode;
+        const textLength = textNode.nodeValue?.length || 0;
+        const nextOffset = currentOffset + textLength;
+        if (!startNode && startOffset >= currentOffset && startOffset <= nextOffset) {
+            startNode = textNode;
+            startNodeOffset = Math.max(startOffset - currentOffset, 0);
+        }
+        if (endOffset >= currentOffset && endOffset <= nextOffset) {
+            endNode = textNode;
+            endNodeOffset = Math.max(endOffset - currentOffset, 0);
+            break;
+        }
+        currentOffset = nextOffset;
+    }
+    if (!startNode || !endNode) return null;
+    try {
+        const range = document.createRange();
+        range.setStart(startNode, startNodeOffset);
+        range.setEnd(endNode, endNodeOffset);
+        return range;
+    } catch {
+        return null;
+    }
+}
+
+function resolveRangeByTextOccurrence(root, text, occurrenceIndex = null) {
+    if (!root || !text) return null;
+    const hits = collectReaderSearchMatches(root, text, 500);
+    if (!hits.length) return null;
+    const targetIndex = Number.isFinite(occurrenceIndex) && occurrenceIndex >= 0 && occurrenceIndex < hits.length
+        ? occurrenceIndex
+        : 0;
+    const current = hits[targetIndex];
+    if (!current?.textNode) return null;
+    try {
+        const range = document.createRange();
+        range.setStart(current.textNode, current.start);
+        range.setEnd(current.textNode, current.end);
+        return range;
+    } catch {
+        return null;
+    }
+}
+
+const HIGHLIGHT_COLOR_KEYS = ['yellow', 'blue', 'green', 'pink', 'purple', 'orange'];
+
+function normalizeHighlightColor(color) {
+    const normalized = String(color || '').trim().toLowerCase();
+    return HIGHLIGHT_COLOR_KEYS.includes(normalized) ? normalized : 'yellow';
+}
+
+function resolveHighlightRange(articleBody, item) {
+    if (!articleBody || !item) return null;
+    let range = resolveRangeByOffsets(
+        articleBody,
+        Number(item.startOffset),
+        Number(item.endOffset),
+    );
+    if (!range) {
+        range = resolveRangeByTextOccurrence(
+            articleBody,
+            item.text || '',
+            Number(item.occurrenceIndex),
+        );
+    }
+    return range;
+}
+
+function resolveRangeAnchorRect(range) {
+    if (!range) return null;
+    const rects = range.getClientRects();
+    if (rects?.length) {
+        return rects[rects.length - 1];
+    }
+    const fallback = range.getBoundingClientRect();
+    if (!fallback || (!fallback.width && !fallback.height)) {
+        return null;
+    }
+    return fallback;
 }
 
 function collectReaderSearchMatches(root, query, maxHits = 200) {
@@ -298,6 +491,8 @@ const ArticleContentPane = memo(function ArticleContentPane({
     translationText,
     translationLanguage,
     translationError,
+    translationRenderMode,
+    onToggleTranslationRenderMode,
     setShowSummary,
     setShowTranslation,
     onCopySummary,
@@ -338,6 +533,15 @@ const ArticleContentPane = memo(function ArticleContentPane({
                         <span className="nb-summary-label">
                             {translationLoading ? '正在翻译...' : `译文${translationLanguage ? ` · ${translationLanguage}` : ''}`}
                         </span>
+                        {!translationLoading && translationText ? (
+                            <button
+                                className="nb-summary-mode-btn"
+                                onClick={onToggleTranslationRenderMode}
+                                title={translationRenderMode === 'interleaved' ? '切换为整文译文' : '切换为逐段对照'}
+                            >
+                                {translationRenderMode === 'interleaved' ? '整文' : '逐段'}
+                            </button>
+                        ) : null}
                         <button className="nb-icon-btn-sm" onClick={() => setShowTranslation(false)}>{I.close}</button>
                     </div>
                     <div className="nb-summary-body">
@@ -379,6 +583,9 @@ const I = {
     chat: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12z" /><path d="M7 9h2v2H7zm4 0h2v2h-2zm4 0h2v2h-2z" /></svg>,
     more: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" /></svg>,
     addNote: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M14.06 9.02l.92.92L5.92 19H5v-.92l9.06-9.06M17.66 3c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z" /></svg>,
+    highlight: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.97 4.5l3.53 3.53-8.49 8.49H7.48V13l8.49-8.5zM4 20h16v2H4z" /></svg>,
+    copy: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v12h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" /></svg>,
+    comment: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 6h-2v9H7v2c0 .55.45 1 1 1h9l4 4V7c0-.55-.45-1-1-1zM17 12V3c0-.55-.45-1-1-1H3c-.55 0-1 .45-1 1v14l4-4h10c.55 0 1-.45 1-1z" /></svg>,
     edit: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M14.06 9.02l.92.92L5.92 19H5v-.92l9.06-9.06M17.66 3c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z" /></svg>,
     theme: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69zM12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6zm0-10c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4z" /></svg>,
     layout: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h4v4H7V7zm0 6h4v4H7v-4zm6-6h4v10h-4V7z" /></svg>,
@@ -484,6 +691,9 @@ export default function NotebookPage() {
     const menuRef = useRef(null);
     const layoutPrefRef = useRef(null);
     const articleContextMenuRef = useRef(null);
+    const selectionToolbarRef = useRef(null);
+    const commentBubbleLayerRef = useRef(null);
+    const commentPopoverRef = useRef(null);
     const centerBodyRef = useRef(null);
     const readerSearchInputRef = useRef(null);
     const readerSearchHitRefs = useRef([]);
@@ -494,6 +704,7 @@ export default function NotebookPage() {
     const [showSummary, setShowSummary] = useState(false);
     const [summaryText, setSummaryText] = useState('');
     const [summaryLoading, setSummaryLoading] = useState(false);
+    const [summaryCacheByArticleId, setSummaryCacheByArticleId] = useState({});
     const [showAiChat, setShowAiChat] = useState(false);
     const [chatScope, setChatScope] = useState('article');
     const [chatSessions, setChatSessions] = useState([]);
@@ -507,11 +718,28 @@ export default function NotebookPage() {
     const [translationLoading, setTranslationLoading] = useState(false);
     const [translationLanguage, setTranslationLanguage] = useState('');
     const [translationError, setTranslationError] = useState('');
+    const [translationTargetLanguage, setTranslationTargetLanguage] = useState('');
+    const [translationRenderMode, setTranslationRenderMode] = useState('interleaved');
     const [readerSearchQuery, setReaderSearchQuery] = useState('');
     const [readerSearchIndex, setReaderSearchIndex] = useState(0);
     const [readerSearchMatchCount, setReaderSearchMatchCount] = useState(0);
     const [readerSearchShouldJump, setReaderSearchShouldJump] = useState(false);
     const [chatFeedback, setChatFeedback] = useState('');
+    const [articleHighlights, setArticleHighlights] = useState([]);
+    const [highlightToolbar, setHighlightToolbar] = useState({
+        visible: false,
+        x: 0,
+        y: 0,
+        text: '',
+        startOffset: null,
+        endOffset: null,
+        occurrenceIndex: null,
+    });
+    const [isPersistingHighlight, setIsPersistingHighlight] = useState(false);
+    const [pendingHighlightFocusId, setPendingHighlightFocusId] = useState(null);
+    const [commentBubbleAnchors, setCommentBubbleAnchors] = useState([]);
+    const [activeCommentBubbleId, setActiveCommentBubbleId] = useState(null);
+    const [commentComposer, setCommentComposer] = useState({ open: false, value: '' });
 
     // Article settings
     const [fontSize, setFontSize] = useState(1.05);
@@ -569,10 +797,82 @@ export default function NotebookPage() {
     }, [id]);
 
     useEffect(() => {
+        let cancelled = false;
+        const bootstrapTranslationLanguage = async () => {
+            try {
+                const current = await appApi.settings.get();
+                if (cancelled) return;
+                const fallbackLanguage = current.outputLanguage || '中文';
+                setTranslationTargetLanguage((prev) => prev || fallbackLanguage);
+            } catch {
+                if (!cancelled) {
+                    setTranslationTargetLanguage((prev) => prev || '中文');
+                }
+            }
+        };
+        void bootstrapTranslationLanguage();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    useEffect(() => {
         if (layoutMode !== 'triple') {
             setIsSourceDetailMode(false);
         }
     }, [layoutMode]);
+
+    useEffect(() => {
+        if (!notebook?.id) {
+            setSummaryCacheByArticleId({});
+            return;
+        }
+        let cancelled = false;
+        const loadNotebookSummaries = async () => {
+            try {
+                const items = await appApi.ai.listNotebookSummaries({ notebookId: notebook.id });
+                if (cancelled) return;
+                const nextCache = {};
+                (Array.isArray(items) ? items : []).forEach((item) => {
+                    const articleId = String(item?.articleId || '').trim();
+                    const summary = String(item?.summaryText || '').trim();
+                    if (!articleId || !summary) return;
+                    nextCache[articleId] = summary;
+                });
+                setSummaryCacheByArticleId(nextCache);
+            } catch (err) {
+                if (cancelled) return;
+                if (isAuthError(err)) {
+                    redirectToLogin();
+                    return;
+                }
+                setSummaryCacheByArticleId({});
+            }
+        };
+        void loadNotebookSummaries();
+        return () => {
+            cancelled = true;
+        };
+    }, [notebook?.id, redirectToLogin]);
+
+    useEffect(() => {
+        if (!selectedArticle?.id) {
+            setSummaryText('');
+            setSummaryLoading(false);
+            setShowSummary(false);
+            return;
+        }
+        const cachedSummary = String(summaryCacheByArticleId[selectedArticle.id] || '').trim();
+        if (cachedSummary) {
+            setSummaryText(cachedSummary);
+            setSummaryLoading(false);
+            setShowSummary(true);
+            return;
+        }
+        setSummaryText('');
+        setSummaryLoading(false);
+        setShowSummary(false);
+    }, [selectedArticle?.id, summaryCacheByArticleId]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return undefined;
@@ -599,6 +899,16 @@ export default function NotebookPage() {
             if (noteActionMenuRef.current && !noteActionMenuRef.current.contains(e.target)) {
                 setNoteActionMenuId(null);
             }
+            if (selectionToolbarRef.current && !selectionToolbarRef.current.contains(e.target)) {
+                setHighlightToolbar((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+            }
+            const clickedInCommentBubble = (
+                (commentBubbleLayerRef.current && commentBubbleLayerRef.current.contains(e.target))
+                || (commentPopoverRef.current && commentPopoverRef.current.contains(e.target))
+            );
+            if (!clickedInCommentBubble) {
+                setActiveCommentBubbleId(null);
+            }
         };
         const handleEscape = (event) => {
             if (event.key === 'Escape') {
@@ -606,6 +916,8 @@ export default function NotebookPage() {
                 setShowLayoutPrefMenu(false);
                 setArticleContextMenu(null);
                 setNoteActionMenuId(null);
+                setActiveCommentBubbleId(null);
+                setCommentComposer((prev) => (prev.open ? { open: false, value: '' } : prev));
             }
         };
         document.addEventListener('mousedown', handler);
@@ -708,19 +1020,18 @@ export default function NotebookPage() {
 
     // Reset AI features when switching articles
     useEffect(() => {
-        setShowSummary(false);
-        setSummaryText('');
-        setSummaryLoading(false);
         setShowTranslation(false);
         setTranslationText('');
         setTranslationLoading(false);
         setTranslationLanguage('');
         setTranslationError('');
+        setTranslationRenderMode('interleaved');
         setChatReadingCursor({
             page: null,
             sectionId: selectedArticle?.toc?.[0]?.id || null,
             blockId: null,
         });
+        setHighlightToolbar((prev) => ({ ...prev, visible: false }));
     }, [selectedArticle?.id, selectedArticle?.toc]);
 
     useEffect(() => {
@@ -787,6 +1098,36 @@ export default function NotebookPage() {
         return () => window.clearTimeout(timer);
     }, [id, redirectToLogin, selectedArticle?.contentReady, selectedArticle?.id, syncNotebookState]);
 
+    useEffect(() => {
+        if (!notebook?.id || !selectedArticle?.id) {
+            setArticleHighlights([]);
+            return;
+        }
+        let cancelled = false;
+        const loadHighlights = async () => {
+            try {
+                const items = await appApi.highlights.list({
+                    notebookId: notebook.id,
+                    articleId: selectedArticle.id,
+                });
+                if (!cancelled) {
+                    setArticleHighlights(Array.isArray(items) ? items : []);
+                }
+            } catch (err) {
+                if (cancelled) return;
+                if (isAuthError(err)) {
+                    redirectToLogin();
+                    return;
+                }
+                setArticleHighlights([]);
+            }
+        };
+        void loadHighlights();
+        return () => {
+            cancelled = true;
+        };
+    }, [notebook?.id, redirectToLogin, selectedArticle?.id]);
+
     const articleContentReady = selectedArticle?.contentReady ?? Boolean(selectedArticle?.content?.trim());
     const articleDisplayBlocked = Boolean(selectedArticle) && !articleContentReady;
     const showTopbarReaderSearch = Boolean(selectedArticle) && !articleDisplayBlocked;
@@ -797,14 +1138,158 @@ export default function NotebookPage() {
         && selectedArticle.parseStatus !== 'failed',
     );
     const toc = renderedToc;
+
+    useEffect(() => {
+        setActiveCommentBubbleId(null);
+    }, [selectedArticle?.id]);
+
     const strippedContent = useMemo(() => (
         selectedArticle && !articleDisplayBlocked
             ? stripFirstH1(selectedArticle.content)
             : ''
     ), [selectedArticle, articleDisplayBlocked]);
-    const renderedArticleContent = useMemo(() => (
-        showTranslation && translationText ? stripFirstH1(translationText) : strippedContent
-    ), [showTranslation, translationText, strippedContent]);
+    const normalizedTranslationContent = useMemo(() => (
+        translationText ? stripFirstH1(translationText) : ''
+    ), [translationText]);
+    const renderedArticleContent = useMemo(() => {
+        if (!showTranslation || !normalizedTranslationContent) {
+            return strippedContent;
+        }
+        if (translationRenderMode === 'interleaved') {
+            return buildInterleavedTranslationMarkdown(strippedContent, normalizedTranslationContent);
+        }
+        return normalizedTranslationContent;
+    }, [
+        showTranslation,
+        normalizedTranslationContent,
+        strippedContent,
+        translationRenderMode,
+    ]);
+    useEffect(() => {
+        const clearCssHighlights = () => {
+            if (typeof CSS === 'undefined' || !CSS.highlights) {
+                return;
+            }
+            HIGHLIGHT_COLOR_KEYS.forEach((color) => {
+                CSS.highlights.delete(`nb-hl-${color}`);
+            });
+        };
+
+        const container = centerBodyRef.current;
+        const articleBody = getArticleBodyElement(container);
+        if (!container || !articleBody || articleDisplayBlocked || !articleHighlights.length) {
+            clearCssHighlights();
+            setCommentBubbleAnchors([]);
+            return;
+        }
+
+        const rangesByColor = new Map(HIGHLIGHT_COLOR_KEYS.map((color) => [color, []]));
+        const commentAnchors = [];
+
+        articleHighlights.forEach((item) => {
+            const range = resolveHighlightRange(articleBody, item);
+            if (!range) return;
+            const color = normalizeHighlightColor(item.color);
+            rangesByColor.get(color)?.push(range);
+            if (String(item.comment || '').trim()) {
+                commentAnchors.push({
+                    id: item.id,
+                    color,
+                    comment: String(item.comment || '').trim(),
+                    range,
+                });
+            }
+        });
+
+        if (typeof CSS !== 'undefined' && CSS.highlights && typeof Highlight !== 'undefined') {
+            HIGHLIGHT_COLOR_KEYS.forEach((color) => {
+                const ranges = rangesByColor.get(color) || [];
+                if (!ranges.length) {
+                    CSS.highlights.delete(`nb-hl-${color}`);
+                    return;
+                }
+                CSS.highlights.set(`nb-hl-${color}`, new Highlight(...ranges));
+            });
+        }
+
+        const updateCommentAnchors = () => {
+            const containerRect = container.getBoundingClientRect();
+            const maxLeft = Math.max(container.scrollWidth - 30, 0);
+            const nextAnchors = commentAnchors
+                .map((item) => {
+                    const anchorRect = resolveRangeAnchorRect(item.range);
+                    if (!anchorRect) return null;
+                    const top = anchorRect.top - containerRect.top + container.scrollTop + (anchorRect.height / 2);
+                    const left = Math.min(
+                        anchorRect.right - containerRect.left + container.scrollLeft + 8,
+                        maxLeft,
+                    );
+                    const POPOVER_WIDTH = 260;
+                    const POPOVER_HEIGHT = 180;
+                    const viewportPadding = 12;
+                    let popoverLeft = anchorRect.right + 12;
+                    if (popoverLeft + POPOVER_WIDTH > window.innerWidth - viewportPadding) {
+                        popoverLeft = Math.max(
+                            viewportPadding,
+                            window.innerWidth - POPOVER_WIDTH - viewportPadding,
+                        );
+                    }
+                    let popoverTop = anchorRect.top + (anchorRect.height / 2) + 10;
+                    if (popoverTop + POPOVER_HEIGHT > window.innerHeight - viewportPadding) {
+                        popoverTop = Math.max(
+                            viewportPadding,
+                            window.innerHeight - POPOVER_HEIGHT - viewportPadding,
+                        );
+                    }
+                    return {
+                        id: item.id,
+                        comment: item.comment,
+                        color: item.color,
+                        top: Math.max(top, 0),
+                        left: Math.max(left, 0),
+                        popoverLeft,
+                        popoverTop,
+                    };
+                })
+                .filter(Boolean);
+            setCommentBubbleAnchors(nextAnchors);
+            setActiveCommentBubbleId((current) => (
+                current && !nextAnchors.some((item) => item.id === current) ? null : current
+            ));
+        };
+
+        updateCommentAnchors();
+        container.addEventListener('scroll', updateCommentAnchors);
+        window.addEventListener('resize', updateCommentAnchors);
+        let resizeObserver = null;
+        if (typeof ResizeObserver !== 'undefined') {
+            resizeObserver = new ResizeObserver(() => updateCommentAnchors());
+            resizeObserver.observe(articleBody);
+        }
+
+        return () => {
+            container.removeEventListener('scroll', updateCommentAnchors);
+            window.removeEventListener('resize', updateCommentAnchors);
+            resizeObserver?.disconnect();
+        };
+    }, [
+        articleDisplayBlocked,
+        articleHighlights,
+        layoutMode,
+        renderedArticleContent,
+        selectedArticle?.id,
+        showTranslation,
+        translationText,
+    ]);
+    const translationLanguageOptions = useMemo(() => (
+        Array.from(new Set([
+            '中文',
+            '简体中文',
+            ...outputLanguages,
+            translationTargetLanguage,
+            translationLanguage,
+        ].filter(Boolean)))
+    ), [translationLanguage, translationTargetLanguage]);
     const layoutHasLeftRail = layoutMode === 'reader';
     const layoutHasRightRail = layoutMode !== 'triple';
     const notebookDisplayIcon = useMemo(() => {
@@ -922,32 +1407,333 @@ export default function NotebookPage() {
         }
     }, [readerSearchIndex, readerSearchShouldJump]);
 
-    // AI Summary
-    const handleSummary = async () => {
-        if (showSummary) { setShowSummary(false); return; }
-        if (!notebook || !selectedArticle) return;
-        setShowSummary(true);
-        setSummaryLoading(true);
-        setSummaryText('');
+    const clearTextSelection = useCallback(() => {
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+    }, []);
+
+    const focusHighlightInReader = useCallback((highlight) => {
+        const container = centerBodyRef.current;
+        const articleBody = getArticleBodyElement(container);
+        if (!container || !articleBody || !highlight) return;
+        let range = resolveRangeByOffsets(
+            articleBody,
+            Number(highlight.startOffset),
+            Number(highlight.endOffset),
+        );
+        if (!range) {
+            range = resolveRangeByTextOccurrence(
+                articleBody,
+                highlight.text || '',
+                Number(highlight.occurrenceIndex),
+            );
+        }
+        if (!range) return;
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        const rangeRect = range.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        const nextDelta = rangeRect.top - containerRect.top - (container.clientHeight * 0.32);
+        container.scrollBy({ top: nextDelta, behavior: 'smooth' });
+        const targetEl = range.startContainer?.parentElement;
+        targetEl?.classList.add('nb-highlight-locate-flash');
+        window.setTimeout(() => targetEl?.classList.remove('nb-highlight-locate-flash'), 900);
+    }, []);
+
+    useEffect(() => {
+        if (!pendingHighlightFocusId || !articleHighlights.length) return;
+        const target = articleHighlights.find((item) => item.id === pendingHighlightFocusId);
+        if (!target) return;
+        focusHighlightInReader(target);
+        setPendingHighlightFocusId(null);
+    }, [articleHighlights, focusHighlightInReader, pendingHighlightFocusId]);
+
+    useEffect(() => {
+        if (articleDisplayBlocked || !selectedArticle?.id) {
+            setHighlightToolbar((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+            return undefined;
+        }
+        const syncSelectionToolbar = () => {
+            const container = centerBodyRef.current;
+            const articleBody = getArticleBodyElement(container);
+            const selection = window.getSelection();
+            if (!container || !articleBody || !selection || selection.rangeCount === 0) {
+                setHighlightToolbar((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+                return;
+            }
+            const range = selection.getRangeAt(0);
+            if (range.collapsed || !isRangeInsideRoot(range, articleBody)) {
+                setHighlightToolbar((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+                return;
+            }
+            const rawText = range.toString();
+            const text = rawText.trim();
+            if (!text || text.length < 2) {
+                setHighlightToolbar((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+                return;
+            }
+            const rect = range.getBoundingClientRect();
+            if (!rect || !Number.isFinite(rect.top)) {
+                setHighlightToolbar((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+                return;
+            }
+            const { startOffset, endOffset } = buildOffsetsFromRange(articleBody, range);
+            const occurrenceIndex = countOccurrenceBeforeOffset(
+                articleBody.textContent || '',
+                rawText,
+                Number(startOffset),
+            );
+            setHighlightToolbar({
+                visible: true,
+                x: rect.left + (rect.width / 2),
+                y: Math.max(rect.top - 14, 24),
+                text: rawText,
+                startOffset,
+                endOffset,
+                occurrenceIndex,
+            });
+        };
+        document.addEventListener('mouseup', syncSelectionToolbar);
+        document.addEventListener('keyup', syncSelectionToolbar);
+        return () => {
+            document.removeEventListener('mouseup', syncSelectionToolbar);
+            document.removeEventListener('keyup', syncSelectionToolbar);
+        };
+    }, [articleDisplayBlocked, selectedArticle?.id]);
+
+    const createHighlightFromToolbar = useCallback(async ({ color = 'yellow', comment = '', openNote = false }) => {
+        if (!notebook?.id || !selectedArticle?.id) return null;
+        const text = (highlightToolbar.text || '').trim();
+        if (!text) return null;
+        if (openNote) {
+            const sourceMarker = `notebook://article/${selectedArticle.id}`;
+            const quoteText = text.replace(/\s+/g, ' ').trim();
+            setNoteModalData({
+                title: `${selectedArticle.title} 选段笔记`,
+                type: '笔记',
+                sources: 1,
+                tags: ['高亮摘录'],
+                content: `> ${quoteText}\n>\n> [来源：${selectedArticle.title}](${sourceMarker})\n`,
+                time: '刚刚',
+            });
+            setHighlightToolbar((prev) => ({ ...prev, visible: false }));
+            clearTextSelection();
+            return null;
+        }
+
+        setIsPersistingHighlight(true);
         try {
-            const result = await appApi.ai.streamSummary({
+            const item = await appApi.highlights.create({
                 notebookId: notebook.id,
                 articleId: selectedArticle.id,
-                onToken: (token) => {
-                    setSummaryText((prev) => `${prev}${token}`);
-                },
+                text,
+                color,
+                comment,
+                startOffset: Number.isFinite(highlightToolbar.startOffset) ? highlightToolbar.startOffset : null,
+                endOffset: Number.isFinite(highlightToolbar.endOffset) ? highlightToolbar.endOffset : null,
+                occurrenceIndex: Number.isFinite(highlightToolbar.occurrenceIndex) ? highlightToolbar.occurrenceIndex : null,
             });
-            setSummaryText(result.summaryText || result.summary || '');
+            setArticleHighlights((prev) => [item, ...prev.filter((existing) => existing.id !== item.id)]);
+            setHighlightToolbar((prev) => ({ ...prev, visible: false }));
+            clearTextSelection();
+            return item;
+        } catch (err) {
+            if (isAuthError(err)) {
+                redirectToLogin();
+                return null;
+            }
+            pushChatFeedback(err.message || '保存高亮失败');
+            return null;
+        } finally {
+            setIsPersistingHighlight(false);
+        }
+    }, [
+        clearTextSelection,
+        highlightToolbar.endOffset,
+        highlightToolbar.occurrenceIndex,
+        highlightToolbar.startOffset,
+        highlightToolbar.text,
+        notebook?.id,
+        pushChatFeedback,
+        redirectToLogin,
+        selectedArticle?.id,
+        selectedArticle?.title,
+    ]);
+
+    const openCommentComposer = useCallback(() => {
+        setCommentComposer({ open: true, value: '' });
+        setHighlightToolbar((prev) => ({ ...prev, visible: false }));
+    }, []);
+
+    const closeCommentComposer = useCallback(() => {
+        setCommentComposer({ open: false, value: '' });
+    }, []);
+
+    const submitCommentComposer = useCallback(async () => {
+        const comment = String(commentComposer.value || '').trim();
+        await createHighlightFromToolbar({ color: 'yellow', comment });
+        setCommentComposer({ open: false, value: '' });
+    }, [commentComposer.value, createHighlightFromToolbar]);
+
+    const handleDeleteHighlight = useCallback(async (highlightId) => {
+        if (!notebook?.id || !selectedArticle?.id || !highlightId) return;
+        setIsPersistingHighlight(true);
+        try {
+            await appApi.highlights.remove({
+                notebookId: notebook.id,
+                articleId: selectedArticle.id,
+                highlightId,
+            });
+            setArticleHighlights((prev) => prev.filter((item) => item.id !== highlightId));
+            setActiveCommentBubbleId((current) => (current === highlightId ? null : current));
+            pushChatFeedback('已删除高亮/批注');
         } catch (err) {
             if (isAuthError(err)) {
                 redirectToLogin();
                 return;
             }
-            setSummaryText(err.message || '生成摘要失败');
+            pushChatFeedback(err.message || '删除高亮失败');
+        } finally {
+            setIsPersistingHighlight(false);
+        }
+    }, [notebook?.id, pushChatFeedback, redirectToLogin, selectedArticle?.id]);
+
+    const handleDeleteHighlightFromSelection = useCallback(async () => {
+        if (!notebook?.id || !selectedArticle?.id) return;
+        const start = Number(highlightToolbar.startOffset);
+        const end = Number(highlightToolbar.endOffset);
+        let matched = [];
+
+        if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+            matched = articleHighlights.filter((item) => {
+                const itemStart = Number(item.startOffset);
+                const itemEnd = Number(item.endOffset);
+                if (Number.isFinite(itemStart) && Number.isFinite(itemEnd) && itemEnd > itemStart) {
+                    return Math.max(start, itemStart) < Math.min(end, itemEnd);
+                }
+                return false;
+            });
+        }
+
+        if (!matched.length) {
+            const selectedText = (highlightToolbar.text || '').trim();
+            if (selectedText) {
+                matched = articleHighlights.filter((item) => (item.text || '').trim() === selectedText);
+            }
+        }
+
+        if (!matched.length) {
+            pushChatFeedback('当前选区没有可删除的高亮');
+            return;
+        }
+
+        setIsPersistingHighlight(true);
+        try {
+            for (const item of matched) {
+                await appApi.highlights.remove({
+                    notebookId: notebook.id,
+                    articleId: selectedArticle.id,
+                    highlightId: item.id,
+                });
+            }
+            const removedIds = new Set(matched.map((item) => item.id));
+            setArticleHighlights((prev) => prev.filter((item) => !removedIds.has(item.id)));
+            setActiveCommentBubbleId((current) => (current && removedIds.has(current) ? null : current));
+            setHighlightToolbar((prev) => ({ ...prev, visible: false }));
+            clearTextSelection();
+            pushChatFeedback(`已删除 ${matched.length} 条高亮/批注`);
+        } catch (err) {
+            if (isAuthError(err)) {
+                redirectToLogin();
+                return;
+            }
+            pushChatFeedback(err.message || '删除高亮失败');
+        } finally {
+            setIsPersistingHighlight(false);
+        }
+    }, [
+        articleHighlights,
+        clearTextSelection,
+        highlightToolbar.endOffset,
+        highlightToolbar.startOffset,
+        highlightToolbar.text,
+        notebook?.id,
+        pushChatFeedback,
+        redirectToLogin,
+        selectedArticle?.id,
+    ]);
+
+    // AI Summary
+    const handleSummary = async () => {
+        if (showSummary) { setShowSummary(false); return; }
+        if (!notebook || !selectedArticle) return;
+        const articleId = selectedArticle.id;
+        setShowSummary(true);
+        const cachedSummary = String(summaryCacheByArticleId[articleId] || summaryText || '').trim();
+        if (cachedSummary) {
+            setSummaryText(cachedSummary);
+            setSummaryLoading(false);
+            return;
+        }
+        setSummaryLoading(true);
+        setSummaryText('');
+        try {
+            let streamedText = '';
+            const result = await appApi.ai.streamSummary({
+                notebookId: notebook.id,
+                articleId,
+                onToken: (token) => {
+                    const chunk = String(token || '');
+                    if (!chunk) return;
+                    streamedText += chunk;
+                    setSummaryText((prev) => `${prev}${chunk}`);
+                },
+            });
+            const finalSummary = String(result?.summaryText || streamedText).trim();
+            if (finalSummary) {
+                setSummaryText(finalSummary);
+                setSummaryCacheByArticleId((prev) => ({ ...prev, [articleId]: finalSummary }));
+            } else {
+                setSummaryText('摘要生成结果为空，请重试。');
+            }
+        } catch (err) {
+            if (isAuthError(err)) {
+                redirectToLogin();
+                return;
+            }
+            setSummaryText(err?.message || '摘要生成失败，请重试。');
         } finally {
             setSummaryLoading(false);
         }
     };
+
+    const requestTranslation = useCallback(async (preferredLanguage) => {
+        if (!notebook || !selectedArticle) return;
+        const targetLanguage = (preferredLanguage || translationTargetLanguage || '中文').trim() || '中文';
+        setTranslationLanguage(targetLanguage);
+        setTranslationTargetLanguage(targetLanguage);
+        setTranslationLoading(true);
+        setTranslationText('');
+        setTranslationError('');
+        try {
+            const result = await appApi.ai.translateArticle({
+                notebookId: notebook.id,
+                articleId: selectedArticle.id,
+                targetLanguage,
+            });
+            setTranslationText(result.translatedContent || '');
+            setTranslationLanguage(result.targetLanguage || targetLanguage);
+        } catch (err) {
+            if (isAuthError(err)) {
+                redirectToLogin();
+                return;
+            }
+            setTranslationError(err.message || '翻译失败');
+        } finally {
+            setTranslationLoading(false);
+        }
+    }, [notebook, redirectToLogin, selectedArticle, translationTargetLanguage]);
 
     const handleTranslate = async () => {
         if (showTranslation) {
@@ -957,28 +1743,13 @@ export default function NotebookPage() {
         if (!notebook || !selectedArticle) return;
 
         setShowTranslation(true);
-        setTranslationLoading(true);
-        setTranslationText('');
-        setTranslationError('');
+        await requestTranslation(translationTargetLanguage || translationLanguage || '中文');
+    };
 
-        try {
-            const settings = await appApi.settings.get();
-            const targetLanguage = settings.outputLanguage || '中文';
-            setTranslationLanguage(targetLanguage);
-            const result = await appApi.ai.translateArticle({
-                notebookId: notebook.id,
-                articleId: selectedArticle.id,
-                targetLanguage,
-            });
-            setTranslationText(result.translatedContent || '');
-        } catch (err) {
-            if (isAuthError(err)) {
-                redirectToLogin();
-                return;
-            }
-            setTranslationError(err.message || '翻译失败');
-        } finally {
-            setTranslationLoading(false);
+    const handleTranslationLanguageChange = async (nextLanguage) => {
+        setTranslationTargetLanguage(nextLanguage);
+        if (showTranslation) {
+            await requestTranslation(nextLanguage);
         }
     };
 
@@ -1036,6 +1807,16 @@ export default function NotebookPage() {
             .slice(-6)
             .map((item) => ({ role: item.role, content: item.content || '' }))
             .filter((item) => item.content.trim());
+        const recentHighlights = articleHighlights
+            .slice(0, 8)
+            .map((item) => ({
+                id: item.id,
+                articleId: item.articleId || selectedArticle?.id || null,
+                text: item.text || '',
+                comment: item.comment || '',
+                color: item.color || 'yellow',
+            }))
+            .filter((item) => item.text.trim());
         try {
             const result = await appApi.ai.streamAssistant({
                 notebookId: notebook.id,
@@ -1043,7 +1824,7 @@ export default function NotebookPage() {
                 conversationId: chatConversationId,
                 message: prompt,
                 readingCursor: chatReadingCursor,
-                recentHighlights: [],
+                recentHighlights,
                 recentTurns,
                 onToken: (token) => {
                     setChatMessages((prev) => prev.map((msg) => (
@@ -1277,16 +2058,52 @@ export default function NotebookPage() {
         if (citation.notebookTitle) {
             parts.push(citation.notebookTitle);
         }
-        if (citation.whySimilar) {
-            parts.push(citation.whySimilar);
+        if (citation.sourceType === 'web') {
+            parts.push('网络来源');
         }
         return parts.join(' · ');
     }, []);
 
+    const buildChatCitationItems = useCallback((message) => {
+        const rows = [];
+        const seen = new Set();
+        const related = Array.isArray(message?.relatedArticles) ? message.relatedArticles : [];
+        related.forEach((citation, index) => {
+            const key = citation.articleId
+                || citation.url
+                || `${citation.title || 'citation'}-${citation.index || index}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            rows.push({
+                ...citation,
+                citationLabel: citation.citationLabel || `[${citation.index || index + 1}]`,
+                title: citation.title || '未命名来源',
+                core: citation.snippet || '',
+                reason: citation.whySimilar || '',
+            });
+        });
+        if (rows.length > 0) {
+            return rows;
+        }
+        const spans = Array.isArray(message?.evidenceSpans) ? message.evidenceSpans : [];
+        return spans.slice(0, 6).map((span, index) => ({
+            citationLabel: `[${span.index || index + 1}]`,
+            title: span.role || span.sectionId || '证据片段',
+            core: span.text || '',
+            reason: '',
+            articleId: span.articleId || null,
+            notebookId: notebook?.id || null,
+            sourceType: 'local',
+        }));
+    }, [notebook?.id]);
+
     const handleOpenCitation = useCallback((citation, route = 'none') => {
-        if (!citation?.notebookId || !citation?.articleId) {
+        if (citation?.url && !citation?.articleId) {
+            window.open(citation.url, '_blank', 'noopener,noreferrer');
             return;
         }
+        const targetNotebookId = citation?.notebookId || notebook?.id;
+        if (!targetNotebookId || !citation?.articleId) return;
         trackAiEvent({
             operation: 'chat',
             action: 'citation_open',
@@ -1294,7 +2111,7 @@ export default function NotebookPage() {
             articleId: citation.articleId,
             conversationId: chatConversationId,
         });
-        if (citation.notebookId === notebook?.id) {
+        if (targetNotebookId === notebook?.id) {
             const article = notebook.articles.find((item) => item.id === citation.articleId);
             if (article) {
                 handleSelectArticle(article);
@@ -1302,7 +2119,7 @@ export default function NotebookPage() {
             }
             return;
         }
-        navigate(`/notebook/${citation.notebookId}?articleId=${citation.articleId}`);
+        navigate(`/notebook/${targetNotebookId}?articleId=${citation.articleId}`);
     }, [chatConversationId, handleSelectArticle, navigate, notebook, pushChatFeedback, trackAiEvent]);
 
     const handleCopySummary = useCallback(() => {
@@ -1367,6 +2184,38 @@ export default function NotebookPage() {
         await appApi.auth.logout();
         redirectToLogin();
     }, [redirectToLogin]);
+
+    const handleOpenNoteSourceMarker = useCallback((marker) => {
+        const articleId = marker?.articleId;
+        if (!articleId || !notebook) return;
+        const article = notebook.articles.find((item) => item.id === articleId);
+        if (!article) return;
+        handleSelectArticle(article);
+        if (marker?.highlightId) {
+            setPendingHighlightFocusId(marker.highlightId);
+        }
+        setNoteModalData(null);
+    }, [handleSelectArticle, notebook]);
+
+    const handleExportNotebook = useCallback(async () => {
+        if (!notebook?.id) return;
+        try {
+            const { blob, filename } = await appApi.notebooks.exportNotebook(notebook.id);
+            const link = document.createElement('a');
+            const blobUrl = URL.createObjectURL(blob);
+            link.href = blobUrl;
+            link.download = filename || 'notebook.md';
+            link.click();
+            URL.revokeObjectURL(blobUrl);
+            setNotesFeedback('');
+        } catch (err) {
+            if (isAuthError(err)) {
+                redirectToLogin();
+                return;
+            }
+            setNotesFeedback(err.message || '导出笔记本失败');
+        }
+    }, [notebook?.id, redirectToLogin]);
 
     // Note handlers – use modal
     const openNewNote = () => {
@@ -1779,14 +2628,31 @@ export default function NotebookPage() {
                                     </div>
                                 </div>
                                 <div className="nb-toolbar-right">
-                                    <button
-                                        className={`nb-icon-btn ${showTranslation ? 'active' : ''}`}
-                                        title={articleAiBlocked ? '正文准备完成后才可翻译' : '翻译'}
-                                        onClick={handleTranslate}
-                                        disabled={articleAiBlocked}
-                                    >
-                                        {I.translate}
-                                    </button>
+                                    <div className="nb-translate-control">
+                                        <button
+                                            className={`nb-icon-btn ${showTranslation ? 'active' : ''}`}
+                                            title={articleAiBlocked ? '正文准备完成后才可翻译' : '翻译'}
+                                            onClick={handleTranslate}
+                                            disabled={articleAiBlocked}
+                                        >
+                                            {I.translate}
+                                        </button>
+                                        <div className="nb-translate-lang-wrap">
+                                            <select
+                                                className="nb-translate-lang-select"
+                                                title="翻译目标语言"
+                                                value={translationTargetLanguage || translationLanguage || '中文'}
+                                                onChange={(event) => {
+                                                    void handleTranslationLanguageChange(event.target.value);
+                                                }}
+                                                disabled={articleAiBlocked || translationLoading}
+                                            >
+                                                {translationLanguageOptions.map((lang) => (
+                                                    <option key={lang} value={lang}>{lang}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    </div>
                                     <button
                                         className={`nb-icon-btn ${showSummary ? 'active' : ''}`}
                                         title={articleAiBlocked ? '正文准备完成后才可生成摘要' : 'AI 摘要'}
@@ -1875,10 +2741,57 @@ export default function NotebookPage() {
                                     translationText={translationText}
                                     translationLanguage={translationLanguage}
                                     translationError={translationError}
+                                    translationRenderMode={translationRenderMode}
+                                    onToggleTranslationRenderMode={() => setTranslationRenderMode((prev) => (prev === 'interleaved' ? 'full' : 'interleaved'))}
                                     setShowSummary={setShowSummary}
                                     setShowTranslation={setShowTranslation}
                                     onCopySummary={handleCopySummary}
                                 />
+                                {!articleDisplayBlocked && commentBubbleAnchors.length > 0 ? (
+                                    <div className="nb-comment-bubble-layer" ref={commentBubbleLayerRef}>
+                                        {commentBubbleAnchors.map((item) => (
+                                            <div
+                                                key={item.id}
+                                                className="nb-comment-bubble-anchor"
+                                                style={{ top: `${item.top}px`, left: `${item.left}px` }}
+                                            >
+                                                <button
+                                                    type="button"
+                                                    className={`nb-comment-bubble-btn ${item.color}`}
+                                                    onClick={() => {
+                                                        setActiveCommentBubbleId((current) => (current === item.id ? null : item.id));
+                                                    }}
+                                                    title="查看批注"
+                                                >
+                                                    💬
+                                                </button>
+                                                {activeCommentBubbleId === item.id && typeof document !== 'undefined'
+                                                    ? createPortal(
+                                                        <div
+                                                            ref={commentPopoverRef}
+                                                            className="nb-comment-bubble-popover"
+                                                            style={{ top: `${item.popoverTop}px`, left: `${item.popoverLeft}px` }}
+                                                        >
+                                                            <p>{item.comment}</p>
+                                                            <button
+                                                                type="button"
+                                                                className="nb-comment-popover-delete"
+                                                                disabled={isPersistingHighlight}
+                                                                onClick={(event) => {
+                                                                    event.stopPropagation();
+                                                                    void handleDeleteHighlight(item.id);
+                                                                }}
+                                                            >
+                                                                删除批注
+                                                            </button>
+                                                        </div>,
+                                                        document.body,
+                                                    )
+                                                    : null}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : null}
                             </div>
                         </>
                     ) : (
@@ -1943,7 +2856,9 @@ export default function NotebookPage() {
                                         </div>
                                     </div>
                                 )}
-                                {chatMessages.map((msg, idx) => (
+                                {chatMessages.map((msg, idx) => {
+                                    const citationItems = msg.role === 'assistant' ? buildChatCitationItems(msg) : [];
+                                    return (
                                     <div key={msg.id || idx} className={`nb-chat-msg nb-chat-msg-${msg.role}`}>
                                         <div
                                             className={`nb-chat-bubble nb-chat-bubble-${msg.role}`}
@@ -1963,42 +2878,34 @@ export default function NotebookPage() {
                                             ) : (
                                                 <div>{msg.isStreaming ? '正在生成...' : ''}</div>
                                             )}
-                                            {msg.role === 'assistant' && Array.isArray(msg.evidenceSpans) && msg.evidenceSpans.length > 0 && (
-                                                <div className="nb-chat-evidence-list">
-                                                    {msg.evidenceSpans.slice(0, 3).map((span, spanIndex) => (
-                                                        <div
-                                                            key={`${span.articleId || 'article'}-${span.chunkId || span.sectionId || spanIndex}`}
-                                                            className="nb-chat-evidence-item"
-                                                        >
-                                                            <span className="nb-chat-evidence-label">
-                                                                {span.role || span.sectionId || `证据 ${spanIndex + 1}`}
-                                                            </span>
-                                                            <span className="nb-chat-evidence-text">{span.text}</span>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            )}
-                                            {msg.role === 'assistant' && Array.isArray(msg.relatedArticles) && msg.relatedArticles.length > 0 && (
-                                                <div className="nb-chat-citations">
-                                                    {msg.relatedArticles.map((citation) => (
+                                            {msg.role === 'assistant' && citationItems.length > 0 && (
+                                                <div className="nb-chat-citation-list">
+                                                    {citationItems.slice(0, 8).map((citation, citationIndex) => (
                                                         <button
-                                                            key={`${citation.notebookId}-${citation.articleId}`}
+                                                            key={`${citation.citationLabel || citationIndex}-${citation.articleId || citation.url || citationIndex}`}
                                                             type="button"
-                                                            className="nb-chat-citation-card"
+                                                            className="nb-chat-citation-row"
                                                             onClick={() => handleOpenCitation(citation, msg.route || 'none')}
                                                         >
-                                                            <span className="nb-chat-citation-title">{citation.title}</span>
-                                                            <span className="nb-chat-citation-meta">{buildCitationMeta(citation)}</span>
-                                                            {citation.snippet && (
-                                                                <span className="nb-chat-citation-snippet">{citation.snippet}</span>
-                                                            )}
+                                                            <span className="nb-chat-citation-row-title">
+                                                                {citation.citationLabel ? `${citation.citationLabel} ` : ''}
+                                                                {citation.title || '来源'}
+                                                            </span>
+                                                            <span className="nb-chat-citation-row-meta">{buildCitationMeta(citation)}</span>
+                                                            {citation.core ? (
+                                                                <span className="nb-chat-citation-row-core">{citation.core}</span>
+                                                            ) : null}
+                                                            {citation.reason ? (
+                                                                <span className="nb-chat-citation-row-reason">{citation.reason}</span>
+                                                            ) : null}
                                                         </button>
                                                     ))}
                                                 </div>
                                             )}
                                         </div>
                                     </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                             <div className="nb-chat-input-area">
                                 <div className="nb-chat-input-wrapper">
@@ -2029,6 +2936,9 @@ export default function NotebookPage() {
                                 <div className="nb-panel-header">
                                     <span className="nb-panel-icon">{I.note}</span>
                                     <span className="nb-panel-title">笔记</span>
+                                    <button type="button" className="nb-panel-action-btn" onClick={() => void handleExportNotebook()}>
+                                        导出本本
+                                    </button>
                                     <span className="nb-panel-badge">{notes.length}</span>
                                 </div>
                                 <div className="nb-panel-body nb-notes-body">
@@ -2097,6 +3007,141 @@ export default function NotebookPage() {
                 ) : null}
             </div>
 
+            {highlightToolbar.visible ? (
+                <div
+                    ref={selectionToolbarRef}
+                    className="nb-selection-toolbar"
+                    style={{ left: `${highlightToolbar.x}px`, top: `${highlightToolbar.y}px` }}
+                >
+                    <div className="nb-selection-toolbar-colors">
+                        {['yellow', 'blue', 'green', 'pink'].map((color) => (
+                            <button
+                                key={color}
+                                type="button"
+                                className={`nb-highlight-color-btn ${color}`}
+                                title={`高亮：${color}`}
+                                disabled={isPersistingHighlight}
+                                onClick={() => { void createHighlightFromToolbar({ color }); }}
+                            />
+                        ))}
+                    </div>
+                    <div className="nb-selection-toolbar-actions">
+                        <button
+                            type="button"
+                            className="nb-selection-toolbar-btn"
+                            disabled={isPersistingHighlight}
+                            onClick={openCommentComposer}
+                            title="添加批注"
+                        >
+                            {I.comment}
+                        </button>
+                        <button
+                            type="button"
+                            className="nb-selection-toolbar-btn"
+                            onClick={async () => {
+                                const text = (highlightToolbar.text || '').trim();
+                                if (!text) return;
+                                await navigator.clipboard.writeText(text);
+                                setHighlightToolbar((prev) => ({ ...prev, visible: false }));
+                                clearTextSelection();
+                                pushChatFeedback('已复制选中文本');
+                            }}
+                            title="复制"
+                        >
+                            {I.copy}
+                        </button>
+                        <button
+                            type="button"
+                            className="nb-selection-toolbar-btn"
+                            onClick={() => {
+                                const text = (highlightToolbar.text || '').trim();
+                                if (!text) return;
+                                applyLayoutMode('triple');
+                                setShowAiChat(true);
+                                setChatScope('article');
+                                setChatInput(`请结合这段原文回答：\n${text}`);
+                                setHighlightToolbar((prev) => ({ ...prev, visible: false }));
+                                clearTextSelection();
+                            }}
+                            title="发送给助手"
+                        >
+                            {I.chat}
+                        </button>
+                        <button
+                            type="button"
+                            className="nb-selection-toolbar-btn"
+                            disabled={isPersistingHighlight}
+                            onClick={() => { void createHighlightFromToolbar({ color: 'yellow', openNote: true }); }}
+                            title="生成笔记"
+                        >
+                            {I.addNote}
+                        </button>
+                        <button
+                            type="button"
+                            className="nb-selection-toolbar-btn danger"
+                            disabled={isPersistingHighlight}
+                            onClick={() => { void handleDeleteHighlightFromSelection(); }}
+                            title="删除高亮"
+                        >
+                            {I.deleteChat}
+                        </button>
+                    </div>
+                </div>
+            ) : null}
+
+            {commentComposer.open ? (
+                <div
+                    className="nb-comment-composer-overlay"
+                    onMouseDown={(event) => {
+                        if (event.target === event.currentTarget) {
+                            closeCommentComposer();
+                        }
+                    }}
+                >
+                    <div className="nb-comment-composer-modal" role="dialog" aria-modal="true" aria-label="添加批注">
+                        <div className="nb-comment-composer-header">
+                            <h4>添加批注</h4>
+                            <button type="button" className="nb-icon-btn-sm" onClick={closeCommentComposer} title="关闭">
+                                {I.close}
+                            </button>
+                        </div>
+                        <p className="nb-comment-composer-hint">可选。留空将仅创建高亮。</p>
+                        <textarea
+                            className="nb-comment-composer-input"
+                            placeholder="输入批注内容..."
+                            value={commentComposer.value}
+                            onChange={(event) => {
+                                setCommentComposer((prev) => ({ ...prev, value: event.target.value.slice(0, 280) }));
+                            }}
+                            autoFocus
+                            rows={5}
+                            maxLength={280}
+                        />
+                        <div className="nb-comment-composer-footer">
+                            <span className="nb-comment-composer-count">{commentComposer.value.length}/280</span>
+                            <div className="nb-comment-composer-actions">
+                                <button
+                                    type="button"
+                                    className="nb-panel-action-btn"
+                                    onClick={closeCommentComposer}
+                                    disabled={isPersistingHighlight}
+                                >
+                                    取消
+                                </button>
+                                <button
+                                    type="button"
+                                    className="nb-comment-composer-submit"
+                                    onClick={() => { void submitCommentComposer(); }}
+                                    disabled={isPersistingHighlight}
+                                >
+                                    {isPersistingHighlight ? '保存中...' : '保存批注'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
+
             {showSettings && <SettingsModal initialTab={settingsInitialTab} onClose={() => setShowSettings(false)} />}
             {showAddSource && (
                 <AddSourceModal
@@ -2113,6 +3158,7 @@ export default function NotebookPage() {
                     onSave={handleSaveNote}
                     onDelete={handleDeleteNote}
                     onExport={exportNote}
+                    onOpenSourceMarker={handleOpenNoteSourceMarker}
                 />
             )}
             {sourceActionModal && (

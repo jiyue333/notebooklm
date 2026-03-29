@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import re
 from datetime import UTC, datetime
 from time import perf_counter
 
@@ -38,6 +41,46 @@ _SEARCH_RUN_TIMEOUT_SECONDS_BY_MODE = {
     "auto": 300,
     "deep": 480,
 }
+_SEARCH_ACTIVE_SESSION_LIMIT = 3
+_SENSITIVE_ERROR_PATTERN = re.compile(r"(sk-[A-Za-z0-9]{16,}|api[_-]?key[=:][^\\s,;]+|token[=:][^\\s,;]+)", re.IGNORECASE)
+
+
+def _normalize_preferred_sites(preferred_sites: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    for site in preferred_sites or []:
+        value = str(site or "").strip().lower()
+        if not value:
+            continue
+        normalized.append(value)
+    return list(dict.fromkeys(normalized))
+
+
+def _build_query_signature(
+    *,
+    user_id: str,
+    notebook_id: str,
+    query: str,
+    mode: str,
+    max_results: int,
+    preferred_sites: list[str] | None,
+) -> str:
+    payload = {
+        "userId": user_id,
+        "notebookId": notebook_id,
+        "query": query.strip().lower(),
+        "mode": mode,
+        "maxResults": int(max_results),
+        "preferredSites": sorted(_normalize_preferred_sites(preferred_sites)),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _sanitize_error_message(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "搜索执行失败"
+    return _SENSITIVE_ERROR_PATTERN.sub("[REDACTED]", text)[:500]
 
 
 async def _mark_session_failed(
@@ -48,6 +91,7 @@ async def _mark_session_failed(
     error_code: str,
     error_message: str,
 ) -> None:
+    safe_message = _sanitize_error_message(error_message)
     async for session in get_session_manager().session():
         search_session = await repo.get_search_session_by_id(
             session,
@@ -60,7 +104,7 @@ async def _mark_session_failed(
             search_session=search_session,
             status="failed",
             error_code=error_code,
-            error_message=error_message[:500],
+            error_message=safe_message,
             completed_at=datetime.now(UTC),
         )
         await session.commit()
@@ -98,13 +142,52 @@ async def start_agent_search(
     preferred_sites: list[str] | None = None,
 ) -> SearchResponse:
     """执行搜索图，并保存搜索会话与结果。"""
-
-    chat_model = build_user_chat_model(user)
-    if chat_model is None:
-        raise AppError(422, "请先在设置中配置模型 API Key", code="model_config_required")
-
     if not exa_api_key and not tavily_api_key:
         raise AppError(422, "请先配置至少一个搜索引擎 Key", code="search_provider_key_required")
+
+    active_sessions = await repo.count_active_sessions(
+        db,
+        user_id=user.id,
+        notebook_id=notebook_id,
+    )
+    if active_sessions >= _SEARCH_ACTIVE_SESSION_LIMIT:
+        raise AppError(
+            429,
+            "当前搜索任务过多，请等待现有任务完成后再试",
+            code="search_too_many_active_sessions",
+        )
+
+    normalized_query = query.strip().lower()
+    query_signature = _build_query_signature(
+        user_id=user.id,
+        notebook_id=notebook_id,
+        query=query,
+        mode=mode,
+        max_results=max_results,
+        preferred_sites=preferred_sites,
+    )
+    reusable_session = await repo.find_reusable_search_session(
+        db,
+        user_id=user.id,
+        notebook_id=notebook_id,
+        query_signature=query_signature,
+    )
+    if reusable_session is not None:
+        existing_results: list[SearchResult] = []
+        if reusable_session.status in {"completed", "partial", "running", "queued"}:
+            existing_results = await repo.list_search_results(
+                db,
+                search_session_id=reusable_session.id,
+            )
+        reusable_response = _build_response_from_results(reusable_session, existing_results)
+        await _cache_response(
+            user_id=user.id,
+            notebook_id=notebook_id,
+            search_session_id=reusable_session.id,
+            response=reusable_response,
+            status=reusable_session.status,
+        )
+        return SearchResponse(**reusable_response.model_dump())
 
     search_session = await repo.create_search_session(
         db,
@@ -114,10 +197,11 @@ async def start_agent_search(
         mode=mode,
         execution_mode="queued",
         provider_request_json={
-            "query": query.strip(),
+            "query": normalized_query,
             "mode": mode,
             "maxResults": max_results,
             "preferredSites": preferred_sites or [],
+            "querySignature": query_signature,
         },
         provider_name="langgraph_search",
     )
@@ -168,15 +252,6 @@ async def _run_search_session_async(
 ) -> None:
     chat_model = build_user_chat_model(user)
     lite_model = build_lite_llm()
-    if chat_model is None:
-        await _mark_session_failed(
-            user_id=user.id,
-            notebook_id=notebook_id,
-            search_session_id=search_session_id,
-            error_code="model_config_required",
-            error_message="请先在设置中配置模型 API Key",
-        )
-        return
 
     try:
         async for session in get_session_manager().session():
@@ -263,6 +338,31 @@ async def _run_search_session_async(
 
     elapsed_ms = round((perf_counter() - t0) * 1000, 2)
 
+    provider_all_failed = bool((response.debug or {}).get("providerAllFailed"))
+    if provider_all_failed and not response.items:
+        await _mark_session_failed(
+            user_id=user.id,
+            notebook_id=notebook_id,
+            search_session_id=search_session_id,
+            error_code="search_provider_all_failed",
+            error_message="搜索引擎全部调用失败，请稍后重试。",
+        )
+        observe_search_e2e(mode=mode, duration_ms=elapsed_ms)
+        observe_search_empty_slate(mode=mode, reason="provider_all_failed")
+        logger.warning(
+            "search.provider_all_failed",
+            search_session_id=search_session_id,
+            mode=mode,
+            elapsed_ms=elapsed_ms,
+        )
+        return
+
+    debug_payload = response.debug or {}
+    provider_failures = int(debug_payload.get("providerFailures") or 0)
+    llm_unavailable = bool(debug_payload.get("llmScoreUnavailable"))
+    result_status = "partial" if response.items and (provider_failures > 0 or llm_unavailable) else "completed"
+    response.run.status = result_status
+
     try:
         async for session in get_session_manager().session():
             search_session = await repo.get_search_session_by_id(
@@ -282,7 +382,7 @@ async def _run_search_session_async(
             await repo.update_session_status(
                 session,
                 search_session=search_session,
-                status="completed",
+                status=result_status,
                 result_count=len(response.items),
                 completed_at=datetime.now(UTC),
             )
@@ -305,7 +405,7 @@ async def _run_search_session_async(
             notebook_id=notebook_id,
             search_session_id=search_session_id,
             response=response,
-            status="completed",
+            status=result_status,
         )
     except Exception:
         logger.warning("search.cache_write_failed", search_session_id=search_session_id, status="completed")
@@ -316,9 +416,10 @@ async def _run_search_session_async(
     if not response.items:
         observe_search_empty_slate(mode=mode, reason="no_results")
     logger.info(
-        "search.completed",
+        "search.completed" if result_status == "completed" else "search.partial_completed",
         search_session_id=search_session_id,
         mode=mode,
+        status=result_status,
         elapsed_ms=elapsed_ms,
         card_count=len(response.items),
     )
@@ -339,7 +440,7 @@ async def get_search_session(
     cached = await get_json(cache_key)
     if isinstance(cached, dict):
         cached_status = ((cached.get("run") or {}).get("status") or "").lower()
-        if cached_status in {"completed", "partial", "failed", "expired"}:
+        if cached_status in {"completed", "partial", "failed", "expired", "cancelled"}:
             return SearchResponse(**cached)
 
     search_session = await repo.get_search_session(
@@ -372,8 +473,17 @@ async def get_search_session(
         )
         await db.commit()
     elif is_zombie:
+        await repo.update_session_status(
+            db,
+            search_session=search_session,
+            status="failed",
+            error_code="search_session_stale_timeout",
+            error_message="搜索会话长时间未完成，请重新搜索",
+            completed_at=now,
+        )
+        await db.commit()
         logger.warning(
-            "search.session_stale_pending",
+            "search.session_stale_failed",
             search_session_id=search_session.id,
             status=search_session.status,
             mode=search_session.mode,
@@ -462,7 +572,7 @@ async def _cache_response(
     settings = get_settings()
     ttl = (
         settings.cache_ttl_search_session_completed_seconds
-        if status in {"completed", "failed", "expired"}
+        if status in {"completed", "partial", "failed", "expired", "cancelled"}
         else settings.cache_ttl_search_session_pending_seconds
     )
     await set_json(
@@ -474,3 +584,79 @@ async def _cache_response(
         response.model_dump(mode="json"),
         ttl_seconds=ttl,
     )
+
+
+async def sweep_stale_search_sessions(*, limit: int = 200) -> int:
+    """后台扫尾：把长时间未完成的 queued/running 会话标记为 failed。"""
+
+    now = datetime.now(UTC)
+    stale_count = 0
+    async for session in get_session_manager().session():
+        pending = await repo.list_pending_sessions_for_sweep(session, limit=limit)
+        for item in pending:
+            timeout_seconds = _SEARCH_SESSION_ZOMBIE_TIMEOUT_SECONDS_BY_MODE.get(item.mode or "", 120)
+            age_seconds = (now - item.created_at).total_seconds()
+            if age_seconds <= timeout_seconds:
+                continue
+            await repo.update_session_status(
+                session,
+                search_session=item,
+                status="failed",
+                error_code="search_session_stale_timeout",
+                error_message="搜索会话长时间未完成，系统已自动结束，请重新搜索",
+                completed_at=now,
+            )
+            stale_count += 1
+            logger.warning(
+                "search.session_stale_swept",
+                search_session_id=item.id,
+                mode=item.mode,
+                age_seconds=age_seconds,
+                timeout_seconds=timeout_seconds,
+            )
+        if stale_count > 0:
+            await session.commit()
+        return stale_count
+    return stale_count
+
+
+async def cancel_search_session(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    notebook_id: str,
+    search_session_id: str,
+) -> SearchResponse:
+    search_session = await repo.get_search_session(
+        db,
+        user_id=user_id,
+        notebook_id=notebook_id,
+        search_session_id=search_session_id,
+    )
+    if search_session is None:
+        raise AppError(404, "未找到对应搜索会话", code="search_session_not_found")
+
+    if search_session.status not in {"completed", "partial", "failed", "expired", "cancelled"}:
+        await repo.update_session_status(
+            db,
+            search_session=search_session,
+            status="cancelled",
+            error_code="search_cancelled_by_user",
+            error_message="搜索已取消",
+            completed_at=datetime.now(UTC),
+        )
+        await db.commit()
+
+    results: list[SearchResult] = []
+    if search_session.status in {"completed", "partial", "running", "queued", "cancelled"}:
+        results = await repo.list_search_results(db, search_session_id=search_session.id)
+    response = _build_response_from_results(search_session, results)
+    response.run.status = search_session.status
+    await _cache_response(
+        user_id=user_id,
+        notebook_id=notebook_id,
+        search_session_id=search_session.id,
+        response=response,
+        status=search_session.status,
+    )
+    return SearchResponse(**response.model_dump())
