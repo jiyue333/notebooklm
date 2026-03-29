@@ -310,7 +310,7 @@ export default function SettingsModal({ onClose, initialTab = 'language' }) {
     }, [setAccentColor, setFontFamilyCjk, setFontFamilyLatin]);
 
     useEffect(() => {
-        setActiveTab(initialTab);
+        setActiveTab(tabs.some((tab) => tab.id === initialTab) ? initialTab : 'language');
     }, [initialTab]);
 
     const update = (key, value) => {

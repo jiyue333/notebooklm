@@ -11,6 +11,7 @@ import { useTheme } from '../contexts/useTheme';
 import { appApi, clearStoredSession, getStoredSession, isAuthError } from '../services/appApi';
 import SettingsModal from '../components/SettingsModal';
 import NotebookModal from '../components/NotebookModal';
+import FeedWorkspaceModal from '../components/FeedWorkspaceModal';
 import './HomePage.css';
 
 const LOGO_STORAGE_KEY = '[REDACTED]-logo-option';
@@ -20,6 +21,7 @@ const Hc = {
     settings: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" /></svg>,
     layout: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h4v4H7V7zm0 6h4v4H7v-4zm6-6h4v10h-4V7z" /></svg>,
     notebook: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 2h9a3 3 0 0 1 3 3v14a1 1 0 0 1-1.6.8L13 17.4l-3.4 2.4A1 1 0 0 1 8 19V5a3 3 0 0 0-2-2.82V2Zm4 4h5v2h-5V6Zm0 4h5v2h-5v-2Z" /><path d="M4 3.5A1.5 1.5 0 0 1 5.5 2h.5v20h-.5A1.5 1.5 0 0 1 4 20.5v-17Z" /></svg>,
+    feed: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.18 17.82a2.18 2.18 0 1 1 0-4.36 2.18 2.18 0 0 1 0 4.36ZM4 4v3a13 13 0 0 1 13 13h3A16 16 0 0 0 4 4Zm0 6v3a7 7 0 0 1 7 7h3a10 10 0 0 0-10-10Z" /></svg>,
 };
 
 function getStoredLogoOption() {
@@ -52,6 +54,10 @@ export default function HomePage() {
     const [showAccountMenu, setShowAccountMenu] = useState(false);
     const [logoOption, setLogoOption] = useState(getStoredLogoOption);
     const [activeTag, setActiveTag] = useState('');
+    const [feeds, setFeeds] = useState([]);
+    const [feedMeta, setFeedMeta] = useState({ total: 0, unread: 0 });
+    const [feedError, setFeedError] = useState('');
+    const [showFeedWorkspace, setShowFeedWorkspace] = useState(false);
     const logoOptions = getLogoOptions();
     const searchInputRef = useRef(null);
     const sessionUser = getStoredSession()?.user;
@@ -75,13 +81,22 @@ export default function HomePage() {
             try {
                 setIsLoading(true);
                 setError('');
-                const [currentUser, notebookItems] = await Promise.all([
+                setFeedError('');
+                const [currentUser, notebookItems, feedPayload] = await Promise.all([
                     appApi.auth.getCurrentUser(),
                     appApi.notebooks.list(),
+                    appApi.feeds.list().catch((feedErr) => {
+                        if (isMounted) {
+                            setFeedError(feedErr.message || '加载订阅源失败');
+                        }
+                        return { items: [], meta: { total: 0, unread: 0 } };
+                    }),
                 ]);
                 if (!isMounted) return;
                 setUser(currentUser);
                 setNotebooks(notebookItems);
+                setFeeds(feedPayload.items || []);
+                setFeedMeta(feedPayload.meta || { total: 0, unread: 0 });
             } catch (err) {
                 if (!isMounted) return;
                 if (isAuthError(err)) {
@@ -173,6 +188,21 @@ export default function HomePage() {
             return matchesQuery && matchesTag;
         });
     }, [activeTag, notebooks, searchQuery]);
+
+    const reloadFeeds = useCallback(async () => {
+        try {
+            const payload = await appApi.feeds.list();
+            setFeeds(payload.items || []);
+            setFeedMeta(payload.meta || { total: 0, unread: 0 });
+            setFeedError('');
+        } catch (err) {
+            if (isAuthError(err)) {
+                redirectToLogin();
+                return;
+            }
+            setFeedError(err.message || '加载订阅源失败');
+        }
+    }, [redirectToLogin]);
 
     const { recentNotebooks, otherNotebooks } = useMemo(() => ({
         recentNotebooks: [...filteredNotebooks]
@@ -313,6 +343,119 @@ export default function HomePage() {
         </div>
     );
 
+    const renderNotebookContent = () => {
+        if (notebooks.length === 0) {
+            return (
+                <EmptyState
+                    icon="✨"
+                    title="还没有任何笔记本"
+                    description="创建笔记本后开始导入来源。"
+                    actionLabel="立即创建"
+                    onAction={() => openNotebookModal('create')}
+                />
+            );
+        }
+
+        return (
+            <>
+                {availableTags.length > 0 ? (
+                    <section className="home-tag-strip">
+                        <button
+                            type="button"
+                            className={`home-tag-chip ${!activeTag ? 'active' : ''}`}
+                            onClick={() => setActiveTag('')}
+                        >
+                            全部标签
+                        </button>
+                        {availableTags.map((tag) => (
+                            <button
+                                key={tag}
+                                type="button"
+                                className={`home-tag-chip ${activeTag === tag ? 'active' : ''}`}
+                                onClick={() => setActiveTag((current) => (current === tag ? '' : tag))}
+                            >
+                                {tag}
+                            </button>
+                        ))}
+                    </section>
+                ) : null}
+
+                {hasSearchQuery ? (
+                    <section className="home-section">
+                        <div className="home-section-heading">
+                            <h2 className="home-section-title">全局搜索结果</h2>
+                        </div>
+                        {isSearchingWorkspace ? (
+                            <div className="home-search-result-state"><Spinner inline label="搜索中..." /></div>
+                        ) : workspaceResults.length > 0 ? (
+                            <div className="home-search-results">
+                                {workspaceResults.map((item) => (
+                                    <button
+                                        key={`${item.type}-${item.notebookId}-${item.articleId || 'root'}`}
+                                        type="button"
+                                        className="home-search-result-item"
+                                        onClick={() => navigate(item.type === 'article' ? `/notebook/${item.notebookId}?articleId=${item.articleId}` : `/notebook/${item.notebookId}`)}
+                                    >
+                                        <span className="home-search-result-type">{item.type === 'article' ? '文章' : '笔记本'}</span>
+                                        <span className="home-search-result-title">{item.title}</span>
+                                        {Array.isArray(item.tags) && item.tags.length > 0 ? (
+                                            <span className="home-search-result-tags">{item.tags.join(' · ')}</span>
+                                        ) : null}
+                                    </button>
+                                ))}
+                            </div>
+                        ) : (
+                            <EmptyState
+                                icon="📚"
+                                title="全局搜索暂未命中"
+                                description="没有匹配结果，换个关键词试试。"
+                                compact
+                            />
+                        )}
+                    </section>
+                ) : null}
+
+                {hasSearchQuery ? (
+                    filteredNotebooks.length > 0 ? (
+                        <section className="home-section">
+                            <div className="home-section-heading">
+                                <h2 className="home-section-title">笔记本标题与标签命中</h2>
+                            </div>
+                            {renderNotebookGrid(filteredNotebooks, { includeCreateCard: false })}
+                        </section>
+                    ) : null
+                ) : filteredNotebooks.length > 0 ? (
+                    <>
+                        <section className="home-section">
+                            <div className="home-section-heading">
+                                <h2 className="home-section-title">最近打开</h2>
+                            </div>
+                            {renderNotebookGrid(recentNotebooks, { includeCreateCard: true })}
+                        </section>
+
+                        {otherNotebooks.length > 0 ? (
+                            <section className="home-section">
+                                <div className="home-section-heading">
+                                    <h2 className="home-section-title">全部笔记本</h2>
+                                </div>
+                                {renderNotebookGrid(otherNotebooks, { includeCreateCard: false })}
+                            </section>
+                        ) : null}
+                    </>
+                ) : (
+                    <EmptyState
+                        icon="🔎"
+                        title="还没有笔记本"
+                        description="先创建一个笔记本。"
+                        actionLabel="立即创建"
+                        onAction={() => openNotebookModal('create')}
+                        compact
+                    />
+                )}
+            </>
+        );
+    };
+
     return (
         <div className="home-page">
             <header className="home-topbar">
@@ -340,6 +483,16 @@ export default function HomePage() {
                 </div>
 
                 <div className="home-topbar-right">
+                    <button
+                        className={`btn-icon home-feed-toggle-btn ${showFeedWorkspace ? 'active' : ''}`}
+                        onClick={() => setShowFeedWorkspace(true)}
+                        title="订阅源"
+                    >
+                        {Hc.feed}
+                        {Number(feedMeta.unread || 0) > 0 ? (
+                            <span className="home-feed-badge">{feedMeta.unread}</span>
+                        ) : null}
+                    </button>
                     <button className="btn-icon" onClick={toggleTheme} title="切换主题">
                         {Hc.theme}
                     </button>
@@ -396,111 +549,8 @@ export default function HomePage() {
                         <div className="home-loading-state">
                             <Spinner size="lg" label="正在加载你的研究空间" />
                         </div>
-                    ) : notebooks.length === 0 ? (
-                        <EmptyState
-                            icon="✨"
-                            title="还没有任何笔记本"
-                            description="创建笔记本后开始导入来源。"
-                            actionLabel="立即创建"
-                            onAction={() => openNotebookModal('create')}
-                        />
                     ) : (
-                        <>
-                            {availableTags.length > 0 ? (
-                                <section className="home-tag-strip">
-                                    <button
-                                        type="button"
-                                        className={`home-tag-chip ${!activeTag ? 'active' : ''}`}
-                                        onClick={() => setActiveTag('')}
-                                    >
-                                        全部标签
-                                    </button>
-                                    {availableTags.map((tag) => (
-                                        <button
-                                            key={tag}
-                                            type="button"
-                                            className={`home-tag-chip ${activeTag === tag ? 'active' : ''}`}
-                                            onClick={() => setActiveTag((current) => (current === tag ? '' : tag))}
-                                        >
-                                            {tag}
-                                        </button>
-                                    ))}
-                                </section>
-                            ) : null}
-
-                            {hasSearchQuery ? (
-                                <section className="home-section">
-                                    <div className="home-section-heading">
-                                        <h2 className="home-section-title">全局搜索结果</h2>
-                                    </div>
-                                    {isSearchingWorkspace ? (
-                                        <div className="home-search-result-state"><Spinner inline label="搜索中..." /></div>
-                                    ) : workspaceResults.length > 0 ? (
-                                        <div className="home-search-results">
-                                            {workspaceResults.map((item) => (
-                                                <button
-                                                    key={`${item.type}-${item.notebookId}-${item.articleId || 'root'}`}
-                                                    type="button"
-                                                    className="home-search-result-item"
-                                                    onClick={() => navigate(item.type === 'article' ? `/notebook/${item.notebookId}?articleId=${item.articleId}` : `/notebook/${item.notebookId}`)}
-                                                >
-                                                    <span className="home-search-result-type">{item.type === 'article' ? '文章' : '笔记本'}</span>
-                                                    <span className="home-search-result-title">{item.title}</span>
-                                                    {Array.isArray(item.tags) && item.tags.length > 0 ? (
-                                                        <span className="home-search-result-tags">{item.tags.join(' · ')}</span>
-                                                    ) : null}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    ) : (
-                                        <EmptyState
-                                            icon="📚"
-                                            title="全局搜索暂未命中"
-                                            description="没有匹配结果，换个关键词试试。"
-                                            compact
-                                        />
-                                    )}
-                                </section>
-                            ) : null}
-
-                            {hasSearchQuery ? (
-                                filteredNotebooks.length > 0 ? (
-                                    <section className="home-section">
-                                        <div className="home-section-heading">
-                                            <h2 className="home-section-title">笔记本标题与标签命中</h2>
-                                        </div>
-                                        {renderNotebookGrid(filteredNotebooks, { includeCreateCard: false })}
-                                    </section>
-                                ) : null
-                            ) : filteredNotebooks.length > 0 ? (
-                                <>
-                                    <section className="home-section">
-                                        <div className="home-section-heading">
-                                            <h2 className="home-section-title">最近打开</h2>
-                                        </div>
-                                        {renderNotebookGrid(recentNotebooks, { includeCreateCard: true })}
-                                    </section>
-
-                                    {otherNotebooks.length > 0 ? (
-                                        <section className="home-section">
-                                            <div className="home-section-heading">
-                                                <h2 className="home-section-title">全部笔记本</h2>
-                                            </div>
-                                            {renderNotebookGrid(otherNotebooks, { includeCreateCard: false })}
-                                        </section>
-                                    ) : null}
-                                </>
-                            ) : (
-                                <EmptyState
-                                    icon="🔎"
-                                    title="还没有笔记本"
-                                    description="先创建一个笔记本。"
-                                    actionLabel="立即创建"
-                                    onAction={() => openNotebookModal('create')}
-                                    compact
-                                />
-                            )}
-                        </>
+                        renderNotebookContent()
                     )}
                 </div>
             </main>
@@ -515,6 +565,13 @@ export default function HomePage() {
                     onDelete={notebookModalState.mode === 'edit' ? handleDeleteNotebook : undefined}
                     existingTitles={notebooks.map((item) => ({ id: item.id, title: item.title }))}
                     availableTags={availableTags}
+                />
+            ) : null}
+            {showFeedWorkspace ? (
+                <FeedWorkspaceModal
+                    onClose={() => setShowFeedWorkspace(false)}
+                    onFeedsChanged={() => void reloadFeeds()}
+                    initialFeedData={{ feeds, meta: feedMeta, error: feedError }}
                 />
             ) : null}
         </div>

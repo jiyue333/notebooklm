@@ -24,6 +24,12 @@ class SettingsUpdateRequest(BaseModel):
     searchApiKey: str | None = None
     clearSearchApiKey: bool | None = None
     preferredSites: list[str] | None = None
+    minifluxUrl: str | None = Field(default=None, max_length=1024)
+    minifluxApiToken: str | None = None
+    clearMinifluxApiToken: bool | None = None
+    rsshubUrl: str | None = Field(default=None, max_length=1024)
+    digestTime: str | None = Field(default=None, max_length=8)
+    digestLanguage: str | None = Field(default=None, max_length=32)
     useDefaultEmbeddingConfig: bool | None = None
     embeddingProvider: str | None = Field(default=None, max_length=64)
     embeddingModel: str | None = Field(default=None, max_length=128)

@@ -1,0 +1,116 @@
+.feed-card {
+    border-radius: var(--radius);
+    overflow: hidden;
+    cursor: pointer;
+    transition: transform var(--duration-fast) var(--ease-standard), box-shadow var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard);
+    background: var(--panel-bg);
+    box-shadow: var(--card-shadow);
+    position: relative;
+    border: 1px solid var(--border-color);
+    text-align: left;
+}
+
+.feed-card:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--card-shadow-hover);
+    background: var(--hover-bg);
+}
+
+.feed-card-header {
+    min-height: 96px;
+    padding: var(--space-4);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    background: linear-gradient(135deg, #e8713a, #f5a623);
+}
+
+.feed-card-icon {
+    width: 34px;
+    height: 34px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    color: #fff;
+    background: rgba(255, 255, 255, 0.22);
+    filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.18));
+}
+
+.feed-card-menu-wrap {
+    position: relative;
+}
+
+.feed-card-menu-btn {
+    background: rgba(255, 255, 255, 0.2);
+    border: none;
+    color: rgba(255, 255, 255, 0.95);
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.feed-card-menu {
+    position: absolute;
+    right: 0;
+    top: 34px;
+    min-width: 120px;
+    z-index: var(--z-dropdown);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--panel-bg);
+    box-shadow: var(--card-shadow-hover);
+    overflow: hidden;
+}
+
+.feed-card-menu button {
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: transparent;
+    color: var(--text-color);
+    padding: 8px 10px;
+    cursor: pointer;
+}
+
+.feed-card-menu button:hover {
+    background: var(--hover-bg);
+}
+
+.feed-card-menu button.danger {
+    color: #c43e2f;
+}
+
+.feed-card-body {
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.feed-card-title {
+    font-size: var(--text-md);
+    font-weight: 700;
+    line-height: 1.45;
+    color: var(--title-color);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.feed-card-meta {
+    font-size: var(--text-xs);
+    color: var(--meta-color);
+}
+
+.feed-card-tags span {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: var(--text-xs);
+    color: #b75b26;
+    background: rgba(232, 113, 58, 0.13);
+}

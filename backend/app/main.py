@@ -19,6 +19,7 @@ from app.modules.agent.router import router as ai_router
 from app.modules.agent.search.service import sweep_stale_search_sessions
 from app.modules.auth.router import router as auth_router
 from app.modules.highlights.router import router as highlights_router
+from app.modules.feeds.router import router as feeds_router
 from app.modules.notebooks.router import router as notebooks_router
 from app.modules.notes.router import router as notes_router
 from app.modules.settings.router import router as settings_router
@@ -93,6 +94,7 @@ def create_app() -> FastAPI:
     app.include_router(highlights_router, prefix=settings.api_prefix)
     app.include_router(settings_router, prefix=settings.api_prefix)
     app.include_router(sources_router, prefix=settings.api_prefix)
+    app.include_router(feeds_router, prefix=settings.api_prefix)
 
     return app
 

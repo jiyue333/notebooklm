@@ -16,6 +16,11 @@ const DEFAULT_SETTINGS = {
     apiUrl: 'http://127.0.0.1:11434',
     searchProvider: 'exa',
     preferredSites: [],
+    minifluxUrl: 'http://127.0.0.1:8085',
+    minifluxApiToken: '',
+    rsshubUrl: 'https://rsshub.app',
+    digestTime: '08:00',
+    digestLanguage: null,
     embeddingProvider: 'ollama',
     embeddingModel: 'qwen3-embedding:0.6b',
     embeddingApiUrl: 'http://127.0.0.1:11434',
@@ -47,6 +52,63 @@ const DEFAULT_NOTES_BY_NOTEBOOK_ID = {
 };
 
 const DEFAULT_HIGHLIGHTS_BY_ARTICLE_ID = {};
+
+const DEFAULT_FEED_CATEGORIES = [
+    { id: 1, title: '技术博客', hideGlobally: false },
+    { id: 2, title: '论文追踪', hideGlobally: false },
+];
+
+const DEFAULT_FEEDS = [
+    {
+        id: 'feed-001',
+        minifluxFeedId: 101,
+        title: 'Pragmatic Engineer',
+        feedUrl: 'https://blog.pragmaticengineer.com/rss/',
+        siteUrl: 'https://blog.pragmaticengineer.com',
+        categoryName: '技术博客',
+        isActive: true,
+        crawlerEnabled: true,
+        unreadCount: 2,
+        checkedAt: new Date().toISOString(),
+    },
+];
+
+const DEFAULT_FEED_ENTRIES = [
+    {
+        entryId: 9001,
+        feedId: 'feed-001',
+        minifluxFeedId: 101,
+        feedTitle: 'Pragmatic Engineer',
+        title: 'LLM inference optimization in production',
+        url: 'https://blog.pragmaticengineer.com/llm-inference-optimization/',
+        author: 'Pragmatic Engineer',
+        publishedAt: new Date(Date.now() - 1000 * 60 * 90).toISOString(),
+        readingTime: 8,
+        status: 'unread',
+        starred: false,
+        aiSummary: '本文梳理了线上推理成本、延迟和吞吐之间的权衡。',
+        contentPreview: 'Production LLM systems require balancing latency, quality, and cost...',
+        contentHtml: '<p>Production LLM systems require balancing latency, quality, and cost.</p>',
+        hash: 'feed-001-entry-9001',
+    },
+    {
+        entryId: 9002,
+        feedId: 'feed-001',
+        minifluxFeedId: 101,
+        feedTitle: 'Pragmatic Engineer',
+        title: 'Designing resilient async pipelines',
+        url: 'https://blog.pragmaticengineer.com/resilient-async-pipelines/',
+        author: 'Pragmatic Engineer',
+        publishedAt: new Date(Date.now() - 1000 * 60 * 60 * 6).toISOString(),
+        readingTime: 6,
+        status: 'unread',
+        starred: true,
+        aiSummary: '文章总结了异步任务队列的幂等、回压与重试策略。',
+        contentPreview: 'Async pipelines fail in subtle ways when idempotency and retries are ignored...',
+        contentHtml: '<p>Async pipelines fail in subtle ways when idempotency and retries are ignored.</p>',
+        hash: 'feed-001-entry-9002',
+    },
+];
 
 const clone = (value) => {
     if (typeof structuredClone === 'function') {
@@ -193,6 +255,20 @@ const createManualSourceArticle = ({ sourceType, url, title, content }) => ({
     toc: [],
 });
 
+const createRssSourceArticle = (entry, index) => ({
+    id: generateId(`art-rss-${index}`),
+    title: entry.title || `RSS 条目 ${entry.entryId}`,
+    type: 'article',
+    inputType: 'rss_entry',
+    icon: '📡',
+    author: entry.author || entry.feedTitle || 'RSS',
+    date: entry.publishedAt || formatTimestamp(),
+    sourceUrl: entry.url || '',
+    selected: false,
+    content: `# ${entry.title || 'RSS 条目'}\n\n${entry.contentPreview || ''}\n\n来源链接：${entry.url || ''}`,
+    toc: [],
+});
+
 const createNotebookRecord = ({ title, emoji = null, color = null, tags = [] }) => ({
     id: generateId('nb'),
     title: title?.trim() || `未命名笔记本 ${new Date().toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }).replace('/', '-')}`,
@@ -224,6 +300,14 @@ const buildSettingsView = (user, settings) => ({
     apiUrl: settings.apiUrl,
     searchProvider: settings.searchProvider || 'exa',
     preferredSites: Array.isArray(settings.preferredSites) ? settings.preferredSites : [],
+    minifluxUrl: settings.minifluxUrl || 'http://127.0.0.1:8085',
+    rsshubUrl: settings.rsshubUrl || 'https://rsshub.app',
+    digestTime: settings.digestTime || '08:00',
+    digestLanguage: settings.digestLanguage || null,
+    hasMinifluxApiToken: Boolean(settings.minifluxApiToken),
+    hasCustomMinifluxApiToken: Boolean(settings.minifluxApiToken),
+    usingDefaultMinifluxApiToken: false,
+    minifluxApiTokenMasked: maskApiKey(settings.minifluxApiToken),
     usingDefaultModelConfig:
         settings.modelProvider === DEFAULT_SETTINGS.modelProvider
         && settings.modelName === DEFAULT_SETTINGS.modelName
@@ -273,6 +357,9 @@ const createMockState = () => ({
     notebooks: clone(mockNotebooks),
     notesByNotebookId: clone(DEFAULT_NOTES_BY_NOTEBOOK_ID),
     highlightsByArticleId: clone(DEFAULT_HIGHLIGHTS_BY_ARTICLE_ID),
+    feedCategories: clone(DEFAULT_FEED_CATEGORIES),
+    feeds: clone(DEFAULT_FEEDS),
+    feedEntries: clone(DEFAULT_FEED_ENTRIES),
     searchSessionsById: {},
 });
 
@@ -760,6 +847,184 @@ const mockProvider = {
         return buildNotebookDetail(notebookId);
     },
 
+    async testFeedConnection() {
+        await wait(140);
+        return {
+            ok: true,
+            baseUrl: mockState.settings.minifluxUrl || DEFAULT_SETTINGS.minifluxUrl,
+            username: 'mock-admin',
+            version: '2.2.x',
+            keySource: mockState.settings.minifluxApiToken ? 'user' : 'default',
+        };
+    },
+
+    async discoverFeeds({ url }) {
+        await wait(180);
+        const normalized = url?.trim() || '';
+        if (!normalized) {
+            throw new Error('请输入 URL');
+        }
+        return [
+            { url: normalized, title: '发现的订阅源', type: 'rss' },
+        ];
+    },
+
+    async listFeeds() {
+        await wait(160);
+        const unread = (mockState.feeds || []).reduce((sum, feed) => sum + Number(feed.unreadCount || 0), 0);
+        return {
+            items: clone(mockState.feeds || []),
+            meta: {
+                total: (mockState.feeds || []).length,
+                unread,
+            },
+        };
+    },
+
+    async createFeed({ feedUrl, categoryName }) {
+        await wait(220);
+        const normalized = feedUrl?.trim();
+        if (!normalized) {
+            throw new Error('请输入订阅地址');
+        }
+        const feed = {
+            id: generateId('feed'),
+            minifluxFeedId: Date.now(),
+            title: normalized.replace(/^https?:\/\//, '').slice(0, 48),
+            feedUrl: normalized,
+            siteUrl: normalized,
+            categoryName: categoryName?.trim() || '',
+            isActive: true,
+            crawlerEnabled: true,
+            unreadCount: 0,
+            checkedAt: new Date().toISOString(),
+        };
+        mockState.feeds = [feed, ...(mockState.feeds || [])];
+        return clone(feed);
+    },
+
+    async deleteFeed(feedId) {
+        await wait(160);
+        mockState.feeds = (mockState.feeds || []).filter((item) => item.id !== feedId);
+        mockState.feedEntries = (mockState.feedEntries || []).filter((item) => item.feedId !== feedId);
+        return { success: true };
+    },
+
+    async refreshFeed(feedId) {
+        await wait(180);
+        mockState.feeds = (mockState.feeds || []).map((feed) => (
+            feed.id === feedId ? { ...feed, checkedAt: new Date().toISOString() } : feed
+        ));
+        return { success: true };
+    },
+
+    async listFeedEntries({ feedId = null, status = 'unread', limit = 100, offset = 0, search = '' }) {
+        await wait(220);
+        const normalizedSearch = search.trim().toLowerCase();
+        let items = clone(mockState.feedEntries || []);
+        if (feedId) {
+            items = items.filter((entry) => entry.feedId === feedId);
+        }
+        if (status && status !== 'all') {
+            items = items.filter((entry) => entry.status === status);
+        }
+        if (normalizedSearch) {
+            items = items.filter((entry) => (
+                String(entry.title || '').toLowerCase().includes(normalizedSearch)
+                || String(entry.contentPreview || '').toLowerCase().includes(normalizedSearch)
+            ));
+        }
+        const total = items.length;
+        const paged = items.slice(offset, offset + limit);
+        return {
+            items: paged,
+            meta: {
+                total,
+                unread: (mockState.feedEntries || []).filter((entry) => entry.status === 'unread').length,
+            },
+        };
+    },
+
+    async getFeedEntry(entryId) {
+        await wait(120);
+        const item = (mockState.feedEntries || []).find((entry) => Number(entry.entryId) === Number(entryId));
+        if (!item) {
+            throw new Error('未找到对应 RSS 条目');
+        }
+        return clone(item);
+    },
+
+    async updateEntriesStatus({ entryIds, status }) {
+        await wait(140);
+        const idSet = new Set((entryIds || []).map((item) => Number(item)));
+        mockState.feedEntries = (mockState.feedEntries || []).map((entry) => (
+            idSet.has(Number(entry.entryId)) ? { ...entry, status } : entry
+        ));
+        mockState.feeds = (mockState.feeds || []).map((feed) => ({
+            ...feed,
+            unreadCount: (mockState.feedEntries || []).filter((entry) => entry.feedId === feed.id && entry.status === 'unread').length,
+        }));
+        return { success: true };
+    },
+
+    async toggleEntryBookmark(entryId) {
+        await wait(120);
+        mockState.feedEntries = (mockState.feedEntries || []).map((entry) => (
+            Number(entry.entryId) === Number(entryId) ? { ...entry, starred: !entry.starred } : entry
+        ));
+        return { success: true };
+    },
+
+    async listFeedCategories() {
+        await wait(120);
+        return clone(mockState.feedCategories || []);
+    },
+
+    async createFeedCategory({ title, hideGlobally = false }) {
+        await wait(130);
+        const category = {
+            id: Date.now(),
+            title: title?.trim() || '未命名分类',
+            hideGlobally: Boolean(hideGlobally),
+        };
+        mockState.feedCategories = [category, ...(mockState.feedCategories || [])];
+        return clone(category);
+    },
+
+    async deleteFeedCategory(categoryId) {
+        await wait(120);
+        mockState.feedCategories = (mockState.feedCategories || []).filter((item) => Number(item.id) !== Number(categoryId));
+        return { success: true };
+    },
+
+    async getDigest({ date }) {
+        await wait(160);
+        const items = clone(mockState.feedEntries || []).slice(0, 20);
+        return {
+            date: date || new Date().toISOString().slice(0, 10),
+            entryCount: items.length,
+            summaryText: '',
+            entries: items,
+            status: 'ready',
+        };
+    },
+
+    async importRssToNotebook({ notebookId, entryIds }) {
+        await wait(240);
+        const notebook = getNotebookRecord(notebookId);
+        const selected = (mockState.feedEntries || []).filter((entry) => (entryIds || []).includes(Number(entry.entryId)));
+        const importedArticles = selected.map((entry, index) => createRssSourceArticle(entry, index));
+        notebook.articles = [...importedArticles, ...(notebook.articles || [])];
+        notebook.sourceCount = notebook.articles.length;
+        return {
+            item: buildNotebookDetail(notebookId),
+            meta: {
+                importedCount: importedArticles.length,
+                skippedDuplicate: 0,
+            },
+        };
+    },
+
     async getSettings() {
         await wait(120);
         return buildSettingsView(mockState.user, mockState.settings);
@@ -821,6 +1086,13 @@ const mockProvider = {
         } else {
             nextSettings.embeddingApiKey = mockState.settings.embeddingApiKey;
         }
+        if (payload.clearMinifluxApiToken) {
+            nextSettings.minifluxApiToken = '';
+        } else if (payload.minifluxApiToken) {
+            nextSettings.minifluxApiToken = payload.minifluxApiToken;
+        } else {
+            nextSettings.minifluxApiToken = mockState.settings.minifluxApiToken;
+        }
         Object.entries(payload).forEach(([key, value]) => {
             if (
                 key === 'apiKey'
@@ -829,6 +1101,8 @@ const mockProvider = {
                 || key === 'clearSearchApiKey'
                 || key === 'embeddingApiKey'
                 || key === 'clearEmbeddingApiKey'
+                || key === 'minifluxApiToken'
+                || key === 'clearMinifluxApiToken'
                 || key === 'useDefaultModelConfig'
                 || key === 'useDefaultSearchConfig'
                 || key === 'useDefaultEmbeddingConfig'
@@ -1538,6 +1812,110 @@ const backendProvider = {
         return payload.item;
     },
 
+    async testFeedConnection() {
+        const payload = await request('/feeds/health');
+        return payload.item;
+    },
+
+    async discoverFeeds({ url }) {
+        const payload = await request('/feeds/discover', {
+            method: 'POST',
+            body: { url },
+        });
+        return payload.items || [];
+    },
+
+    async listFeeds() {
+        const payload = await request('/feeds');
+        return {
+            items: payload.items || [],
+            meta: payload.meta || {},
+        };
+    },
+
+    async createFeed({ feedUrl, categoryName }) {
+        const payload = await request('/feeds', {
+            method: 'POST',
+            body: { feedUrl, categoryName },
+        });
+        return payload.item;
+    },
+
+    async deleteFeed(feedId) {
+        await request(`/feeds/${feedId}`, { method: 'DELETE' });
+        return { success: true };
+    },
+
+    async refreshFeed(feedId) {
+        await request(`/feeds/${feedId}/refresh`, { method: 'PUT' });
+        return { success: true };
+    },
+
+    async listFeedEntries({ feedId = null, status = 'unread', limit = 100, offset = 0, categoryName = '', search = '' }) {
+        const params = new URLSearchParams();
+        if (status) params.set('status', status);
+        if (Number.isFinite(limit)) params.set('limit', String(limit));
+        if (Number.isFinite(offset)) params.set('offset', String(offset));
+        if (categoryName) params.set('categoryName', categoryName);
+        if (search) params.set('search', search);
+        const path = feedId ? `/feeds/${feedId}/entries` : '/feeds/entries';
+        const payload = await request(`${path}?${params.toString()}`);
+        return {
+            items: payload.items || [],
+            meta: payload.meta || {},
+        };
+    },
+
+    async getFeedEntry(entryId) {
+        const payload = await request(`/feeds/entries/${entryId}`);
+        return payload.item;
+    },
+
+    async updateEntriesStatus({ entryIds, status }) {
+        await request('/feeds/entries/status', {
+            method: 'PUT',
+            body: { entryIds, status },
+        });
+        return { success: true };
+    },
+
+    async toggleEntryBookmark(entryId) {
+        await request(`/feeds/entries/${entryId}/bookmark`, { method: 'PUT' });
+        return { success: true };
+    },
+
+    async listFeedCategories() {
+        const payload = await request('/feeds/categories');
+        return payload.items || [];
+    },
+
+    async createFeedCategory({ title, hideGlobally = false }) {
+        const payload = await request('/feeds/categories', {
+            method: 'POST',
+            body: { title, hideGlobally },
+        });
+        return payload.item;
+    },
+
+    async deleteFeedCategory(categoryId) {
+        await request(`/feeds/categories/${categoryId}`, { method: 'DELETE' });
+        return { success: true };
+    },
+
+    async getDigest({ date } = {}) {
+        const path = date ? `/feeds/digest/${encodeURIComponent(date)}` : '/feeds/digest';
+        const payload = await request(path);
+        return payload.item;
+    },
+
+    async importRssToNotebook({ notebookId, entryIds }) {
+        const payload = await request(`/notebooks/${notebookId}/sources/import-rss`, {
+            method: 'POST',
+            body: { entryIds },
+        });
+        return { item: payload.item, meta: payload.meta || {} };
+    },
+
     async getSettings() {
         const payload = await request('/settings');
         return payload.item;
@@ -1754,6 +2132,23 @@ export const appApi = {
         updateArticle: provider.updateArticleSource,
         deleteArticle: provider.deleteArticleSource,
         retryArticle: provider.retryArticleSource,
+    },
+    feeds: {
+        testConnection: provider.testFeedConnection,
+        discover: provider.discoverFeeds,
+        list: provider.listFeeds,
+        create: provider.createFeed,
+        remove: provider.deleteFeed,
+        refresh: provider.refreshFeed,
+        listEntries: provider.listFeedEntries,
+        getEntry: provider.getFeedEntry,
+        updateEntriesStatus: provider.updateEntriesStatus,
+        toggleBookmark: provider.toggleEntryBookmark,
+        listCategories: provider.listFeedCategories,
+        createCategory: provider.createFeedCategory,
+        removeCategory: provider.deleteFeedCategory,
+        getDigest: provider.getDigest,
+        importToNotebook: provider.importRssToNotebook,
     },
     settings: {
         get: provider.getSettings,

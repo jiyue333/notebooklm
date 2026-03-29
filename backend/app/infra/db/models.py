@@ -10,6 +10,7 @@ def import_models() -> None:
     from app.modules.agent.summary import models as _ai_summary_models  # noqa: F401
     from app.modules.auth import models as _auth_models  # noqa: F401
     from app.modules.highlights import models as _highlight_models  # noqa: F401
+    from app.modules.feeds import models as _feed_models  # noqa: F401
     from app.modules.jobs import models as _job_models  # noqa: F401
     from app.modules.notebooks import models as _notebook_models  # noqa: F401
     from app.modules.notes import models as _note_models  # noqa: F401

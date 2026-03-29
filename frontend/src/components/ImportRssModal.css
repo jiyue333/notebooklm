@@ -1,0 +1,139 @@
+.rss-import-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--overlay-bg);
+    z-index: var(--z-overlay);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+}
+
+.rss-import-modal {
+    width: min(760px, 100%);
+    max-height: 84vh;
+    border-radius: var(--radius);
+    background: var(--panel-bg);
+    border: 1px solid var(--border-color);
+    box-shadow: var(--card-shadow-hover);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.rss-import-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.rss-import-header h3 {
+    margin: 0;
+    color: var(--title-color);
+}
+
+.rss-import-header button {
+    border: none;
+    background: transparent;
+    color: var(--meta-color);
+    cursor: pointer;
+}
+
+.rss-import-toolbar {
+    display: flex;
+    gap: 8px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.rss-import-search {
+    flex: 1;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: var(--bg-elevated);
+    color: var(--text-color);
+}
+
+.rss-import-list {
+    flex: 1;
+    overflow: auto;
+    padding: 10px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.rss-import-item {
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 10px;
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    background: var(--bg-elevated);
+}
+
+.rss-import-item input {
+    margin-top: 2px;
+}
+
+.rss-import-item-content {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.rss-import-item-content strong {
+    font-size: var(--text-sm);
+    color: var(--title-color);
+}
+
+.rss-import-item-content span {
+    font-size: var(--text-xs);
+    color: var(--meta-color);
+    line-height: 1.4;
+}
+
+.rss-import-empty {
+    margin: 0;
+    color: var(--meta-color);
+    font-size: var(--text-sm);
+}
+
+.rss-import-footer {
+    border-top: 1px solid var(--border-color);
+    padding: 12px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--text-sm);
+    color: var(--meta-color);
+}
+
+.rss-import-footer > div {
+    display: flex;
+    gap: 8px;
+}
+
+.rss-import-primary,
+.rss-import-secondary {
+    border: none;
+    border-radius: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.rss-import-primary {
+    background: var(--accent-color);
+    color: #fff;
+}
+
+.rss-import-secondary {
+    background: var(--hover-bg);
+    color: var(--text-color);
+}

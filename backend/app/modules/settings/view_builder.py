@@ -27,6 +27,11 @@ def build_settings_view(user: User) -> dict:
     default_settings = get_default_user_settings()
     chat_provider = normalize_chat_provider(merged["modelProvider"])
     embedding_provider = normalize_embedding_provider(merged.get("embeddingProvider"))
+    miniflux_token_state = build_credential_state(
+        ciphertext=user_settings.get("minifluxApiToken"),
+        last4=user_settings.get("minifluxApiTokenLast4"),
+        default_key=system_settings.miniflux_default_api_token,
+    )
     return {
         "outputLanguage": merged["outputLanguage"],
         "themeColor": merged["themeColor"],
@@ -42,6 +47,14 @@ def build_settings_view(user: User) -> dict:
         "apiUrl": merged["apiUrl"],
         "searchProvider": merged.get("searchProvider", PROVIDER_EXA),
         "preferredSites": merged.get("preferredSites", []),
+        "minifluxUrl": merged.get("minifluxUrl", default_settings["minifluxUrl"]),
+        "rsshubUrl": merged.get("rsshubUrl", default_settings["rsshubUrl"]),
+        "digestTime": merged.get("digestTime", default_settings["digestTime"]),
+        "digestLanguage": merged.get("digestLanguage", default_settings["digestLanguage"]),
+        "hasMinifluxApiToken": miniflux_token_state["hasEffectiveKey"],
+        "hasCustomMinifluxApiToken": miniflux_token_state["hasCustomKey"],
+        "usingDefaultMinifluxApiToken": miniflux_token_state["usingDefaultKey"],
+        "minifluxApiTokenMasked": miniflux_token_state["masked"],
         "usingDefaultModelConfig": _is_using_default_config(user_settings, MODEL_SETTINGS_FIELDS),
         "defaultModelProvider": normalize_chat_provider(default_settings["modelProvider"]),
         "defaultModelName": default_settings["modelName"],

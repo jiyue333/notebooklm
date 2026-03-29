@@ -59,6 +59,12 @@ class Settings(BaseSettings):
     exa_default_api_key: str | None = None
     tavily_base_url: str = "https://api.tavily.com"
     tavily_default_api_key: str | None = None
+    miniflux_default_url: str = "http://127.0.0.1:8085"
+    miniflux_admin_username: str | None = "admin"
+    miniflux_admin_password: str | None = "admin123"
+    miniflux_managed_user_prefix: str = "nblm"
+    miniflux_default_api_token: str | None = None
+    rsshub_default_url: str = "https://rsshub.app"
     search_inline_deadline_ms: int = 4500
     search_review_sampling_enabled: bool = True
     search_review_sampling_rate: float = 0.02

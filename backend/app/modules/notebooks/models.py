@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Computed, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import Computed, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
@@ -68,6 +68,13 @@ class Article(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=True,
         comment="来源搜索结果 ID",
     )
+    rss_feed_id: Mapped[str | None] = mapped_column(
+        ForeignKey("rss_feeds.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="RSS 订阅源 ID",
+    )
+    rss_entry_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True, comment="Miniflux Entry ID")
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True, comment="原始来源链接")
     normalized_url: Mapped[str | None] = mapped_column(Text, nullable=True, comment="规范化来源链接")
     dedupe_key: Mapped[str] = mapped_column(String(128), nullable=False, comment="去重键")

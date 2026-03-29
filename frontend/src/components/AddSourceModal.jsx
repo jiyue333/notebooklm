@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { appApi } from '../services/appApi';
 import useEscapeToClose from '../hooks/useEscapeToClose';
 import { extractClipboardMarkdown } from '../utils/clipboardMarkdown';
+import ImportRssModal from './ImportRssModal';
 import './AddSourceModal.css';
 
 const Ic = {
@@ -19,6 +20,7 @@ const Ic = {
     close: <svg viewBox="0 0 24 24" fill="currentColor"><path d="m19 6.41-1.41-1.41L12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>,
     chevronDown: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z" /></svg>,
     check: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17 4.83 12 3.41 13.41 9 19l12-12-1.41-1.41z" /></svg>,
+    rss: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.18 17.82a2.18 2.18 0 1 1 0-4.36 2.18 2.18 0 0 1 0 4.36ZM4 4v3a13 13 0 0 1 13 13h3A16 16 0 0 0 4 4Zm0 6v3a7 7 0 0 1 7 7h3a10 10 0 0 0-10-10Z" /></svg>,
 };
 
 const modeOptions = [
@@ -40,6 +42,7 @@ export default function AddSourceModal({ notebookId, onClose, onImported, onStar
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isStartingSearch, setIsStartingSearch] = useState(false);
     const [showModeMenu, setShowModeMenu] = useState(false);
+    const [showImportRss, setShowImportRss] = useState(false);
     const [error, setError] = useState('');
     const fileInputRef = useRef(null);
     const textAreaRef = useRef(null);
@@ -385,6 +388,10 @@ export default function AddSourceModal({ notebookId, onClose, onImported, onStar
                             <span>{Ic.clipboard}</span>
                             <span>复制的文字</span>
                         </button>
+                        <button type="button" className="add-source-quick-btn" onClick={(event) => { event.stopPropagation(); setShowImportRss(true); }} disabled={isBusy}>
+                            <span>{Ic.rss}</span>
+                            <span>从订阅源导入</span>
+                        </button>
                     </div>
                 </div>
 
@@ -402,6 +409,19 @@ export default function AddSourceModal({ notebookId, onClose, onImported, onStar
                         event.target.value = '';
                     }}
                 />
+                {showImportRss ? (
+                    <ImportRssModal
+                        notebookId={notebookId}
+                        onClose={() => setShowImportRss(false)}
+                        onImported={(detail) => {
+                            if (detail) {
+                                onImported?.(detail);
+                            }
+                            setShowImportRss(false);
+                            onClose();
+                        }}
+                    />
+                ) : null}
             </div>
         </div>
     );

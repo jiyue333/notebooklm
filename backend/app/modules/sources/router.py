@@ -21,6 +21,7 @@ from app.infra.ai.lite_models import build_lite_llm
 from app.infra.storage.file_store import build_storage_key, store_file_bytes
 from app.modules.jobs import publisher as job_publisher
 from app.modules.jobs import repo as jobs_repo
+from app.modules.feeds import service as feeds_service
 from app.modules.notebooks import repo as notebooks_repo
 from app.modules.notebooks.models import Article
 from app.modules.notebooks.service import get_notebook_detail, invalidate_notebook_detail_cache
@@ -37,6 +38,7 @@ _AUTO_TITLE_SYSTEM_PROMPT = (
     "请输出单行标题，不超过18个中文字符或8个英文单词。"
     "不要输出引号、序号、句号或额外说明。"
 )
+_STRIP_HTML_RE = re.compile(r"<[^>]+>")
 
 
 def _strip_markdown_prefix(value: str) -> str:
@@ -91,6 +93,25 @@ def _fallback_title_from_text(content: str | None) -> str:
         if line:
             return line
     return "粘贴文字来源"
+
+
+def _build_rss_preview_markdown(*, title: str, url: str | None, content_html: str | None) -> str:
+    plain = _STRIP_HTML_RE.sub(" ", str(content_html or ""))
+    plain = " ".join(plain.split())
+    if len(plain) > 260:
+        plain = f"{plain[:260].rstrip()}..."
+    normalized_url = (url or "").strip()
+    return f"# {title}\n\n来源链接：{normalized_url}\n\n{plain or '等待解析中。'}"
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 async def _generate_title_with_lite_model(
@@ -170,6 +191,10 @@ class ManualSourceRequest(BaseModel):
     url: str | None = None
     title: str | None = None
     content: str | None = None
+
+
+class ImportRssEntriesRequest(BaseModel):
+    entryIds: list[int] = Field(min_length=1, max_length=50)
 
 
 # ── Import search results (async) ──────────────────────────────────────────
@@ -317,6 +342,127 @@ async def import_sources_endpoint(
     await invalidate_notebook_detail_cache(user_id=current_user.id, notebook_id=notebook_id)
     item = await get_notebook_detail(session, user_id=current_user.id, notebook_id=notebook_id)
     return success_response(item=item)
+
+
+# ── Import RSS entries (async) ────────────────────────────────────────────
+
+@router.post("/notebooks/{notebook_id}/sources/import-rss")
+async def import_rss_entries_endpoint(
+    notebook_id: str,
+    payload: ImportRssEntriesRequest,
+    current_user=Depends(current_user_dep),
+    session: AsyncSession = Depends(db_session_dep),
+):
+    notebook = await notebooks_repo.get_notebook(
+        session, user_id=current_user.id, notebook_id=notebook_id,
+    )
+    if notebook is None:
+        raise AppError(404, "未找到对应的笔记本", code="notebook_not_found")
+
+    now = datetime.now(UTC)
+    existing_articles = await notebooks_repo.list_articles_by_notebook(
+        session,
+        user_id=current_user.id,
+        notebook_id=notebook_id,
+    )
+    existing_dedupe_keys = {article.dedupe_key for article in existing_articles if article.dedupe_key}
+
+    jobs = []
+    imported_entry_ids: list[int] = []
+    imported_count = 0
+    skipped_duplicate = 0
+
+    for entry_id in payload.entryIds:
+        entry = await feeds_service.get_entry_for_import(user=current_user, entry_id=entry_id)
+        if not isinstance(entry, dict):
+            continue
+
+        raw_feed_id = entry.get("feed_id") or (entry.get("feed") or {}).get("id")
+        try:
+            miniflux_feed_id = int(raw_feed_id)
+        except (TypeError, ValueError):
+            miniflux_feed_id = 0
+
+        raw_hash = str(entry.get("hash") or "").strip()
+        if not raw_hash:
+            dedupe_seed = f"{entry.get('url') or ''}|{entry.get('title') or ''}|{entry_id}"
+            raw_hash = hashlib.sha256(dedupe_seed.encode("utf-8")).hexdigest()
+        dedupe_key = f"rss:{miniflux_feed_id}:{raw_hash}"
+        if dedupe_key in existing_dedupe_keys:
+            skipped_duplicate += 1
+            continue
+
+        local_feed = None
+        if miniflux_feed_id > 0:
+            local_feed = await feeds_service.ensure_local_feed_by_miniflux_id(
+                session,
+                user=current_user,
+                miniflux_feed_id=miniflux_feed_id,
+            )
+
+        title = str(entry.get("title") or "").strip() or f"RSS 文章 {entry_id}"
+        source_url = str(entry.get("url") or "").strip() or None
+        article = Article(
+            user_id=current_user.id,
+            notebook_id=notebook_id,
+            input_type="rss_entry",
+            dedupe_key=dedupe_key,
+            title=title,
+            source_url=source_url,
+            author=(entry.get("author") or None),
+            published_at=_parse_iso_datetime(entry.get("published_at") or entry.get("created_at")),
+            preview_markdown=_build_rss_preview_markdown(
+                title=title,
+                url=source_url,
+                content_html=entry.get("content"),
+            ),
+            parse_status="queued",
+            chunk_status="not_started",
+            index_status="not_started",
+            rss_feed_id=local_feed.id if local_feed else None,
+            rss_entry_id=entry_id,
+        )
+        session.add(article)
+        await session.flush()
+
+        job = await jobs_repo.create_article_ingest_job(
+            session,
+            article_id=article.id,
+            search_session_id=None,
+            dedupe_key=f"ingest:{article.id}",
+            payload_json={"articleId": article.id},
+            created_at=now,
+        )
+        jobs.append(job)
+        imported_entry_ids.append(entry_id)
+        imported_count += 1
+        existing_dedupe_keys.add(dedupe_key)
+
+    if imported_count == 0:
+        item = await get_notebook_detail(session, user_id=current_user.id, notebook_id=notebook_id)
+        return success_response(
+            item=item,
+            message="选中的 RSS 文章已存在，无需重复导入",
+            meta={"importedCount": 0, "skippedDuplicate": skipped_duplicate},
+        )
+
+    await session.commit()
+    if jobs:
+        await job_publisher.publish_jobs(session, jobs)
+        await session.commit()
+
+    if imported_entry_ids:
+        try:
+            await feeds_service.mark_entries_as_read(user=current_user, entry_ids=imported_entry_ids)
+        except Exception:
+            pass
+
+    await invalidate_notebook_detail_cache(user_id=current_user.id, notebook_id=notebook_id)
+    item = await get_notebook_detail(session, user_id=current_user.id, notebook_id=notebook_id)
+    return success_response(
+        item=item,
+        meta={"importedCount": imported_count, "skippedDuplicate": skipped_duplicate},
+    )
 
 
 # ── Manual source – URL / text (async) ─────────────────────────────────────
