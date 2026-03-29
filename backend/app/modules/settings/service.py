@@ -81,6 +81,7 @@ async def update_settings(
     crypto = get_credential_crypto()
     now = datetime.now(UTC)
     apply_credential_updates(user=user, payload=payload, crypto=crypto, now=now)
+    _apply_miniflux_token_updates(settings_json=settings_json, payload=payload, crypto=crypto)
     user.settings_json = settings_json
     reindex_jobs = await _schedule_embedding_update_jobs(
         session,
@@ -115,6 +116,24 @@ def _normalize_provider_fields(settings_json: dict) -> dict:
     if "embeddingProvider" in normalized:
         normalized["embeddingProvider"] = normalize_embedding_provider(normalized.get("embeddingProvider"))
     return normalized
+
+
+def _apply_miniflux_token_updates(*, settings_json: dict, payload: dict, crypto) -> None:
+    if payload.get("clearMinifluxApiToken"):
+        settings_json.pop("minifluxApiToken", None)
+        settings_json.pop("minifluxApiTokenLast4", None)
+        return
+
+    raw_token = payload.get("minifluxApiToken")
+    if not raw_token:
+        return
+
+    token = str(raw_token).strip()
+    if not token:
+        return
+
+    settings_json["minifluxApiToken"] = crypto.encrypt(token)
+    settings_json["minifluxApiTokenLast4"] = token[-4:]
 
 
 def _build_embedding_update_plan(*, user: User, effective_settings_json: dict) -> EmbeddingUpdatePlan:
