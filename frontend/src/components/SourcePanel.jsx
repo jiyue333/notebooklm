@@ -161,6 +161,25 @@ export default function SourcePanel({
         }
     }, [syncSources]);
 
+    const restoreSearchPayloadToView = useCallback((payload) => {
+        if (!payload?.searchSessionId) {
+            return;
+        }
+        const normalizedStatus = normalizeSearchStatus(payload.status || 'idle');
+        const hasAnyResult = Array.isArray(payload.items) && payload.items.length > 0;
+        setView('results');
+        setMode((current) => payload.mode || current || 'auto');
+        setActiveSearchQuery((current) => payload.query || current || '');
+        setSearchInputValue('');
+        setShowDetailedResults(false);
+        applySearchPayload(payload, true);
+        if (['failed', 'expired', 'timeout', 'timed_out', 'cancelled', 'canceled'].includes(normalizedStatus) && !hasAnyResult) {
+            setError(payload.message || '搜索未完成，请重试');
+            return;
+        }
+        setError('');
+    }, [applySearchPayload]);
+
     useEffect(() => {
         const handler = (event) => {
             if (modeDropRef.current && !modeDropRef.current.contains(event.target)) {
@@ -170,20 +189,6 @@ export default function SourcePanel({
         document.addEventListener('mousedown', handler);
         return () => document.removeEventListener('mousedown', handler);
     }, []);
-
-    useEffect(() => {
-        pollTokenRef.current += 1;
-        setView('default');
-        setSearchInputValue('');
-        setActiveSearchQuery('');
-        setSearchViewState('idle');
-        setSources([]);
-        setSearchSessionId(null);
-        setSearchModeLabel('Auto Research');
-        setSearchStatus('idle');
-        setShowDetailedResults(false);
-        setError('');
-    }, [notebookId]);
 
     useEffect(() => () => {
         pollTokenRef.current += 1;
@@ -286,6 +291,68 @@ export default function SourcePanel({
         }
         return latest;
     }, [applySearchPayload, notebookId]);
+
+    useEffect(() => {
+        let isMounted = true;
+        pollTokenRef.current += 1;
+        const activeToken = pollTokenRef.current;
+        searchLockRef.current = false;
+        importLockRef.current = false;
+        setIsSearching(false);
+        setIsImporting(false);
+        setIsSearchLocked(false);
+        setView('default');
+        setSearchInputValue('');
+        setActiveSearchQuery('');
+        setSearchViewState('idle');
+        setSources([]);
+        setSearchSessionId(null);
+        setSearchModeLabel('Auto Research');
+        setSearchStatus('idle');
+        setShowDetailedResults(false);
+        setError('');
+
+        const restoreLatestSearchSession = async () => {
+            try {
+                const latest = await appApi.sources.getLatestSession({ notebookId });
+                if (!isMounted || activeToken !== pollTokenRef.current || !latest?.searchSessionId) {
+                    return;
+                }
+                restoreSearchPayloadToView(latest);
+                if (!['queued', 'running'].includes(normalizeSearchStatus(latest.status))) {
+                    return;
+                }
+                searchLockRef.current = true;
+                setIsSearchLocked(true);
+                setIsSearching(true);
+                const finalPayload = await pollSearchSession(
+                    latest.searchSessionId,
+                    activeToken,
+                    latest.mode || 'auto',
+                );
+                if (!isMounted || activeToken !== pollTokenRef.current || !finalPayload) {
+                    return;
+                }
+                restoreSearchPayloadToView(finalPayload);
+            } catch (err) {
+                if (!isMounted || activeToken !== pollTokenRef.current) {
+                    return;
+                }
+                console.error('sources.restore_latest_search_failed', err);
+            } finally {
+                if (isMounted && activeToken === pollTokenRef.current) {
+                    searchLockRef.current = false;
+                    setIsSearching(false);
+                    setIsSearchLocked(false);
+                }
+            }
+        };
+
+        void restoreLatestSearchSession();
+        return () => {
+            isMounted = false;
+        };
+    }, [notebookId, pollSearchSession, restoreSearchPayloadToView]);
 
     const handleSearch = useCallback(async ({ queryOverride, modeOverride } = {}) => {
         const normalizedQuery = (queryOverride ?? searchInputValue).trim();

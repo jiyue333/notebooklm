@@ -118,6 +118,23 @@ services:
     networks:
       - notebooklm
 
+  mihomo:
+    image: docker.io/metacubex/mihomo:Alpha
+    container_name: notebooklm-mihomo
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${MIHOMO_MIXED_PORT:-7890}:7890"
+      - "127.0.0.1:${MIHOMO_CONTROLLER_PORT:-9090}:9090"
+    volumes:
+      - ./docker/mihomo/config.yaml:/root/.config/mihomo/config.yaml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/version >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      - notebooklm
+
   minio:
     image: minio/minio:RELEASE.2025-02-28T09-55-16Z
     container_name: notebooklm-minio

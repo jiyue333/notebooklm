@@ -187,6 +187,26 @@ async def list_pending_sessions_for_sweep(
     return list(result.scalars().all())
 
 
+async def list_recent_restorable_sessions(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    notebook_id: str,
+    limit: int = 10,
+) -> list[SearchSession]:
+    result = await session.execute(
+        select(SearchSession)
+        .where(
+            SearchSession.user_id == user_id,
+            SearchSession.notebook_id == notebook_id,
+            SearchSession.status.in_(["queued", "running", "completed", "partial"]),
+        )
+        .order_by(SearchSession.created_at.desc())
+        .limit(max(1, min(limit, 50)))
+    )
+    return list(result.scalars().all())
+
+
 async def update_session_status(
     session: AsyncSession,
     *,

@@ -41,6 +41,7 @@ _SEARCH_RUN_TIMEOUT_SECONDS_BY_MODE = {
     "deep": 480,
 }
 _SEARCH_ACTIVE_SESSION_LIMIT = 3
+_RESTORABLE_SEARCH_SESSION_STATUSES = {"queued", "running", "completed", "partial"}
 
 
 def _normalize_preferred_sites(preferred_sites: list[str] | None) -> list[str]:
@@ -495,6 +496,30 @@ async def get_search_session(
         status=search_session.status,
     )
     return SearchResponse(**response.model_dump())
+
+
+async def get_latest_search_session(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    notebook_id: str,
+) -> SearchResponse | None:
+    recent_sessions = await repo.list_recent_restorable_sessions(
+        db,
+        user_id=user_id,
+        notebook_id=notebook_id,
+        limit=10,
+    )
+    for item in recent_sessions:
+        response = await get_search_session(
+            db,
+            user_id=user_id,
+            notebook_id=notebook_id,
+            search_session_id=item.id,
+        )
+        if str(response.run.status or "").lower() in _RESTORABLE_SEARCH_SESSION_STATUSES:
+            return response
+    return None
 
 
 def _build_response_from_results(

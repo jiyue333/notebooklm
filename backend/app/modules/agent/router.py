@@ -37,7 +37,12 @@ from app.modules.settings.runtime import (
     resolve_tavily_api_key,
 )
 from app.modules.agent.search.schemas import SearchRequest, SearchResponse
-from app.modules.agent.search.service import cancel_search_session, get_search_session, start_agent_search
+from app.modules.agent.search.service import (
+    cancel_search_session,
+    get_latest_search_session,
+    get_search_session,
+    start_agent_search,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -531,6 +536,20 @@ async def search_sources_endpoint(
         notebook_article_summaries=notebook_summaries,
         preferred_sites=preferred_sites,
     )
+
+
+@router.get("/notebooks/{notebook_id}/search-sessions/latest")
+async def get_latest_search_session_endpoint(
+    notebook_id: str,
+    current_user=Depends(current_user_dep),
+    session: AsyncSession = Depends(db_session_dep),
+):
+    item = await get_latest_search_session(
+        session,
+        user_id=current_user.id,
+        notebook_id=notebook_id,
+    )
+    return success_response(item=item.model_dump(mode="json") if item else None)
 
 
 @router.get("/notebooks/{notebook_id}/search-sessions/{search_session_id}")

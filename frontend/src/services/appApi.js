@@ -755,6 +755,7 @@ const mockProvider = {
         mockState.searchSessionsById[searchSessionId] = {
             id: searchSessionId,
             notebookId,
+            query: query.trim(),
             mode,
             modeLabel: getSearchModeLabel(mode),
             status: execution === 'async' ? 'queued' : 'completed',
@@ -801,6 +802,27 @@ const mockProvider = {
 
         return {
             searchSessionId: session.id,
+            query: session.query || '',
+            mode: session.mode,
+            modeLabel: session.modeLabel,
+            status: session.status,
+            execution: session.execution,
+            items: session.status === 'completed' ? clone(session.items) : [],
+            meta: { provider: 'mock' },
+        };
+    },
+
+    async getLatestSearchSession({ notebookId }) {
+        await wait(220);
+        const session = Object.values(mockState.searchSessionsById || {})
+            .filter((item) => item.notebookId === notebookId)
+            .sort((left, right) => new Date(right.readyAt || 0).getTime() - new Date(left.readyAt || 0).getTime())[0];
+        if (!session) {
+            return null;
+        }
+        return {
+            searchSessionId: session.id,
+            query: session.query || '',
             mode: session.mode,
             modeLabel: session.modeLabel,
             status: session.status,
@@ -1637,6 +1659,7 @@ const normalizeSearchPayload = (payload) => {
     const status = typeof rawStatus === 'string' ? rawStatus.toLowerCase() : 'completed';
     return {
         searchSessionId: run.id || source?.searchSessionId || legacyItem.searchSessionId || payload?.searchSessionId || null,
+        query: run.query || source?.query || legacyItem.query || payload?.query || '',
         mode,
         modeLabel: run.modeLabel || source?.modeLabel || legacyItem.modeLabel || payload?.modeLabel || getSearchModeLabel(mode),
         status,
@@ -1910,6 +1933,14 @@ const backendProvider = {
     async getSearchSession({ notebookId, searchSessionId }) {
         const payload = await request(`/notebooks/${notebookId}/search-sessions/${searchSessionId}`);
         return normalizeSearchPayload(payload);
+    },
+
+    async getLatestSearchSession({ notebookId }) {
+        const payload = await request(`/notebooks/${notebookId}/search-sessions/latest`);
+        if (!payload?.item) {
+            return null;
+        }
+        return normalizeSearchPayload(payload.item);
     },
 
     async searchSources({ notebookId, query, mode = 'auto', maxResults = 10 }) {
@@ -2315,6 +2346,7 @@ export const appApi = {
     sources: {
         search: provider.searchSources,
         getSession: provider.getSearchSession,
+        getLatestSession: provider.getLatestSearchSession,
         importSelected: provider.importSources,
         create: provider.createSource,
         uploadFiles: provider.uploadFiles,

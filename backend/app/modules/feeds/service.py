@@ -684,15 +684,66 @@ def _to_entry_view(entry: dict[str, Any], *, local_feed_map: dict[int, RssFeed],
 
 
 def _map_miniflux_error(exc: MinifluxClientError) -> AppError:
+    return _map_miniflux_error_with_context(exc)
+
+
+def _map_miniflux_error_with_context(
+    exc: MinifluxClientError,
+    *,
+    feed_url: str | None = None,
+) -> AppError:
+    normalized_feed_url = str(feed_url or "").strip()
+    normalized_message = str(exc.message or "").strip().lower()
+
     if exc.status_code in {401, 403}:
         return AppError(422, "Miniflux 鉴权失败，请检查托管账号或管理员凭证", code="miniflux_auth_failed")
     if exc.status_code == 404:
         return AppError(404, "资源不存在或已被删除", code="miniflux_resource_not_found")
     if exc.status_code == 409:
         return AppError(409, exc.message or "Miniflux 发生冲突", code="miniflux_conflict")
+    if normalized_feed_url and exc.status_code >= 500:
+        if _is_known_zhihu_empty_feed(normalized_feed_url) and "empty response body" in normalized_message:
+            return AppError(
+                422,
+                "知乎的 https://www.zhihu.com/rss 当前返回空内容，不是可用 RSS 地址。请改用具体知乎页面的 RSSHub 路由。",
+                code="feed_source_invalid",
+                meta={"feedUrl": normalized_feed_url},
+            )
+        if "empty response body" in normalized_message:
+            return AppError(
+                422,
+                "订阅源地址返回空内容，无法解析为 RSS，请检查链接是否正确。",
+                code="feed_source_invalid",
+                meta={"feedUrl": normalized_feed_url},
+            )
+        if any(
+            pattern in normalized_message
+            for pattern in (
+                "unable to fetch feed",
+                "unable to find subscriptions",
+                "invalid feed",
+                "unsupported feed",
+                "unsupported document",
+                "feed parser",
+                "parsing error",
+            )
+        ):
+            return AppError(
+                422,
+                "订阅源地址当前无法返回可解析的 RSS 内容，请检查链接是否有效。",
+                code="feed_source_invalid",
+                meta={"feedUrl": normalized_feed_url},
+            )
     if exc.status_code >= 500:
         return AppError(503, "Miniflux 服务不可用", code="miniflux_unavailable")
     return AppError(502, exc.message or "Miniflux 请求失败", code="miniflux_request_failed")
+
+
+def _is_known_zhihu_empty_feed(feed_url: str) -> bool:
+    parsed = urlparse(feed_url)
+    host = parsed.netloc.strip().lower()
+    path = parsed.path.strip().rstrip("/") or "/"
+    return host in {"www.zhihu.com", "zhihu.com"} and path == "/rss"
 
 
 async def _ensure_local_feed_from_remote(
@@ -1072,7 +1123,7 @@ async def discover_feeds(user, *, url: str) -> list[dict]:
             operation=lambda client: client.discover(url),
         )
     except MinifluxClientError as exc:
-        raise _map_miniflux_error(exc) from exc
+        raise _map_miniflux_error_with_context(exc, feed_url=url) from exc
 
     return [
         {
@@ -1165,7 +1216,7 @@ async def create_feed(
             ),
         )
     except MinifluxClientError as exc:
-        raise _map_miniflux_error(exc) from exc
+        raise _map_miniflux_error_with_context(exc, feed_url=feed_url) from exc
 
     local_feed = await _ensure_local_feed_from_remote(
         session,

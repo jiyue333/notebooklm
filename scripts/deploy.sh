@@ -29,6 +29,9 @@ CLI_PROXY_LOCAL_DIR="${CLI_PROXY_LOCAL_DIR:-$HOME/Documents/CliProxyAPI}"
 CLI_PROXY_REMOTE_DIR="${CLI_PROXY_REMOTE_DIR:-/opt/CliProxyAPI}"
 POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-notebooklm-postgres}"
 SITE_DOMAIN="${SITE_DOMAIN:-}"
+MIHOMO_SUBSCRIPTION_URL="${MIHOMO_SUBSCRIPTION_URL:-}"
+MIHOMO_MIXED_PORT="${MIHOMO_MIXED_PORT:-7890}"
+MIHOMO_CONTROLLER_PORT="${MIHOMO_CONTROLLER_PORT:-9090}"
 
 # ========== 远端服务分组 ==========
 
@@ -39,6 +42,7 @@ INFRA_SERVICES=(
   miniflux
   rsshub
   redis
+  mihomo
   minio
   kafka
   redis-exporter
@@ -94,6 +98,11 @@ preflight() {
 
   if [[ -z "$SITE_DOMAIN" ]]; then
     err "请在 .env 中设置 SITE_DOMAIN，例如 app.example.com"
+    exit 1
+  fi
+
+  if [[ -z "$MIHOMO_SUBSCRIPTION_URL" ]]; then
+    err "请在 .env 中设置 MIHOMO_SUBSCRIPTION_URL（建议使用 Clash 订阅 URL）"
     exit 1
   fi
 
@@ -162,6 +171,8 @@ sync_code() {
       echo "修补完成"
     fi
 PATCH_EOF
+
+  remote_patch_mihomo_config
 }
 
 sync_cli_proxy() {
@@ -196,6 +207,69 @@ sync_cli_proxy() {
   fi
 
   ok "CliProxyAPI 同步完成"
+
+  remote_patch_cli_proxy_config
+}
+
+remote_patch_mihomo_config() {
+  step "修补远端 Mihomo 配置"
+
+  local escaped_subscription_url
+  escaped_subscription_url="$(printf '%s' "$MIHOMO_SUBSCRIPTION_URL" | sed 's/[&|]/\\&/g')"
+
+  ssh_cmd bash <<-MIHOMO_EOF
+    set -euo pipefail
+
+    CONFIG_FILE="${REMOTE_DIR}/docker/mihomo/config.yaml"
+    if [[ ! -f "\$CONFIG_FILE" ]]; then
+      echo "错误：未找到 Mihomo 配置文件 \$CONFIG_FILE"
+      exit 1
+    fi
+
+    sed -i 's|__MIHOMO_SUBSCRIPTION_URL__|${escaped_subscription_url}|g' "\$CONFIG_FILE"
+
+    if grep -q '^mixed-port:' "\$CONFIG_FILE"; then
+      sed -i 's|^mixed-port:.*$|mixed-port: ${MIHOMO_MIXED_PORT}|g' "\$CONFIG_FILE"
+    else
+      printf 'mixed-port: %s\n' "${MIHOMO_MIXED_PORT}" >> "\$CONFIG_FILE"
+    fi
+
+    if grep -q '^external-controller:' "\$CONFIG_FILE"; then
+      sed -i 's|^external-controller:.*$|external-controller: 0.0.0.0:${MIHOMO_CONTROLLER_PORT}|g' "\$CONFIG_FILE"
+    else
+      printf 'external-controller: 0.0.0.0:%s\n' "${MIHOMO_CONTROLLER_PORT}" >> "\$CONFIG_FILE"
+    fi
+MIHOMO_EOF
+
+  ok "远端 Mihomo 配置已修补"
+}
+
+remote_patch_cli_proxy_config() {
+  step "修补远端 CliProxyAPI 配置"
+
+  ssh_cmd bash <<-CPA_EOF
+    set -euo pipefail
+
+    CONFIG_FILE="${CLI_PROXY_REMOTE_DIR}/config.yaml"
+    if [[ ! -f "\$CONFIG_FILE" ]]; then
+      echo "错误：未找到 CliProxyAPI 配置文件 \$CONFIG_FILE"
+      exit 1
+    fi
+
+    if grep -q '^auth-dir:' "\$CONFIG_FILE"; then
+      sed -i 's|^auth-dir:.*$|auth-dir: "/root/.cli-proxy-api"|g' "\$CONFIG_FILE"
+    else
+      printf 'auth-dir: "/root/.cli-proxy-api"\n' >> "\$CONFIG_FILE"
+    fi
+
+    if grep -q '^proxy-url:' "\$CONFIG_FILE"; then
+      sed -i 's|^proxy-url:.*$|proxy-url: "socks5://127.0.0.1:${MIHOMO_MIXED_PORT}"|g' "\$CONFIG_FILE"
+    else
+      printf 'proxy-url: "socks5://127.0.0.1:%s"\n' "${MIHOMO_MIXED_PORT}" >> "\$CONFIG_FILE"
+    fi
+CPA_EOF
+
+  ok "远端 CliProxyAPI 配置已修补"
 }
 
 # ========== CliProxyAPI ==========
@@ -552,6 +626,7 @@ remote_health() {
     check_http "Miniflux"      "http://localhost:8085/healthcheck"
     check_http "Grafana"       "http://localhost:3000/api/health"
     check_http "Prometheus"    "http://localhost:9090/-/healthy"
+    check_http "Mihomo"        "http://127.0.0.1:${MIHOMO_CONTROLLER_PORT}/version"
 
     echo ""
     echo "========== CliProxyAPI =========="
@@ -563,10 +638,10 @@ remote_health() {
     else
       fail "进程未运行"
     fi
-    if curl -fsSL --max-time 3 "http://localhost:\${CLI_PORT}/v0/management/get-auth-status" >/dev/null 2>&1; then
-      ok "HTTP 端口 \${CLI_PORT} 响应正常"
+    if bash -lc "exec 3<>/dev/tcp/127.0.0.1/\${CLI_PORT}" >/dev/null 2>&1; then
+      ok "TCP 端口 \${CLI_PORT} 监听正常"
     else
-      fail "HTTP 端口 \${CLI_PORT} 无响应"
+      fail "TCP 端口 \${CLI_PORT} 无响应"
     fi
 
     echo ""
@@ -613,6 +688,9 @@ usage() {
   DEPLOY_DIR             远程项目目录（默认 /opt/notebooklm）
   DEPLOY_SSH_PORT        SSH 端口（默认 22）
   SITE_DOMAIN            必填，生产环境域名（用于 Caddy 自动签发 HTTPS）
+  MIHOMO_SUBSCRIPTION_URL 必填，Mihomo 的 Clash 订阅 URL
+  MIHOMO_MIXED_PORT      Mihomo 本地混合代理端口（默认 7890）
+  MIHOMO_CONTROLLER_PORT Mihomo 本地控制端口（默认 9090）
   CLI_PROXY_LOCAL_DIR    本地 CliProxyAPI 目录（默认 ~/Documents/CliProxyAPI）
   CLI_PROXY_REMOTE_DIR   远程 CliProxyAPI 目录（默认 /opt/CliProxyAPI）
   POSTGRES_CONTAINER     远程 PostgreSQL 容器名（默认 notebooklm-postgres）
