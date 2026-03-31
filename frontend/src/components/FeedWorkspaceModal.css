@@ -141,6 +141,19 @@
     transform: translateY(-1px);
 }
 
+.feed-workspace-add-btn:disabled,
+.feed-workspace-secondary-btn:disabled,
+.feed-workspace-load-more:disabled,
+.feed-workspace-feed-item-actions button:disabled,
+.feed-workspace-expand-btn:disabled {
+    opacity: 0.48;
+    cursor: not-allowed;
+    transform: none;
+    color: var(--meta-color);
+    border-color: color-mix(in srgb, var(--border-color), transparent 26%);
+    background: color-mix(in srgb, var(--bg-elevated), transparent 8%);
+}
+
 .feed-workspace-toggle-icon-btn {
     width: 42px;
     height: 42px;

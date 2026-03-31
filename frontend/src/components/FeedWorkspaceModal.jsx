@@ -131,6 +131,22 @@ function getEntryPreviewText(entry) {
     return '暂无摘要';
 }
 
+function sortEntriesByPublishedAt(items) {
+    return [...items].sort((left, right) => {
+        const leftTime = new Date(left?.publishedAt || 0).getTime();
+        const rightTime = new Date(right?.publishedAt || 0).getTime();
+        return rightTime - leftTime;
+    });
+}
+
+function mergeEntries(currentEntries, nextEntries) {
+    const entryMap = new Map(currentEntries.map((entry) => [String(entry.entryId), entry]));
+    nextEntries.forEach((entry) => {
+        entryMap.set(String(entry.entryId), entry);
+    });
+    return sortEntriesByPublishedAt(Array.from(entryMap.values()));
+}
+
 export default function FeedWorkspaceModal({
     onClose,
     onFeedsChanged,
@@ -150,7 +166,6 @@ export default function FeedWorkspaceModal({
     const [entrySearch, setEntrySearch] = useState('');
     const [entries, setEntries] = useState([]);
     const [entriesMeta, setEntriesMeta] = useState({ total: 0, unread: 0 });
-    const [allEntriesTotalHint, setAllEntriesTotalHint] = useState(0);
     const [selectedEntryIds, setSelectedEntryIds] = useState([]);
     const [selectedEntryId, setSelectedEntryId] = useState(null);
     const [expandedEntryId, setExpandedEntryId] = useState(null);
@@ -160,12 +175,14 @@ export default function FeedWorkspaceModal({
     const [isLoadingFeeds, setIsLoadingFeeds] = useState(false);
     const [isLoadingEntries, setIsLoadingEntries] = useState(false);
     const [isLoadingMoreEntries, setIsLoadingMoreEntries] = useState(false);
+    const [isLoadingHistory, setIsLoadingHistory] = useState(false);
     const [isImporting, setIsImporting] = useState(false);
     const [isMarkingRead, setIsMarkingRead] = useState(false);
     const [isRefreshingFeed, setIsRefreshingFeed] = useState(false);
     const [loadingContentEntryIds, setLoadingContentEntryIds] = useState([]);
     const [loadingSummaryEntryIds, setLoadingSummaryEntryIds] = useState([]);
     const [feedback, setFeedback] = useState('');
+    const [historyExhaustedByFeed, setHistoryExhaustedByFeed] = useState({});
     const [showAddFeedModal, setShowAddFeedModal] = useState(false);
     const [showImportModal, setShowImportModal] = useState(false);
     const feedSearchInputRef = useRef(null);
@@ -276,7 +293,6 @@ export default function FeedWorkspaceModal({
         if (!selectedFeedId && !isGlobalSearch) {
             setEntries([]);
             setEntriesMeta({ total: 0, unread: 0 });
-            setAllEntriesTotalHint(0);
             setSelectedEntryId(null);
             setExpandedEntryId(null);
             return;
@@ -305,7 +321,6 @@ export default function FeedWorkspaceModal({
                     total: matchedItems.length,
                     unread: Number(payload?.meta?.unread || 0),
                 });
-                setAllEntriesTotalHint(0);
                 setSelectedEntryIds([]);
                 setSelectedEntryId(matchedItems[0]?.entryId || null);
                 setExpandedEntryId(null);
@@ -314,31 +329,16 @@ export default function FeedWorkspaceModal({
 
             const offset = append ? entries.length : 0;
             const status = showUnreadOnly ? 'unread' : 'all';
-            const [payload, allPayload] = await Promise.all([
-                appApi.feeds.listEntries({
-                    feedId: selectedFeedId,
-                    status,
-                    limit: ENTRY_PAGE_SIZE,
-                    offset,
-                    search: normalizedSearch,
-                }),
-                !append && showUnreadOnly && !isGlobalSearch
-                    ? appApi.feeds.listEntries({
-                        feedId: selectedFeedId,
-                        status: 'all',
-                        limit: 1,
-                        offset: 0,
-                    })
-                    : Promise.resolve(null),
-            ]);
+            const payload = await appApi.feeds.listEntries({
+                feedId: selectedFeedId,
+                status,
+                limit: ENTRY_PAGE_SIZE,
+                offset,
+                search: normalizedSearch,
+            });
             const nextItems = payload.items || [];
             setEntries((prev) => (append ? [...prev, ...nextItems] : nextItems));
             setEntriesMeta(payload.meta || { total: 0, unread: 0 });
-            if (!append && showUnreadOnly && !isGlobalSearch) {
-                setAllEntriesTotalHint(Number(allPayload?.meta?.total || 0));
-            } else if (!showUnreadOnly || isGlobalSearch) {
-                setAllEntriesTotalHint(0);
-            }
             if (!append) {
                 setSelectedEntryIds([]);
                 setSelectedEntryId(nextItems[0]?.entryId || null);
@@ -418,12 +418,8 @@ export default function FeedWorkspaceModal({
     const selectedCount = selectedEntryIds.length;
     const allCurrentChecked = visibleEntryIds.length > 0 && visibleEntryIds.every((entryId) => selectedEntryIds.includes(entryId));
     const hasMoreEntries = entries.length < Number(entriesMeta.total || 0);
-    const hiddenHistoryCount = Math.max(0, Number(allEntriesTotalHint || 0) - Number(entriesMeta.total || 0));
-    const hasHiddenHistory = showUnreadOnly && !normalizedEntrySearch && hiddenHistoryCount > 0;
-    const onlyLimitedBySource = showUnreadOnly
-        && !normalizedEntrySearch
-        && filteredEntries.length > 0
-        && !hasHiddenHistory;
+    const canLoadHistory = Boolean(selectedFeedId) && !normalizedEntrySearch;
+    const historyExhausted = Boolean(selectedFeedId && historyExhaustedByFeed[selectedFeedId]);
     const noEntryMessage = normalizedEntrySearch ? '全订阅源没有匹配文章' : '暂无文章';
     const currentEntryIndex = filteredEntries.findIndex((item) => item.entryId === selectedEntryId);
     const hasPrevEntry = currentEntryIndex > 0;
@@ -487,6 +483,48 @@ export default function FeedWorkspaceModal({
             setLoadingSummaryEntryIds((previous) => previous.filter((id) => id !== entryId));
         }
     }, [entrySummaryMap, loadingSummaryEntryIds]);
+
+    const loadHistoricalEntries = useCallback(async () => {
+        if (!selectedFeedId) return;
+
+        try {
+            setIsLoadingHistory(true);
+            const payload = await appApi.feeds.loadHistory(selectedFeedId);
+            const nextItems = payload.items || [];
+            const loadedCount = Number(payload?.meta?.loadedCount || nextItems.length || 0);
+            const unreadTotal = Number(payload?.meta?.unread || entriesMeta.unread || 0);
+
+            if (loadedCount <= 0 || nextItems.length === 0) {
+                setHistoryExhaustedByFeed((previous) => ({ ...previous, [selectedFeedId]: true }));
+                setFeedback(payload.message || '没有更多历史文章');
+                return;
+            }
+
+            setEntries((previous) => mergeEntries(previous, nextItems));
+            setEntriesMeta((previous) => ({
+                total: Number(previous.total || previous.length || 0) + loadedCount,
+                unread: unreadTotal,
+            }));
+            setHistoryExhaustedByFeed((previous) => ({ ...previous, [selectedFeedId]: false }));
+            setFeedback(payload.message || `已加载 ${loadedCount} 篇历史文章`);
+            await loadFeedsAndMeta();
+            onFeedsChanged?.();
+        } catch (err) {
+            setFeedback(err.message || '加载历史文章失败');
+        } finally {
+            setIsLoadingHistory(false);
+        }
+    }, [entriesMeta.unread, loadFeedsAndMeta, onFeedsChanged, selectedFeedId]);
+
+    useEffect(() => {
+        if (!selectedFeedId) return;
+        setHistoryExhaustedByFeed((previous) => {
+            if (previous[selectedFeedId] === false || previous[selectedFeedId] === undefined) {
+                return previous;
+            }
+            return { ...previous, [selectedFeedId]: false };
+        });
+    }, [selectedFeedId]);
 
     const handleFocusEntry = useCallback((entryId) => {
         setSelectedEntryId(entryId);
@@ -1076,19 +1114,15 @@ export default function FeedWorkspaceModal({
                                         {isLoadingMoreEntries ? '加载中...' : '查看更多文章'}
                                     </button>
                                 ) : null}
-                                {!hasMoreEntries && hasHiddenHistory ? (
+                                {!hasMoreEntries && canLoadHistory ? (
                                     <button
                                         type="button"
                                         className="feed-workspace-load-more"
-                                        onClick={() => setShowUnreadOnly(false)}
+                                        onClick={() => void loadHistoricalEntries()}
+                                        disabled={isLoadingHistory || historyExhausted}
                                     >
-                                        查看更多历史文章（{hiddenHistoryCount} 篇）
+                                        {isLoadingHistory ? '拉取中...' : (historyExhausted ? '没有更多历史文章' : '查看更多历史文章')}
                                     </button>
-                                ) : null}
-                                {!hasMoreEntries && onlyLimitedBySource ? (
-                                    <p className="feed-workspace-empty">
-                                        当前订阅源共 {Number(entriesMeta.total || entries.length)} 篇文章，已全部显示
-                                    </p>
                                 ) : null}
                             </div>
                         </section>

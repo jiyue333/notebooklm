@@ -96,6 +96,24 @@ async def refresh_feed_endpoint(
     return success_response(message="刷新任务已触发")
 
 
+@router.post("/{feed_id}/history/load")
+async def load_feed_history_endpoint(
+    feed_id: str,
+    current_user=Depends(current_user_dep),
+    session: AsyncSession = Depends(db_session_dep),
+):
+    items, meta = await service.load_feed_history(
+        session,
+        user=current_user,
+        local_feed_id=feed_id,
+    )
+    return success_response(
+        items=items,
+        meta=meta,
+        message="历史文章加载完成" if items else "没有更多历史文章",
+    )
+
+
 @router.get("/categories")
 async def list_categories_endpoint(
     current_user=Depends(current_user_dep),
@@ -188,10 +206,11 @@ async def get_entry_endpoint(
 async def stream_entry_summary_endpoint(
     entry_id: int,
     current_user=Depends(current_user_dep),
+    session: AsyncSession = Depends(db_session_dep),
 ):
     async def _stream() -> AsyncIterator[str]:
         try:
-            entry = await service.get_entry_for_import(user=current_user, entry_id=entry_id)
+            entry = await service.get_entry_for_import(session, user=current_user, entry_id=entry_id)
             if not isinstance(entry, dict):
                 yield build_sse_error_payload(
                     AppError(404, "未找到对应 RSS 条目", code="feed_entry_not_found"),
@@ -267,8 +286,10 @@ async def stream_entry_summary_endpoint(
 async def update_entries_status_endpoint(
     payload: FeedEntriesStatusUpdateRequest,
     current_user=Depends(current_user_dep),
+    session: AsyncSession = Depends(db_session_dep),
 ):
     await service.update_entries_status(
+        session,
         user=current_user,
         entry_ids=payload.entryIds,
         status=payload.status,
@@ -280,8 +301,9 @@ async def update_entries_status_endpoint(
 async def toggle_entry_bookmark_endpoint(
     entry_id: int,
     current_user=Depends(current_user_dep),
+    session: AsyncSession = Depends(db_session_dep),
 ):
-    await service.toggle_entry_bookmark(user=current_user, entry_id=entry_id)
+    await service.toggle_entry_bookmark(session, user=current_user, entry_id=entry_id)
     return success_response(message="星标状态已切换")
 
 

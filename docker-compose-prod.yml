@@ -178,11 +178,28 @@ services:
     image: notebooklm-frontend:latest
     container_name: notebooklm-frontend
     restart: unless-stopped
-    ports:
-      - "${FRONTEND_PORT:-80}:80"
     depends_on:
       backend:
         condition: service_healthy
+    networks:
+      - notebooklm
+
+  caddy:
+    image: caddy:2.9.1-alpine
+    container_name: notebooklm-caddy
+    restart: unless-stopped
+    depends_on:
+      - frontend
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?请在 .env 中设置 SITE_DOMAIN，例如 app.example.com}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
     networks:
       - notebooklm
 
@@ -455,6 +472,8 @@ volumes:
   pgadmin_data:
   redis_data:
   minio_data:
+  caddy_data:
+  caddy_config:
   tempo_data:
   loki_data:
   promtail_data:

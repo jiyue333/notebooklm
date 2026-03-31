@@ -58,3 +58,4 @@ dist-ssr
 .playwright-cli/
 tmp*.png
 image*.png
+plan.md

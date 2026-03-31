@@ -439,7 +439,7 @@ async def import_rss_entries_endpoint(
     skipped_duplicate = 0
 
     for entry_id in payload.entryIds:
-        entry = await feeds_service.get_entry_for_import(user=current_user, entry_id=entry_id)
+        entry = await feeds_service.get_entry_for_import(session, user=current_user, entry_id=entry_id)
         if not isinstance(entry, dict):
             continue
 
@@ -519,7 +519,7 @@ async def import_rss_entries_endpoint(
 
     if imported_entry_ids:
         try:
-            await feeds_service.mark_entries_as_read(user=current_user, entry_ids=imported_entry_ids)
+            await feeds_service.mark_entries_as_read(session, user=current_user, entry_ids=imported_entry_ids)
         except Exception:
             pass
 

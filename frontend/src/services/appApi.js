@@ -953,6 +953,68 @@ const mockProvider = {
         return { success: true };
     },
 
+    async loadFeedHistory(feedId) {
+        await wait(260);
+        const feed = (mockState.feeds || []).find((item) => item.id === feedId);
+        if (!feed) {
+            throw new Error('未找到对应订阅源');
+        }
+        const existingEntries = (mockState.feedEntries || [])
+            .filter((entry) => entry.feedId === feedId)
+            .sort((a, b) => new Date(b.publishedAt || 0).getTime() - new Date(a.publishedAt || 0).getTime());
+        const historyCount = existingEntries.filter((entry) => Number(entry.entryId) < 0).length;
+        if (historyCount >= 9) {
+            return {
+                items: [],
+                meta: {
+                    loadedCount: 0,
+                    unread: (mockState.feedEntries || []).filter((entry) => entry.status === 'unread').length,
+                },
+                message: '没有更多历史文章',
+            };
+        }
+
+        const oldestTime = new Date(existingEntries.at(-1)?.publishedAt || Date.now()).getTime();
+        const newItems = Array.from({ length: 3 }, (_, index) => {
+            const publishedAt = new Date(oldestTime - (index + 1) * 1000 * 60 * 60 * 24 * 7).toISOString();
+            const issue = historyCount + index + 1;
+            return {
+                entryId: -(Date.now() + index),
+                feedId,
+                minifluxFeedId: feed.minifluxFeedId,
+                feedTitle: feed.title,
+                title: `历史文章示例 ${issue}`,
+                url: `${feed.siteUrl || feed.feedUrl}#history-${issue}`,
+                author: feed.title,
+                publishedAt,
+                readingTime: 6,
+                status: 'unread',
+                starred: false,
+                aiSummary: `这是 ${feed.title} 的历史文章示例摘要 ${issue}。`,
+                contentPreview: `这是 ${feed.title} 的历史文章示例内容 ${issue}，用于本地 mock 模式下演示“查看更多历史文章”。`,
+                contentHtml: `<p>这是 <strong>${feed.title}</strong> 的历史文章示例内容 ${issue}。</p>`,
+                hash: `mock-history-${feedId}-${issue}`,
+            };
+        });
+
+        mockState.feedEntries = [...(mockState.feedEntries || []), ...newItems]
+            .sort((a, b) => new Date(b.publishedAt || 0).getTime() - new Date(a.publishedAt || 0).getTime());
+        mockState.feeds = (mockState.feeds || []).map((item) => (
+            item.id === feedId
+                ? { ...item, unreadCount: Number(item.unreadCount || 0) + newItems.length }
+                : item
+        ));
+
+        return {
+            items: clone(newItems),
+            meta: {
+                loadedCount: newItems.length,
+                unread: (mockState.feedEntries || []).filter((entry) => entry.status === 'unread').length,
+            },
+            message: `已加载 ${newItems.length} 篇历史文章`,
+        };
+    },
+
     async listFeedEntries({ feedId = null, status = 'unread', limit = 100, offset = 0, search = '' }) {
         await wait(220);
         const normalizedSearch = search.trim().toLowerCase();
@@ -1936,6 +1998,7 @@ const backendProvider = {
         const payload = await request('/feeds', {
             method: 'POST',
             body: { feedUrl, categoryName },
+            timeoutMs: 60_000,
         });
         return payload.item;
     },
@@ -1948,6 +2011,15 @@ const backendProvider = {
     async refreshFeed(feedId) {
         await request(`/feeds/${feedId}/refresh`, { method: 'PUT' });
         return { success: true };
+    },
+
+    async loadFeedHistory(feedId) {
+        const payload = await request(`/feeds/${feedId}/history/load`, { method: 'POST' });
+        return {
+            items: payload.items || [],
+            meta: payload.meta || {},
+            message: payload.message || '',
+        };
     },
 
     async listFeedEntries({ feedId = null, status = 'unread', limit = 100, offset = 0, categoryName = '', search = '' }) {
@@ -2257,6 +2329,7 @@ export const appApi = {
         create: provider.createFeed,
         remove: provider.deleteFeed,
         refresh: provider.refreshFeed,
+        loadHistory: provider.loadFeedHistory,
         listEntries: provider.listFeedEntries,
         getEntry: provider.getFeedEntry,
         streamEntrySummary: provider.streamFeedEntrySummary,

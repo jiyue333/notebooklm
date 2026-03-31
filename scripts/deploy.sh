@@ -27,11 +27,45 @@ fi
 
 CLI_PROXY_LOCAL_DIR="${CLI_PROXY_LOCAL_DIR:-$HOME/Documents/CliProxyAPI}"
 CLI_PROXY_REMOTE_DIR="${CLI_PROXY_REMOTE_DIR:-/opt/CliProxyAPI}"
+POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-notebooklm-postgres}"
+SITE_DOMAIN="${SITE_DOMAIN:-}"
+
+# ========== 远端服务分组 ==========
+
+INFRA_SERVICES=(
+  postgres
+  postgres-init-miniflux
+  pgadmin
+  miniflux
+  rsshub
+  redis
+  minio
+  kafka
+  redis-exporter
+  kafka-exporter
+  postgres-exporter
+  node-exporter
+  otel-collector
+  tempo
+  loki
+  promtail
+  prometheus
+  grafana
+)
+
+APP_SERVICES=(
+  backend
+  worker
+  scheduler
+  frontend
+  caddy
+)
 
 # ========== 工具函数 ==========
 
 info()  { echo -e "\033[1;34m[INFO]\033[0m  $*"; }
 ok()    { echo -e "\033[1;32m[OK]\033[0m    $*"; }
+warn()  { echo -e "\033[1;33m[WARN]\033[0m  $*"; }
 err()   { echo -e "\033[1;31m[ERROR]\033[0m $*" >&2; }
 step()  { echo -e "\n\033[1;36m===> $*\033[0m"; }
 
@@ -58,6 +92,11 @@ preflight() {
     exit 1
   fi
 
+  if [[ -z "$SITE_DOMAIN" ]]; then
+    err "请在 .env 中设置 SITE_DOMAIN，例如 app.example.com"
+    exit 1
+  fi
+
   for cmd in rsync ssh; do
     if ! command -v "$cmd" &>/dev/null; then
       err "缺少命令: $cmd"
@@ -76,12 +115,18 @@ preflight() {
   ok "SSH 连接正常"
 }
 
-# ========== 同步代码 ==========
+# ========== 同步 ==========
+
+remote_ensure_dirs() {
+  step "确保远程目录存在"
+  ssh_cmd "mkdir -p ${REMOTE_DIR} ${CLI_PROXY_REMOTE_DIR}"
+  ok "远程目录已就绪"
+}
 
 sync_code() {
   step "同步代码到 ${REMOTE_HOST}:${REMOTE_DIR}"
 
-  ssh_cmd "mkdir -p ${REMOTE_DIR}"
+  remote_ensure_dirs
 
   rsync -az --delete \
     -e "ssh ${SSH_OPTS}" \
@@ -104,10 +149,10 @@ sync_code() {
 
   ok "代码同步完成"
 
-  # 覆盖服务器 .env 中需要与本地不同的配置项
-  # Docker 容器内无法用 127.0.0.1 访问宿主机，统一替换为 host.docker.internal
   step "修补服务器 .env（将 127.0.0.1 替换为 host.docker.internal）"
   ssh_cmd bash <<-PATCH_EOF
+    set -euo pipefail
+
     ENV_FILE="${REMOTE_DIR}/.env"
     if [[ ! -f "\$ENV_FILE" ]]; then
       echo "警告：\$ENV_FILE 不存在，跳过修补"
@@ -119,8 +164,6 @@ sync_code() {
 PATCH_EOF
 }
 
-# ========== 同步并启动 CliProxyAPI ==========
-
 sync_cli_proxy() {
   step "同步 CliProxyAPI 到 ${REMOTE_HOST}:${CLI_PROXY_REMOTE_DIR}"
 
@@ -130,9 +173,8 @@ sync_cli_proxy() {
     exit 1
   fi
 
-  ssh_cmd "mkdir -p ${CLI_PROXY_REMOTE_DIR}"
+  remote_ensure_dirs
 
-  # 同步所有文件（配置、数据等），跳过本地二进制（macOS 格式，无法在 Linux 上运行）
   rsync -az --delete \
     -e "ssh ${SSH_OPTS}" \
     --exclude='.DS_Store' \
@@ -140,7 +182,6 @@ sync_cli_proxy() {
     --exclude='cli-proxy-api' \
     "${CLI_PROXY_LOCAL_DIR}/" "${REMOTE_HOST}:${CLI_PROXY_REMOTE_DIR}/"
 
-  # 同步本地 auth 目录（~/.cli-proxy-api）到服务器同路径
   local local_auth_dir="${HOME}/.cli-proxy-api"
   if [[ -d "$local_auth_dir" ]]; then
     info "同步 auth 目录 ${local_auth_dir} ..."
@@ -157,10 +198,11 @@ sync_cli_proxy() {
   ok "CliProxyAPI 同步完成"
 }
 
+# ========== CliProxyAPI ==========
+
 start_cli_proxy() {
   step "启动 CliProxyAPI（${CLI_PROXY_REMOTE_DIR}）"
 
-  # 从本地二进制读取版本号，确保服务器与本地版本一致
   local local_binary="${CLI_PROXY_LOCAL_DIR}/cli-proxy-api"
   local version=""
   if [[ -f "$local_binary" ]]; then
@@ -178,8 +220,8 @@ start_cli_proxy() {
     REMOTE_DIR="${CLI_PROXY_REMOTE_DIR}"
     BINARY="\${REMOTE_DIR}/cli-proxy-api"
     TARGET_VERSION="${version}"
+    HEALTH_PATH="/v0/management/get-auth-status"
 
-    # 检测服务器架构
     ARCH=\$(uname -m)
     case "\$ARCH" in
       x86_64)  GO_ARCH="amd64" ;;
@@ -190,7 +232,6 @@ start_cli_proxy() {
         ;;
     esac
 
-    # 检查服务器上的版本是否已经匹配
     CURRENT_VERSION=""
     if [[ -f "\$BINARY" ]] && file "\$BINARY" 2>/dev/null | grep -q "ELF"; then
       CURRENT_VERSION=\$("\$BINARY" --version 2>&1 | grep -oE 'Version: [^,]+' | sed 's/Version: //' || true)
@@ -209,110 +250,232 @@ start_cli_proxy() {
 
     chmod +x "\$BINARY"
 
-    # 停止占用目标端口的所有进程（比 pgrep 更可靠）
     CLI_PORT=\$(grep -E "^\s*port\s*:" "\${REMOTE_DIR}/config.yaml" 2>/dev/null | awk '{print \$2}' | tr -d '"' || echo "8317")
     CLI_PORT=\${CLI_PORT:-8317}
     echo "检查端口 \$CLI_PORT 是否被占用..."
-    PORT_PID=\$(fuser "\${CLI_PORT}/tcp" 2>/dev/null | tr -d ' ' || true)
+    PORT_PID=\$(fuser "\${CLI_PORT}/tcp" 2>/dev/null | tr ' ' '\n' | awk 'NF { print; exit }' || true)
     if [[ -n "\$PORT_PID" ]]; then
       echo "停止占用端口 \${CLI_PORT} 的进程 PID=\${PORT_PID} ..."
-      kill \$PORT_PID 2>/dev/null || true
+      kill "\$PORT_PID" 2>/dev/null || true
       sleep 1
     fi
-    # 兜底：按进程名杀
+
     OLD_PID=\$(pgrep -f "\${REMOTE_DIR}/cli-proxy-api" || true)
     if [[ -n "\$OLD_PID" ]]; then
       kill \$OLD_PID 2>/dev/null || true
       sleep 1
     fi
 
-    # 后台启动
     cd "\$REMOTE_DIR"
     nohup ./cli-proxy-api >> "\${REMOTE_DIR}/cli-proxy-api.log" 2>&1 &
     NEW_PID=\$!
     sleep 1
 
-    if kill -0 "\$NEW_PID" 2>/dev/null; then
-      echo "CliProxyAPI v\${TARGET_VERSION} 已启动，PID=\$NEW_PID"
-      echo "日志: \${REMOTE_DIR}/cli-proxy-api.log"
-    else
+    if ! kill -0 "\$NEW_PID" 2>/dev/null; then
       echo "错误：CliProxyAPI 启动后立即退出，请检查日志："
       tail -20 "\${REMOTE_DIR}/cli-proxy-api.log" || true
       exit 1
     fi
+
+    for _ in {1..15}; do
+      if curl -fsSL --max-time 3 "http://127.0.0.1:\${CLI_PORT}\${HEALTH_PATH}" >/dev/null 2>&1; then
+        echo "CliProxyAPI v\${TARGET_VERSION} 已启动，PID=\$NEW_PID"
+        echo "日志: \${REMOTE_DIR}/cli-proxy-api.log"
+        exit 0
+      fi
+      if ! kill -0 "\$NEW_PID" 2>/dev/null; then
+        echo "错误：CliProxyAPI 进程已退出，请检查日志："
+        tail -50 "\${REMOTE_DIR}/cli-proxy-api.log" || true
+        exit 1
+      fi
+      sleep 1
+    done
+
+    echo "错误：CliProxyAPI 启动后未通过健康检查，请检查日志："
+    tail -50 "\${REMOTE_DIR}/cli-proxy-api.log" || true
+    exit 1
 PROXY_EOF
 
   ok "CliProxyAPI 启动完成"
 }
 
-# ========== 远程构建并部署 ==========
+# ========== 远端 Compose 原子操作 ==========
 
-remote_deploy() {
-  step "远程构建并部署"
-
-  ssh_cmd bash <<-DEPLOY_EOF
-    set -euo pipefail
-    cd "${REMOTE_DIR}"
-
-    echo "[1/3] 构建镜像..."
-    docker compose -f ${COMPOSE_FILE} build --parallel
-
-    echo "[2/3] 停止旧服务..."
-    docker compose -f ${COMPOSE_FILE} down --timeout 30
-
-    echo "[3/3] 启动服务..."
-    docker compose -f ${COMPOSE_FILE} up -d
-
-    echo ""
-    echo "========== 服务状态 =========="
-    docker compose -f ${COMPOSE_FILE} ps
-DEPLOY_EOF
-
-  ok "部署完成"
+remote_compose_build() {
+  step "远程构建镜像"
+  ssh_cmd "cd ${REMOTE_DIR} && docker compose -f ${COMPOSE_FILE} build --parallel"
+  ok "远程镜像构建完成"
 }
 
-# ========== 清理并重新部署（清空所有 volumes） ==========
+remote_compose_down() {
+  step "停止远程服务"
+  ssh_cmd "cd ${REMOTE_DIR} && docker compose -f ${COMPOSE_FILE} down --timeout 30"
+  ok "远程服务已停止"
+}
 
-remote_clean_deploy() {
-  step "清理服务器数据并重新部署（将删除所有 volumes！）"
-
-  ssh_cmd bash <<-CLEAN_EOF
+remote_compose_down_volumes() {
+  step "停止远程服务并删除 volumes"
+  ssh_cmd bash <<-DOWN_EOF
     set -euo pipefail
     cd "${REMOTE_DIR}"
-
-    echo "[1/4] 停止所有服务并删除 volumes..."
     docker compose -f ${COMPOSE_FILE} down --volumes --timeout 30
     docker image prune -f
+DOWN_EOF
+  ok "远程 volumes 已清理"
+}
 
-    echo "[2/4] 构建镜像..."
-    docker compose -f ${COMPOSE_FILE} build --parallel
+remote_bootstrap_postgres() {
+  step "启动 PostgreSQL"
 
-    echo "[3/4] 启动服务..."
-    docker compose -f ${COMPOSE_FILE} up -d
+  ssh_cmd bash <<-POSTGRES_EOF
+    set -euo pipefail
+    cd "${REMOTE_DIR}"
 
-    echo "[4/4] 等待服务就绪..."
-    sleep 5
+    if [[ -f .env ]]; then
+      set -a
+      # shellcheck source=/dev/null
+      source ./.env
+      set +a
+    fi
 
+    PGUSER_VAL="\${POSTGRES_USER:-postgres}"
+    PGPASSWORD_VAL="\${POSTGRES_PASSWORD:-postgres}"
+
+    docker compose -f ${COMPOSE_FILE} up -d postgres
+
+    for _ in {1..60}; do
+      if docker exec -e PGPASSWORD="\$PGPASSWORD_VAL" ${POSTGRES_CONTAINER} \
+        psql -U "\$PGUSER_VAL" -d postgres -tAc "SELECT 1" >/dev/null 2>&1; then
+        echo "PostgreSQL 已就绪"
+        exit 0
+      fi
+      sleep 2
+    done
+
+    echo "错误：等待 PostgreSQL 就绪超时"
+    exit 1
+POSTGRES_EOF
+
+  ok "PostgreSQL 已启动"
+}
+
+remote_ensure_app_db() {
+  step "确保主数据库存在"
+
+  ssh_cmd bash <<-DB_EOF
+    set -euo pipefail
+    cd "${REMOTE_DIR}"
+
+    if [[ -f .env ]]; then
+      set -a
+      # shellcheck source=/dev/null
+      source ./.env
+      set +a
+    fi
+
+    PGDB_VAL="\${POSTGRES_DB:-notebooklm}"
+    PGUSER_VAL="\${POSTGRES_USER:-postgres}"
+    PGPASSWORD_VAL="\${POSTGRES_PASSWORD:-postgres}"
+
+    EXISTS=\$(docker exec -e PGPASSWORD="\$PGPASSWORD_VAL" ${POSTGRES_CONTAINER} \
+      psql -U "\$PGUSER_VAL" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='\$PGDB_VAL'")
+
+    if [[ "\$EXISTS" == "1" ]]; then
+      echo "数据库 \$PGDB_VAL 已存在"
+      exit 0
+    fi
+
+    echo "数据库 \$PGDB_VAL 不存在，开始创建..."
+    docker exec -e PGPASSWORD="\$PGPASSWORD_VAL" ${POSTGRES_CONTAINER} \
+      psql -U "\$PGUSER_VAL" -d postgres -c "CREATE DATABASE \"\$PGDB_VAL\";"
+DB_EOF
+
+  ok "主数据库已就绪"
+}
+
+remote_up_infra() {
+  step "启动基础服务"
+
+  local services
+  services="${INFRA_SERVICES[*]}"
+
+  ssh_cmd bash <<-INFRA_EOF
+    set -euo pipefail
+    cd "${REMOTE_DIR}"
+    docker compose -f ${COMPOSE_FILE} up -d --force-recreate --remove-orphans ${services}
+INFRA_EOF
+
+  ok "基础服务已启动"
+}
+
+remote_up_app() {
+  step "启动应用服务"
+
+  local services
+  services="${APP_SERVICES[*]}"
+
+  ssh_cmd bash <<-APP_EOF
+    set -euo pipefail
+    cd "${REMOTE_DIR}"
+    docker compose -f ${COMPOSE_FILE} up -d --force-recreate --remove-orphans ${services}
+APP_EOF
+
+  ok "应用服务已启动"
+}
+
+remote_up_all() {
+  step "覆盖式启动全部 Compose 服务"
+
+  ssh_cmd bash <<-UP_EOF
+    set -euo pipefail
+    cd "${REMOTE_DIR}"
+    docker compose -f ${COMPOSE_FILE} up -d --force-recreate --remove-orphans
     echo ""
     echo "========== 服务状态 =========="
     docker compose -f ${COMPOSE_FILE} ps
-CLEAN_EOF
+UP_EOF
 
-  ok "清理部署完成"
+  ok "全部 Compose 服务已启动"
 }
 
-# ========== 回滚：使用已有镜像重启 ==========
+remote_restart_compose() {
+  step "重启 Compose 服务"
+  ssh_cmd "cd ${REMOTE_DIR} && docker compose -f ${COMPOSE_FILE} restart"
+  ok "Compose 服务已重启"
+}
+
+# ========== 远端组合命令 ==========
+
+remote_deploy() {
+  remote_compose_build
+  remote_compose_down
+  remote_bootstrap_postgres
+  remote_ensure_app_db
+  remote_up_all
+}
+
+remote_clean_deploy() {
+  remote_compose_down_volumes
+  remote_compose_build
+  remote_bootstrap_postgres
+  remote_ensure_app_db
+  remote_up_all
+}
+
+remote_recover() {
+  remote_bootstrap_postgres
+  remote_ensure_app_db
+  remote_up_all
+}
 
 remote_rollback() {
-  step "回滚（使用上一次镜像重启）"
+  step "回滚（使用已有镜像重启）"
 
   ssh_cmd bash <<-ROLLBACK_EOF
     set -euo pipefail
     cd "${REMOTE_DIR}"
-
     docker compose -f ${COMPOSE_FILE} down --timeout 30
-    docker compose -f ${COMPOSE_FILE} up -d --no-build
-
+    docker compose -f ${COMPOSE_FILE} up -d --no-build --force-recreate --remove-orphans
     echo ""
     echo "========== 服务状态 =========="
     docker compose -f ${COMPOSE_FILE} ps
@@ -356,6 +519,12 @@ remote_health() {
     echo ""
     echo "========== Docker 容器状态 =========="
     cd "${REMOTE_DIR}"
+    if [[ -f .env ]]; then
+      set -a
+      # shellcheck source=/dev/null
+      source ./.env
+      set +a
+    fi
     docker compose -f ${COMPOSE_FILE} ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
 
     echo ""
@@ -371,7 +540,15 @@ remote_health() {
     }
 
     check_http "Backend API"   "http://localhost:8080/api/health"
-    check_http "Frontend"      "http://localhost:80"
+    if [[ -n "\${SITE_DOMAIN:-}" ]]; then
+      if curl -fsSL --max-time 5 -H "Host: \${SITE_DOMAIN}" "http://127.0.0.1/" >/dev/null 2>&1; then
+        ok "Frontend / Caddy  (http://127.0.0.1/ Host=\${SITE_DOMAIN})"
+      else
+        fail "Frontend / Caddy  (http://127.0.0.1/ Host=\${SITE_DOMAIN})"
+      fi
+    else
+      check_http "Frontend" "http://localhost:80"
+    fi
     check_http "Miniflux"      "http://localhost:8085/healthcheck"
     check_http "Grafana"       "http://localhost:3000/api/health"
     check_http "Prometheus"    "http://localhost:9090/-/healthy"
@@ -411,27 +588,38 @@ usage() {
   cat <<'EOF'
 =============== deploy.sh ===============
 用法:
-  ./scripts/deploy.sh deploy          完整部署（同步代码 + 构建 + 启动）
-  ./scripts/deploy.sh clean-deploy    清空所有数据后全新部署（⚠️ 删除 volumes！）
-  ./scripts/deploy.sh sync            仅同步代码到服务器
-  ./scripts/deploy.sh build           仅远程构建镜像（不重启）
-  ./scripts/deploy.sh restart         重启所有服务（不重新构建）
-  ./scripts/deploy.sh rollback        回滚（使用已有镜像重启）
-  ./scripts/deploy.sh cli-proxy             同步并重启 CliProxyAPI
-  ./scripts/deploy.sh status               查看远程服务状态
-  ./scripts/deploy.sh health               全面健康检查（Docker + HTTP + CLI proxy + 资源）
-  ./scripts/deploy.sh logs [service]       查看 Docker 服务日志
-  ./scripts/deploy.sh proxy-logs [lines]   查看 CliProxyAPI 日志（默认最近 100 行）
+  ./scripts/deploy.sh deploy             完整部署（覆盖式同步代码 + 构建 + 确保主库 + 启动 Compose + 启动 CliProxyAPI）
+  ./scripts/deploy.sh clean-deploy       清空所有 volumes 后全新部署（⚠️ 删除 volumes）
+  ./scripts/deploy.sh recover            远程恢复服务（确保 PostgreSQL + 主库 + Compose + CliProxyAPI）
+  ./scripts/deploy.sh restart            重启 Compose + CliProxyAPI
+  ./scripts/deploy.sh rollback           回滚（使用已有镜像重启）
+  ./scripts/deploy.sh sync               覆盖式同步代码和 CliProxyAPI
+  ./scripts/deploy.sh sync-code          仅覆盖式同步项目代码
+  ./scripts/deploy.sh sync-cli-proxy     仅覆盖式同步 CliProxyAPI
+  ./scripts/deploy.sh build              仅远程构建镜像
+  ./scripts/deploy.sh down               仅停止 Compose 服务
+  ./scripts/deploy.sh ensure-db          仅确保 PostgreSQL 和主数据库存在
+  ./scripts/deploy.sh up-infra           仅覆盖式启动基础服务
+  ./scripts/deploy.sh up-app             仅覆盖式启动应用服务
+  ./scripts/deploy.sh up-all             仅覆盖式启动全部 Compose 服务
+  ./scripts/deploy.sh cli-proxy          覆盖式同步并重启 CliProxyAPI
+  ./scripts/deploy.sh status             查看远程服务状态
+  ./scripts/deploy.sh health             全面健康检查（Docker + HTTP + CLI proxy + 资源）
+  ./scripts/deploy.sh logs [service]     查看 Docker 服务日志
+  ./scripts/deploy.sh proxy-logs [lines] 查看 CliProxyAPI 日志（默认最近 100 行）
 
 配置项（在 .env 中填写）:
-  DEPLOY_HOST          必填，SSH 地址（如 root@1.2.3.4）
-  DEPLOY_DIR           远程项目目录（默认 /opt/notebooklm）
-  DEPLOY_SSH_PORT      SSH 端口（默认 22）
-  CLI_PROXY_LOCAL_DIR  本地 CliProxyAPI 目录（默认 ~/Documents/CliProxyAPI）
-  CLI_PROXY_REMOTE_DIR 远程 CliProxyAPI 目录（默认 /opt/CliProxyAPI）
+  DEPLOY_HOST            必填，SSH 地址（如 root@1.2.3.4）
+  DEPLOY_DIR             远程项目目录（默认 /opt/notebooklm）
+  DEPLOY_SSH_PORT        SSH 端口（默认 22）
+  SITE_DOMAIN            必填，生产环境域名（用于 Caddy 自动签发 HTTPS）
+  CLI_PROXY_LOCAL_DIR    本地 CliProxyAPI 目录（默认 ~/Documents/CliProxyAPI）
+  CLI_PROXY_REMOTE_DIR   远程 CliProxyAPI 目录（默认 /opt/CliProxyAPI）
+  POSTGRES_CONTAINER     远程 PostgreSQL 容器名（默认 notebooklm-postgres）
 
 示例:
   ./scripts/deploy.sh deploy
+  ./scripts/deploy.sh recover
 EOF
 }
 
@@ -443,40 +631,84 @@ shift || true
 case "$COMMAND" in
   deploy)
     preflight
-    confirm "即将同步代码并部署到 ${REMOTE_HOST}:${REMOTE_DIR}，确认？"
+    confirm "即将覆盖式部署到 ${REMOTE_HOST}:${REMOTE_DIR}，确认？"
     sync_code
     sync_cli_proxy
     remote_deploy
     start_cli_proxy
+    remote_health
     ;;
   clean-deploy)
     preflight
-    confirm "⚠️  即将清空服务器所有数据（volumes）并重新部署到 ${REMOTE_HOST}:${REMOTE_DIR}，此操作不可逆！确认？"
+    confirm "⚠️  即将清空服务器所有数据（volumes）并覆盖式重建到 ${REMOTE_HOST}:${REMOTE_DIR}，此操作不可逆！确认？"
     sync_code
     sync_cli_proxy
     remote_clean_deploy
     start_cli_proxy
+    remote_health
+    ;;
+  recover)
+    preflight
+    remote_recover
+    start_cli_proxy
+    remote_health
     ;;
   sync)
     preflight
     sync_code
+    sync_cli_proxy
+    ;;
+  sync-code)
+    preflight
+    sync_code
+    ;;
+  sync-cli-proxy)
+    preflight
+    sync_cli_proxy
     ;;
   build)
     preflight
-    step "远程构建镜像"
-    ssh_cmd "cd ${REMOTE_DIR} && docker compose -f ${COMPOSE_FILE} build --parallel"
-    ok "构建完成"
+    remote_compose_build
+    ;;
+  down)
+    preflight
+    remote_compose_down
+    ;;
+  ensure-db)
+    preflight
+    remote_bootstrap_postgres
+    remote_ensure_app_db
+    ;;
+  up-infra)
+    preflight
+    remote_bootstrap_postgres
+    remote_ensure_app_db
+    remote_up_infra
+    ;;
+  up-app)
+    preflight
+    remote_bootstrap_postgres
+    remote_ensure_app_db
+    remote_up_app
+    ;;
+  up-all)
+    preflight
+    remote_bootstrap_postgres
+    remote_ensure_app_db
+    remote_up_all
     ;;
   restart)
     preflight
-    step "重启服务"
-    ssh_cmd "cd ${REMOTE_DIR} && docker compose -f ${COMPOSE_FILE} restart"
-    ok "重启完成"
+    remote_restart_compose
+    start_cli_proxy
+    remote_health
     ;;
   rollback)
     preflight
     confirm "确认回滚？将使用上一次构建的镜像重启"
     remote_rollback
+    start_cli_proxy
+    remote_health
     ;;
   status)
     preflight
