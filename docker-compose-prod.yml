@@ -21,6 +21,33 @@ services:
     networks:
       - notebooklm
 
+  postgres-init-miniflux:
+    image: postgres:16-alpine
+    container_name: notebooklm-postgres-init-miniflux
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      PGUSER: ${POSTGRES_USER:-postgres}
+      PGHOST: postgres
+      PGPORT: 5432
+      MINIFLUX_DB: ${MINIFLUX_DB:-miniflux}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        exists="$(psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$$MINIFLUX_DB'")"
+        if [ "$$exists" = "1" ]; then
+          echo "database $$MINIFLUX_DB already exists"
+        else
+          psql -d postgres -c "CREATE DATABASE \"$$MINIFLUX_DB\";"
+          echo "database $$MINIFLUX_DB created"
+        fi
+    networks:
+      - notebooklm
+
   pgadmin:
     image: dpage/pgadmin4:9
     container_name: notebooklm-pgadmin
@@ -37,6 +64,40 @@ services:
     volumes:
       - pgadmin_data:/var/lib/pgadmin
       - ./docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
+    networks:
+      - notebooklm
+
+  miniflux:
+    image: miniflux/miniflux:2.2.13
+    container_name: notebooklm-miniflux
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-init-miniflux:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${MINIFLUX_DB:-miniflux}?sslmode=disable
+      RUN_MIGRATIONS: 1
+      CREATE_ADMIN: 1
+      ADMIN_USERNAME: ${MINIFLUX_ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${MINIFLUX_ADMIN_PASSWORD:-admin123}
+    ports:
+      - "8085:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - notebooklm
+
+  rsshub:
+    image: diygod/rsshub:chromium-bundled
+    container_name: notebooklm-rsshub
+    restart: unless-stopped
+    ports:
+      - "1200:1200"
     networks:
       - notebooklm
 
@@ -138,8 +199,12 @@ services:
       REDIS_URL: redis://redis:6379/0
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       OBJECT_STORAGE_ENDPOINT: minio:9000
+      MINIFLUX_DEFAULT_URL: http://miniflux:8080
+      RSSHUB_DEFAULT_URL: http://rsshub:1200
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
       LOG_FILE: /workspace/logs/backend.log
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./logs:/workspace/logs
     ports:
@@ -157,6 +222,8 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      miniflux:
+        condition: service_healthy
     networks:
       - notebooklm
 
@@ -173,8 +240,12 @@ services:
       REDIS_URL: redis://redis:6379/0
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       OBJECT_STORAGE_ENDPOINT: minio:9000
+      MINIFLUX_DEFAULT_URL: http://miniflux:8080
+      RSSHUB_DEFAULT_URL: http://rsshub:1200
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
       LOG_FILE: /workspace/logs/worker.log
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./logs:/workspace/logs
     ports:
@@ -202,8 +273,12 @@ services:
       REDIS_URL: redis://redis:6379/0
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       OBJECT_STORAGE_ENDPOINT: minio:9000
+      MINIFLUX_DEFAULT_URL: http://miniflux:8080
+      RSSHUB_DEFAULT_URL: http://rsshub:1200
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
       LOG_FILE: /workspace/logs/scheduler.log
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./logs:/workspace/logs
     ports:
@@ -347,7 +422,7 @@ services:
     ports:
       - "9090:9090"
     volumes:
-      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/prometheus/prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro
       - ./docker/prometheus/notebooklm-rules.yml:/etc/prometheus/notebooklm-rules.yml:ro
       - prometheus_data:/prometheus
     networks:

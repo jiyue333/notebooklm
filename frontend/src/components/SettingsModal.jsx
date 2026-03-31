@@ -245,7 +245,10 @@ export default function SettingsModal({ onClose, initialTab = 'language' }) {
     }));
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
+    const [isTestingModel, setIsTestingModel] = useState(false);
     const [feedback, setFeedback] = useState('');
+    const [modelTestFeedback, setModelTestFeedback] = useState('');
+    const [modelTestStatus, setModelTestStatus] = useState('idle');
     const [avatarFile, setAvatarFile] = useState(null);
     const avatarInputRef = useRef(null);
     const modelProviderOptions = getModelProviderOptions(settings);
@@ -315,6 +318,8 @@ export default function SettingsModal({ onClose, initialTab = 'language' }) {
 
     const update = (key, value) => {
         setFeedback('');
+        setModelTestFeedback('');
+        setModelTestStatus('idle');
         if (key === 'colorMode' && value) {
             setTheme(value);
         }
@@ -476,6 +481,42 @@ export default function SettingsModal({ onClose, initialTab = 'language' }) {
         }
 
         return payload;
+    };
+
+    const buildModelTestPayload = () => {
+        if (settings.modelProviderSelection === DEFAULT_PROVIDER_VALUE) {
+            return { useDefaultModelConfig: true };
+        }
+        const payload = {
+            modelProvider: settings.modelProvider,
+            modelName: settings.modelName,
+            apiUrl: settings.apiUrl,
+        };
+        const apiKey = settings.apiKey.trim();
+        if (apiKey) {
+            payload.apiKey = apiKey;
+        }
+        if (settings.clearApiKey) {
+            payload.clearApiKey = true;
+        }
+        return payload;
+    };
+
+    const handleTestModelConnection = async () => {
+        try {
+            setIsTestingModel(true);
+            setModelTestFeedback('');
+            setModelTestStatus('idle');
+            const result = await appApi.settings.testModelConnection(buildModelTestPayload());
+            const latency = Number.isFinite(Number(result?.latencyMs)) ? `（${Math.round(Number(result.latencyMs))}ms）` : '';
+            setModelTestStatus('success');
+            setModelTestFeedback(`${result?.message || '连接成功'}${latency}`);
+        } catch (err) {
+            setModelTestStatus('error');
+            setModelTestFeedback(err?.message || '模型连接测试失败');
+        } finally {
+            setIsTestingModel(false);
+        }
     };
 
     const handleSave = async () => {
@@ -780,6 +821,22 @@ export default function SettingsModal({ onClose, initialTab = 'language' }) {
                                                 {settings.clearApiKey ? '保留自定义 Key' : '移除自定义 Key'}
                                             </button>
                                         )}
+                                    </div>
+
+                                    <div className="settings-section settings-inline-actions">
+                                        <button
+                                            type="button"
+                                            className="settings-save-btn"
+                                            onClick={handleTestModelConnection}
+                                            disabled={isTestingModel || isLoading || isSaving}
+                                        >
+                                            {isTestingModel ? '测试中...' : '测试连接'}
+                                        </button>
+                                        {modelTestFeedback ? (
+                                            <span className={`settings-inline-feedback ${modelTestStatus === 'error' ? 'error' : 'success'}`}>
+                                                {modelTestFeedback}
+                                            </span>
+                                        ) : null}
                                     </div>
                                 </div>
                             )}

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
+import re
 from collections import Counter
 from time import perf_counter
 from typing import Any
@@ -41,6 +43,27 @@ from app.modules.ingest.types import (
 
 logger = structlog.get_logger(__name__)
 
+_MARKDOWN_STRUCT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?m)^\s{0,3}#{1,6}\s+\S"),             # heading
+    re.compile(r"(?m)^\s{0,3}(?:[-*+]\s+\S|\d+\.\s+\S)"),  # list
+    re.compile(r"(?m)^\s{0,3}>\s+\S"),                  # blockquote
+    re.compile(r"(?m)^\s{0,3}```"),                     # fenced code
+    re.compile(r"(?m)^\s{0,3}(?:---|\*\*\*|___)\s*$"),  # hr
+    re.compile(r"(?m)^\s*\|.+\|\s*$"),                  # table row
+)
+_MARKDOWN_INLINE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\[[^\]]+\]\([^)]+\)"),                 # link
+    re.compile(r"!\[[^\]]*]\([^)]+\)"),                 # image
+    re.compile(r"(^|[\s(])\*\*[^*]+\*\*"),              # bold
+    re.compile(r"(^|[\s(])`[^`]+`"),                    # inline code
+)
+_HTML_TAG_PATTERN = re.compile(r"</?[a-zA-Z][^>\n]{0,120}>")
+
+
+def _eval_force_serial_enabled() -> bool:
+    value = str(os.getenv("EVAL_FORCE_SERIAL") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
 
 def _mdast_type_counts(mdast: dict[str, Any] | None) -> Counter[str]:
     """统计 mdast 节点 type，用于 block 分布指标。"""
@@ -63,6 +86,26 @@ def _mdast_type_counts(mdast: dict[str, Any] | None) -> Counter[str]:
     return counts
 
 
+def _looks_like_markdown_text(value: str) -> bool:
+    text = (value or "").strip()
+    if not text:
+        return False
+
+    if any(pattern.search(text) for pattern in _MARKDOWN_STRUCT_PATTERNS):
+        return True
+
+    inline_hits = sum(1 for pattern in _MARKDOWN_INLINE_PATTERNS if pattern.search(text))
+    if inline_hits >= 2:
+        return True
+    if inline_hits == 1 and len(text.splitlines()) >= 3:
+        return True
+
+    if _HTML_TAG_PATTERN.search(text):
+        return False
+
+    return False
+
+
 async def run_pipeline(
     db: AsyncSession,
     *,
@@ -77,6 +120,8 @@ async def run_pipeline(
     timings: dict[str, float] = {}
     pipeline_start = perf_counter()
     input_type = ingest_input.input_type.value
+    # 持有后台 summary task 的引用，防止 asyncio 提前 GC
+    _background_tasks: set[asyncio.Task] = set()
 
     # ========== phase 1 接入层：拉取 + Tika 检测 + 路由 ==========
     t0 = perf_counter()
@@ -130,6 +175,14 @@ async def run_pipeline(
         stage="fetch_detect",
         input_type=input_type,
         status="ok",
+        duration_ms=timings["fetch_detect"],
+    )
+    logger.debug(
+        "pipeline.fetch_detect_ok",
+        route=content.route.value,
+        mime=content.tika.mime_type,
+        content_bytes=len(content.raw_bytes),
+        content_hash=content.content_hash[:12] if content.content_hash else None,
         duration_ms=timings["fetch_detect"],
     )
     if fetch_url_fallback:
@@ -230,21 +283,35 @@ async def run_pipeline(
     timings["enhance_toc"] = _ms(toc_t0)
 
     summary_t0 = perf_counter()
-    summary_task = asyncio.create_task(
-        warm_summary(
-            db,
-            remark=remark,
-            article_id=article_id or "",
-            title=title,
-            language=content.tika.language or None,
-            user=user,
+    summary_task: asyncio.Task[Any] | None = None
+    if not _eval_force_serial_enabled():
+        summary_task = asyncio.create_task(
+            warm_summary(
+                db,
+                remark=remark,
+                article_id=article_id or "",
+                title=title,
+                language=content.tika.language or None,
+                user=user,
+            )
         )
-    )
+        # 防止 GC 在 await 之前把 task 回收
+        _background_tasks.add(summary_task)
+        summary_task.add_done_callback(_background_tasks.discard)
 
     # ========== phase 4 索引层：分块 + 上下文增强 + 向量化 ==========
     t0 = perf_counter()
     try:
+        chunk_t0 = perf_counter()
         chunks = build_chunks(remark.clean_markdown, toc=remark.toc)
+        timings["index_build_chunks"] = _ms(chunk_t0)
+        logger.debug(
+            "pipeline.index_build_chunks",
+            chunk_count=len(chunks),
+            duration_ms=timings["index_build_chunks"],
+        )
+
+        ctx_t0 = perf_counter()
         chunks = await contextualize_chunks(
             chunks,
             notebook_title=notebook_title,
@@ -252,7 +319,22 @@ async def run_pipeline(
             toc=remark.toc,
             clean_markdown=remark.clean_markdown,
         )
+        timings["index_contextualize"] = _ms(ctx_t0)
+        logger.debug(
+            "pipeline.index_contextualize",
+            chunk_count=len(chunks),
+            duration_ms=timings["index_contextualize"],
+        )
+
+        embed_t0 = perf_counter()
         chunks = await embed_chunks(chunks, user=user)
+        timings["index_embed"] = _ms(embed_t0)
+        logger.debug(
+            "pipeline.index_embed",
+            chunk_count=len(chunks),
+            has_vectors=any(c.embedding for c in chunks),
+            duration_ms=timings["index_embed"],
+        )
     except Exception as exc:
         timings["index"] = _ms(t0)
         observe_ingest_stage(
@@ -261,7 +343,11 @@ async def run_pipeline(
             status="failed",
             duration_ms=timings["index"],
         )
-        await summary_task
+        if summary_task is not None:
+            summary_task.cancel()
+        else:
+            # eval 串行模式：异常路径也跳过 summary warm
+            pass
         observe_ingest_e2e(input_type=input_type, duration_ms=_ms(pipeline_start))
         return _failed_result(
             content_hash=content.content_hash or "",
@@ -271,7 +357,17 @@ async def run_pipeline(
             message=str(exc)[:500] or "索引阶段失败",
         )
     timings["index"] = _ms(t0)
-    await summary_task
+    # summary_task 已在后台运行，不阻塞关键路径
+    # eval 串行模式下没有 task，直接内联执行一次（便于测试）
+    if _eval_force_serial_enabled():
+        await warm_summary(
+            db,
+            remark=remark,
+            article_id=article_id or "",
+            title=title,
+            language=content.tika.language or None,
+            user=user,
+        )
     timings["enhance"] = _ms(summary_t0)
 
     total_ms = _ms(pipeline_start)
@@ -284,7 +380,44 @@ async def run_pipeline(
         chunks=len(chunks),
         toc=len(remark.toc),
         fixes=remark.fixes_applied,
+        # ── 各阶段耗时明细 ──────────────────────────────────────────
+        t_fetch_detect_ms=timings.get("fetch_detect"),
+        t_parse_ms=timings.get("parse"),
+        t_normalize_ms=timings.get("normalize"),
+        t_enhance_toc_ms=timings.get("enhance_toc"),
+        t_index_build_ms=timings.get("index_build_chunks"),
+        t_index_ctx_ms=timings.get("index_contextualize"),
+        t_index_embed_ms=timings.get("index_embed"),
+        t_index_total_ms=timings.get("index"),
+        t_summary_warm_ms=timings.get("enhance"),
+        # ── 内容元数据 ───────────────────────────────────────────────
+        route=content.route.value,
+        content_bytes=len(content.raw_bytes),
+        markdown_chars=len(remark.clean_markdown),
+        parser=parser_name,
     )
+
+    # ── 慢阶段检测：超过阈值时打 warning 便于 grep ──────────────────
+    _SLOW_THRESHOLDS_MS: dict[str, float] = {
+        "fetch_detect": 5_000,
+        "parse": 60_000,
+        "normalize": 3_000,
+        "enhance_toc": 5_000,
+        "index_build_chunks": 1_000,
+        "index_contextualize": 10_000,
+        "index_embed": 15_000,
+        "enhance": 35_000,
+    }
+    slow_stages = {
+        k: v for k, v in timings.items() if v > _SLOW_THRESHOLDS_MS.get(k, float("inf"))
+    }
+    if slow_stages:
+        logger.warning(
+            "pipeline.slow_stages_detected",
+            slow_stages=slow_stages,
+            total_ms=total_ms,
+            route=content.route.value,
+        )
 
     # ========== metrics ==========
     observe_ingest_stage(
@@ -345,6 +478,35 @@ async def _phase1_fetch_and_detect(
     """拉取 + 检测。返回 (内容, {fetch_ms, detect_ms}, 是否 URL fetch 失败降级)。"""
 
     is_url_source = inp.input_type in {InputType.URL, InputType.SEARCH_RESULT}
+
+    # TEXT 输入（手动粘贴）：一律 TEXT 直通，parse 阶段原样 UTF-8 解码。
+    # 粘贴语义本身就是可读正文，不需要按 Markdown 特征改走 MinerU 解析。
+    if inp.input_type == InputType.TEXT:
+        fetch_t0 = perf_counter()
+        raw_bytes, file_name = await fetch_content(inp)
+        fetch_ms = _ms(fetch_t0)
+        detect_t0 = perf_counter()
+        raw_text = raw_bytes.decode("utf-8", errors="replace")
+        is_markdown = _looks_like_markdown_text(raw_text)
+        route = DocRoute.TEXT
+        tika_mime = "text/markdown"
+        detect_ms = _ms(detect_t0)
+        resolved_file_name = file_name or "input.md"
+        content = FetchedContent(
+            raw_bytes=raw_bytes,
+            content_hash=hashlib.sha256(raw_bytes).hexdigest(),
+            tika=TikaMetadata(mime_type=tika_mime),
+            route=route,
+            source_url=inp.source_url,
+            file_name=resolved_file_name,
+        )
+        logger.debug(
+            "pipeline.text_route_decision",
+            is_markdown=is_markdown,
+            route=route.value,
+            text_length=len(raw_text),
+        )
+        return content, {"fetch_ms": fetch_ms, "detect_ms": detect_ms}, False
 
     # 预提交 batch 的 URL 来源跳过 fetch
     if skip_fetch and is_url_source:

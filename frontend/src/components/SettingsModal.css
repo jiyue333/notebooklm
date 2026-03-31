@@ -171,6 +171,27 @@
     opacity: 0.9;
 }
 
+.settings-inline-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: -2px;
+}
+
+.settings-inline-feedback {
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--meta-color);
+}
+
+.settings-inline-feedback.success {
+    color: color-mix(in srgb, var(--accent-color), #ffffff 12%);
+}
+
+.settings-inline-feedback.error {
+    color: var(--danger-color);
+}
+
 .settings-tab-content {
     animation: fadeIn 0.2s ease;
 }

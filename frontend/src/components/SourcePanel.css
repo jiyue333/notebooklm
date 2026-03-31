@@ -378,7 +378,7 @@
     gap: 0;
     flex: 1;
     min-height: 0;
-    overflow: hidden;
+    overflow: visible;
 }
 
 .sp-results-topline {
@@ -489,10 +489,10 @@
     border: 1px solid color-mix(in srgb, var(--border-color), var(--accent-color) 22%);
     box-shadow: var(--card-shadow);
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto auto auto;
     overflow: hidden;
     min-height: 0;
-    height: 100%;
+    height: auto;
 }
 
 .sp-summary-header {
@@ -500,7 +500,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    padding: 10px 12px 8px;
+    padding: 10px 12px;
     border-bottom: 1px solid color-mix(in srgb, var(--border-color), var(--accent-color) 25%);
 }
 
@@ -509,11 +509,11 @@
     align-items: center;
     gap: 8px;
     color: var(--title-color);
-    font-size: 0.82rem;
+    font-size: 0.8rem;
 }
 
 .sp-summary-title-text {
-    font-size: 0.72rem;
+    font-size: 0.7rem;
     font-weight: 700;
 }
 
@@ -537,12 +537,16 @@
     cursor: pointer;
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 6px;
+    line-height: 1;
+    min-height: 20px;
 }
 
 .sp-summary-view-btn svg {
     width: 16px;
     height: 16px;
+    display: block;
 }
 
 .sp-summary-view-btn:hover {
@@ -555,7 +559,7 @@
     display: flex;
     flex-direction: column;
     gap: 0;
-    overflow: hidden;
+    overflow: visible;
     min-height: 0;
 }
 
@@ -567,11 +571,11 @@
     background: transparent;
     color: inherit;
     display: grid;
-    grid-template-columns: 20px minmax(0, 1fr);
-    gap: 8px;
-    align-items: start;
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
     text-align: left;
-    padding: 7px 10px;
+    padding: 8px 10px;
     cursor: pointer;
 }
 
@@ -584,10 +588,10 @@
 }
 
 .sp-summary-favicon-wrap {
+    position: relative;
     width: 18px;
     height: 18px;
     border-radius: 5px;
-    margin-top: 2px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -596,16 +600,23 @@
 }
 
 .sp-summary-favicon {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
     width: 18px;
     height: 18px;
     border-radius: 5px;
+}
+
+.sp-summary-favicon-wrap.has-image:not(.is-failed) .sp-summary-favicon-fallback {
+    display: none;
 }
 
 .sp-summary-favicon-fallback {
     width: 18px;
     height: 18px;
     border-radius: 5px;
-    display: none;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
     color: var(--accent-color);
@@ -621,27 +632,15 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
 }
 
 .sp-summary-item-title {
-    font-size: 0.76rem;
+    font-size: 0.78rem;
     color: var(--title-color);
     font-weight: 600;
     line-height: 1.35;
     display: -webkit-box;
     -webkit-line-clamp: 1;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-}
-
-.sp-summary-item-desc {
-    font-size: 0.7rem;
-    color: var(--meta-color);
-    line-height: 1.45;
-    display: -webkit-box;
-    -webkit-line-clamp: 1;
-    line-clamp: 1;
     -webkit-box-orient: vertical;
     overflow: hidden;
 }
@@ -652,7 +651,7 @@
     border: none;
     border-top: 1px solid color-mix(in srgb, var(--border-color), transparent 25%);
     background: transparent;
-    padding: 5px 10px;
+    padding: 6px 10px;
     color: var(--accent-color);
     font-size: 0.74rem;
     font-weight: 600;
@@ -667,40 +666,19 @@
 .sp-summary-actions {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 10px;
+    justify-content: flex-end;
+    gap: 8px;
     margin-top: auto;
-    padding: 8px 10px 9px;
+    padding: 8px 10px;
     border-top: 1px solid color-mix(in srgb, var(--border-color), var(--accent-color) 25%);
 }
 
-.sp-summary-feedback {
+.sp-summary-action-group {
     display: flex;
     align-items: center;
-    gap: 4px;
-}
-
-.sp-summary-ghost-btn {
-    width: 34px;
-    height: 34px;
-    border: none;
-    border-radius: 50%;
-    background: transparent;
-    color: var(--meta-color);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-}
-
-.sp-summary-ghost-btn svg {
-    width: 20px;
-    height: 20px;
-}
-
-.sp-summary-ghost-btn:hover:not(:disabled) {
-    background: var(--hover-bg);
-    color: var(--accent-color);
+    justify-content: flex-end;
+    gap: 10px;
+    margin-left: auto;
 }
 
 .sp-summary-delete-btn {
@@ -712,7 +690,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 0 8px;
+    padding: 0;
     cursor: pointer;
 }
 
@@ -893,6 +871,7 @@
 }
 
 .sp-result-favicon-wrap {
+    position: relative;
     width: 22px;
     height: 22px;
     border-radius: 7px;
@@ -905,16 +884,23 @@
 }
 
 .sp-result-favicon {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
     width: 22px;
     height: 22px;
     border-radius: 7px;
+}
+
+.sp-result-favicon-wrap.has-image:not(.is-failed) .sp-result-favicon-fallback {
+    display: none;
 }
 
 .sp-result-favicon-fallback {
     width: 22px;
     height: 22px;
     border-radius: 7px;
-    display: none;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
     color: var(--accent-color);

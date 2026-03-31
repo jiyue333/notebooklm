@@ -25,8 +25,8 @@ const Hc = {
 };
 
 function getStoredLogoOption() {
-    if (typeof window === 'undefined' || !window.localStorage) return 'stack';
-    return window.localStorage.getItem(LOGO_STORAGE_KEY) || 'stack';
+    if (typeof window === 'undefined' || !window.localStorage) return 'orbit';
+    return window.localStorage.getItem(LOGO_STORAGE_KEY) || 'orbit';
 }
 
 function resolveNotebookIcon(nb) {

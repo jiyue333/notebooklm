@@ -55,6 +55,10 @@ _NOISY_LOGGERS = (
     "asyncpg",
     "sqlalchemy.engine",
     "hpack",
+    "urllib3",
+    "openai",
+    "langsmith",
+    "requests",
 )
 
 

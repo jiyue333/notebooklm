@@ -15,7 +15,7 @@ import re
 from collections import OrderedDict
 from hashlib import sha256
 from threading import Lock
-from time import monotonic
+from time import monotonic, perf_counter
 from typing import Awaitable, Callable
 
 import structlog
@@ -62,7 +62,12 @@ async def parse_to_markdown(
     if cache_key:
         cached = _read_cached_markdown(cache_key)
         if cached:
-            logger.debug("parse.cache_hit", route=content.route.value, key=cache_key[:24])
+            logger.debug(
+                "parse.cache_hit",
+                route=content.route.value,
+                key=cache_key[:24],
+                result_chars=len(cached),
+            )
             return cached
 
     client = mineru_client or MinerUCloudClient()
@@ -193,6 +198,9 @@ async def _try_url_batch(
         return None
 
 
+_MINERU_SLOW_CALL_MS = 30_000  # 单次调用超过此值打 warning
+
+
 async def _run_mineru_call(
     op_name: str,
     task_factory: Callable[[], Awaitable[str | None]],
@@ -202,13 +210,36 @@ async def _run_mineru_call(
         return None
 
     semaphore = _get_mineru_semaphore()
+    t0 = perf_counter()
     async with semaphore:
+        wait_ms = round((perf_counter() - t0) * 1000, 2)
+        call_t0 = perf_counter()
         try:
             result = await task_factory()
         except Exception as exc:  # pragma: no cover - 依赖外部 provider
+            duration_ms = round((perf_counter() - call_t0) * 1000, 2)
             _record_mineru_failure(op_name=op_name, reason=str(exc)[:200] or "unknown")
-            logger.warning("parse.mineru_call_failed", operation=op_name, error=str(exc)[:200])
+            logger.warning(
+                "parse.mineru_call_failed",
+                operation=op_name,
+                error=str(exc)[:200],
+                duration_ms=duration_ms,
+                semaphore_wait_ms=wait_ms,
+            )
             return None
+        duration_ms = round((perf_counter() - call_t0) * 1000, 2)
+
+    total_ms = round((perf_counter() - t0) * 1000, 2)
+    log_fn = logger.warning if total_ms > _MINERU_SLOW_CALL_MS else logger.debug
+    log_fn(
+        "parse.mineru_call_done",
+        operation=op_name,
+        success=bool(result),
+        duration_ms=duration_ms,
+        semaphore_wait_ms=wait_ms,
+        total_ms=total_ms,
+        result_chars=len(result) if result else 0,
+    )
 
     if result:
         _record_mineru_success()

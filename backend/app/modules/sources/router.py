@@ -179,6 +179,52 @@ async def _resolve_manual_source_title(
     return generated or fallback
 
 
+async def _submit_url_batches_with_partial_retry(
+    *,
+    mineru,
+    items: list[tuple[Article, str]],
+    model_version: str,
+) -> tuple[list[tuple[Article, str, str]], list[tuple[Article, str, str]]]:
+    queued: list[tuple[Article, str, str]] = []
+    failed: list[tuple[Article, str, str]] = []
+
+    async def _submit_chunk(chunk: list[tuple[Article, str]], *, depth: int) -> None:
+        if not chunk:
+            return
+
+        batch_items = [{"url": url, "data_id": article.id} for article, url in chunk]
+        try:
+            batch_id = await mineru.submit_url_batch(batch_items, model_version=model_version)
+        except Exception as exc:
+            error_text = str(exc)[:200] or "unknown submit failure"
+            logger.warning(
+                "sources.import.mineru_batch_submit_failed",
+                count=len(chunk),
+                depth=depth,
+                error=error_text,
+            )
+            if len(chunk) == 1:
+                article, url = chunk[0]
+                failed.append((article, url, error_text))
+                return
+
+            split_at = max(1, len(chunk) // 2)
+            logger.info(
+                "sources.import.mineru_batch_split_retry",
+                depth=depth,
+                left_count=split_at,
+                right_count=len(chunk) - split_at,
+            )
+            await _submit_chunk(chunk[:split_at], depth=depth + 1)
+            await _submit_chunk(chunk[split_at:], depth=depth + 1)
+            return
+
+        queued.extend((article, url, batch_id) for article, url in chunk)
+
+    await _submit_chunk(items, depth=0)
+    return queued, failed
+
+
 # ── Schemas ─────────────────────────────────────────────────────────────────
 
 class ImportSearchResultsRequest(BaseModel):
@@ -246,7 +292,21 @@ async def import_sources_endpoint(
         sr = result_map.get(rid)
         if sr is None:
             continue
-        dedupe_key = f"url:{sr.url_hash}"
+        normalized_source_url = str(sr.raw_url or "").strip()
+        if not normalized_source_url and sr.domain:
+            normalized_source_url = f"https://{str(sr.domain).strip()}"
+        if not normalized_source_url:
+            logger.warning(
+                "sources.import.skip_missing_url",
+                notebook_id=notebook_id,
+                search_result_id=rid,
+                title=sr.title,
+            )
+            continue
+        url_hash = str(sr.url_hash or "").strip()
+        if not url_hash:
+            url_hash = hashlib.sha256(normalized_source_url.encode("utf-8")).hexdigest()
+        dedupe_key = f"url:{url_hash}"
         if dedupe_key in existing_dedupe_keys:
             continue
         article = Article(
@@ -255,7 +315,7 @@ async def import_sources_endpoint(
             input_type="search_result",
             dedupe_key=dedupe_key,
             title=sr.title,
-            source_url=sr.raw_url,
+            source_url=normalized_source_url or None,
             author=sr.author,
             published_at=sr.published_at,
             preview_markdown=sr.description,
@@ -265,7 +325,7 @@ async def import_sources_endpoint(
         )
         session.add(article)
         await session.flush()
-        articles_for_batch.append((article, sr.raw_url))
+        articles_for_batch.append((article, normalized_source_url))
         existing_dedupe_keys.add(dedupe_key)
 
     if not articles_for_batch:
@@ -276,30 +336,24 @@ async def import_sources_endpoint(
             meta={"skippedDuplicate": True},
         )
 
-    # ====== step 2 batch 提交所有 URL 到 MinerU ======
-    mineru_batch_id: str | None = None
-    mineru_submit_failed = False
-    if articles_for_batch:
-        try:
-            from app.infra.providers.mineru.client import MinerUCloudClient
-            mineru = MinerUCloudClient()
-            batch_items = [
-                {"url": url, "data_id": article.id}
-                for article, url in articles_for_batch
-            ]
-            mineru_batch_id = await mineru.submit_url_batch(
-                batch_items, model_version="MinerU-HTML",
-            )
-        except Exception as exc:
-            mineru_submit_failed = True
-            logger.warning(
-                "sources.import.mineru_batch_submit_failed",
-                count=len(articles_for_batch),
-                error=str(exc)[:200],
-                exc_info=True,
-            )
+    # ====== step 2 batch 提交所有 URL 到 MinerU（失败时拆分重试） ======
+    from app.infra.providers.mineru.client import MinerUCloudClient
 
-    if mineru_submit_failed or not mineru_batch_id:
+    mineru = MinerUCloudClient()
+    queued_batch_items, failed_batch_items = await _submit_url_batches_with_partial_retry(
+        mineru=mineru,
+        items=articles_for_batch,
+        model_version="MinerU-HTML",
+    )
+
+    for article, _url, _error in failed_batch_items:
+        article.parse_status = "failed"
+        article.parse_error_tag = "mineru_batch_submit_failed"
+        article.parse_error_message = "来源批量提交解析任务失败，请稍后重试。"
+        article.chunk_status = "failed"
+        article.index_status = "failed"
+
+    if not queued_batch_items:
         for article, _url in articles_for_batch:
             article.parse_status = "failed"
             article.parse_error_tag = "mineru_batch_submit_failed"
@@ -321,7 +375,7 @@ async def import_sources_endpoint(
 
     # ====== step 3 创建 Job，带上 batch 信息 ======
     jobs = []
-    for article, _url in articles_for_batch:
+    for article, _url, mineru_batch_id in queued_batch_items:
         payload_json: dict = {"articleId": article.id}
         payload_json["mineruBatchId"] = mineru_batch_id
         payload_json["mineruDataId"] = article.id
@@ -341,7 +395,19 @@ async def import_sources_endpoint(
         await session.commit()
     await invalidate_notebook_detail_cache(user_id=current_user.id, notebook_id=notebook_id)
     item = await get_notebook_detail(session, user_id=current_user.id, notebook_id=notebook_id)
-    return success_response(item=item)
+    meta = {
+        "queuedCount": len(queued_batch_items),
+        "failedCount": len(failed_batch_items),
+    }
+    if failed_batch_items:
+        meta["failedReason"] = "mineru_batch_submit_partial_failed"
+        meta["failedArticleIds"] = [article.id for article, _url, _error in failed_batch_items]
+        return success_response(
+            item=item,
+            message="部分来源已成功入队，少量条目提交解析任务失败。",
+            meta=meta,
+        )
+    return success_response(item=item, meta=meta)
 
 
 # ── Import RSS entries (async) ────────────────────────────────────────────

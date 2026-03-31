@@ -27,6 +27,7 @@ def build_user_chat_model(user):
         model_name=runtime_config.model_name,
         base_url=runtime_config.api_url,
         api_key=runtime_config.api_key,
+        timeout=float(settings.chat_model_timeout),
         max_output_tokens=settings.chat_max_tokens,
         metadata={"key_source": runtime_config.key_source},
     )

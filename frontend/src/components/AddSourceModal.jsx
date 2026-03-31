@@ -16,11 +16,11 @@ const Ic = {
     file: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-2 .9-2 2l-.01 16c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6Zm0 7V3.5L18.5 8H14Z" /></svg>,
     link: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z" /></svg>,
     clipboard: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H8a2 2 0 0 0-2 2v2H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-1V3a2 2 0 0 0-2-2Zm0 4H8V3h8v2Z" /></svg>,
-    cloud: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.35 10.04A7.49 7.49 0 0 0 5.08 7.5 5.996 5.996 0 0 0 6 19h13a5 5 0 0 0 .35-8.96Z" /></svg>,
     close: <svg viewBox="0 0 24 24" fill="currentColor"><path d="m19 6.41-1.41-1.41L12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>,
     chevronDown: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z" /></svg>,
     check: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17 4.83 12 3.41 13.41 9 19l12-12-1.41-1.41z" /></svg>,
     rss: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.18 17.82a2.18 2.18 0 1 1 0-4.36 2.18 2.18 0 0 1 0 4.36ZM4 4v3a13 13 0 0 1 13 13h3A16 16 0 0 0 4 4Zm0 6v3a7 7 0 0 1 7 7h3a10 10 0 0 0-10-10Z" /></svg>,
+    title: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5h16v2H13v12h-2V7H4V5Z" /></svg>,
 };
 
 const modeOptions = [
@@ -42,20 +42,20 @@ export default function AddSourceModal({ notebookId, onClose, onImported, onStar
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isStartingSearch, setIsStartingSearch] = useState(false);
     const [showModeMenu, setShowModeMenu] = useState(false);
-    const [showImportRss, setShowImportRss] = useState(false);
     const [error, setError] = useState('');
     const fileInputRef = useRef(null);
     const textAreaRef = useRef(null);
     const modeMenuRef = useRef(null);
     const actionLockRef = useRef(false);
     const isBusy = isUploading || isSubmitting || isStartingSearch;
+    const isRssInlineActive = activeQuickAction === 'rss';
 
     const currentMode = useMemo(
         () => modeOptions.find((option) => option.id === searchMode) || modeOptions[0],
         [searchMode],
     );
 
-    useEscapeToClose(onClose, !isBusy);
+    useEscapeToClose(onClose, !isBusy && !isRssInlineActive);
 
     useEffect(() => {
         const handler = (event) => {
@@ -210,32 +210,36 @@ export default function AddSourceModal({ notebookId, onClose, onImported, onStar
             return (
                 <div className="add-source-inline-card">
                     <div className="add-source-inline-header">
-                        <strong>手动添加网站</strong>
+                        <strong className="add-source-inline-title"><span>{Ic.web}</span><span>添加网页链接</span></strong>
                         <button type="button" className="add-source-inline-close" onClick={() => setActiveQuickAction('')} disabled={isBusy}>
                             {Ic.close}
                         </button>
                     </div>
-                    <div className="add-source-inline-field">
-                        <span>{Ic.link}</span>
-                        <input
-                            placeholder="粘贴网站链接"
-                            value={webUrl}
-                            onChange={(event) => setWebUrl(event.target.value)}
-                            disabled={isBusy}
-                        />
+                    <div className="add-source-inline-body">
+                        <div className="add-source-inline-field">
+                            <span>{Ic.link}</span>
+                            <input
+                                placeholder="粘贴网站链接"
+                                value={webUrl}
+                                onChange={(event) => setWebUrl(event.target.value)}
+                                disabled={isBusy}
+                            />
+                        </div>
+                        <div className="add-source-inline-field">
+                            <span>{Ic.title}</span>
+                            <input
+                                placeholder="标题（可选，留空自动生成）"
+                                value={webTitle}
+                                onChange={(event) => setWebTitle(event.target.value)}
+                                disabled={isBusy}
+                            />
+                        </div>
                     </div>
-                    <div className="add-source-inline-field">
-                        <span>🏷️</span>
-                        <input
-                            placeholder="标题（可选，留空自动生成）"
-                            value={webTitle}
-                            onChange={(event) => setWebTitle(event.target.value)}
-                            disabled={isBusy}
-                        />
+                    <div className="add-source-inline-footer">
+                        <button type="button" className="add-source-inline-primary" onClick={() => void handleCreateSource('web')} disabled={isBusy}>
+                            {isSubmitting ? '添加中...' : '添加网站'}
+                        </button>
                     </div>
-                    <button type="button" className="add-source-inline-primary" onClick={() => void handleCreateSource('web')} disabled={isBusy}>
-                        {isSubmitting ? '添加中...' : '添加网站'}
-                    </button>
                 </div>
             );
         }
@@ -244,46 +248,54 @@ export default function AddSourceModal({ notebookId, onClose, onImported, onStar
             return (
                 <div className="add-source-inline-card">
                     <div className="add-source-inline-header">
-                        <strong>保存复制的文字</strong>
+                        <strong className="add-source-inline-title"><span>{Ic.clipboard}</span><span>复制文字</span></strong>
                         <button type="button" className="add-source-inline-close" onClick={() => setActiveQuickAction('')} disabled={isBusy}>
                             {Ic.close}
                         </button>
                     </div>
-                    <div className="add-source-inline-field">
-                        <span>🏷️</span>
-                        <input
-                            placeholder="标题（可选，留空自动生成）"
-                            value={textTitle}
-                            onChange={(event) => setTextTitle(event.target.value)}
+                    <div className="add-source-inline-body">
+                        <div className="add-source-inline-field">
+                            <span>{Ic.title}</span>
+                            <input
+                                placeholder="标题（可选，留空自动生成）"
+                                value={textTitle}
+                                onChange={(event) => setTextTitle(event.target.value)}
+                                disabled={isBusy}
+                            />
+                        </div>
+                        <textarea
+                            ref={textAreaRef}
+                            className="add-source-inline-textarea"
+                            placeholder="粘贴网页、Word 或其它富文本内容"
+                            value={textContent}
+                            onChange={(event) => setTextContent(event.target.value)}
+                            onPaste={handleTextPaste}
                             disabled={isBusy}
                         />
                     </div>
-                    <textarea
-                        ref={textAreaRef}
-                        className="add-source-inline-textarea"
-                        placeholder="粘贴网页、Word 或其它富文本内容"
-                        value={textContent}
-                        onChange={(event) => setTextContent(event.target.value)}
-                        onPaste={handleTextPaste}
-                        disabled={isBusy}
-                    />
-                    <button type="button" className="add-source-inline-primary" onClick={() => void handleCreateSource('text')} disabled={isBusy}>
-                        {isSubmitting ? '保存中...' : '保存文字来源'}
-                    </button>
+                    <div className="add-source-inline-footer">
+                        <button type="button" className="add-source-inline-primary" onClick={() => void handleCreateSource('text')} disabled={isBusy}>
+                            {isSubmitting ? '保存中...' : '保存文字'}
+                        </button>
+                    </div>
                 </div>
             );
         }
 
-        if (activeQuickAction === 'cloud') {
+        if (activeQuickAction === 'rss') {
             return (
-                <div className="add-source-inline-card add-source-inline-muted">
-                    <div className="add-source-inline-header">
-                        <strong>云端硬盘</strong>
-                        <button type="button" className="add-source-inline-close" onClick={() => setActiveQuickAction('')} disabled={isBusy}>
-                            {Ic.close}
-                        </button>
-                    </div>
-                    <p>暂未开放</p>
+                <div className="add-source-inline-card add-source-inline-rss">
+                    <ImportRssModal
+                        notebookId={notebookId}
+                        onClose={() => setActiveQuickAction('')}
+                        onImported={(detail) => {
+                            if (detail) {
+                                onImported?.(detail);
+                            }
+                            setActiveQuickAction('');
+                            onClose();
+                        }}
+                    />
                 </div>
             );
         }
@@ -298,105 +310,112 @@ export default function AddSourceModal({ notebookId, onClose, onImported, onStar
                     {Ic.close}
                 </button>
 
-                <h2 className="add-source-title">添加来源</h2>
+                <h2 className="add-source-title">
+                    <span className="add-source-title-icon">{Ic.file}</span>
+                    <span>添加来源</span>
+                </h2>
 
-                <div className="add-source-workbench">
-                    <div className="add-source-search-row">
-                        <span className="add-source-search-icon">{Ic.search}</span>
-                        <input
-                            className="add-source-search-input"
-                            placeholder="在网络中搜索新来源"
-                            value={searchQuery}
-                            onChange={(event) => setSearchQuery(event.target.value)}
-                            onKeyDown={(event) => {
-                                if (event.key === 'Enter') {
-                                    event.preventDefault();
-                                    void handleSearchStart();
-                                }
-                            }}
-                            disabled={isBusy}
-                        />
-                    </div>
-                    <div className="add-source-search-controls">
-                        <div className="add-source-mode-wrap" ref={modeMenuRef}>
-                            <button
-                                type="button"
-                                className="add-source-pill add-source-pill-select"
-                                onClick={() => {
-                                    if (!isBusy) setShowModeMenu((current) => !current);
+                <div className="add-source-content">
+                    <div className="add-source-workbench">
+                        <div className="add-source-search-row">
+                            <span className="add-source-search-icon">{Ic.search}</span>
+                            <input
+                                className="add-source-search-input"
+                                placeholder="在网络中搜索新来源"
+                                value={searchQuery}
+                                onChange={(event) => setSearchQuery(event.target.value)}
+                                onKeyDown={(event) => {
+                                    if (event.key === 'Enter') {
+                                        event.preventDefault();
+                                        void handleSearchStart();
+                                    }
                                 }}
-                                aria-haspopup="menu"
-                                aria-expanded={showModeMenu}
                                 disabled={isBusy}
-                            >
-                                <span className="add-source-pill-icon">{currentMode.icon}</span>
-                                <span className="add-source-pill-value">{currentMode.label}</span>
-                                <span className="add-source-pill-caret">{Ic.chevronDown}</span>
-                            </button>
-                            {showModeMenu ? (
-                                <div className="add-source-mode-menu" role="menu" aria-label="搜索模式">
-                                    {modeOptions.map((option) => (
-                                        <button
-                                            key={option.id}
-                                            type="button"
-                                            className={`add-source-mode-option ${searchMode === option.id ? 'active' : ''}`}
-                                            onClick={() => {
-                                                setSearchMode(option.id);
-                                                setShowModeMenu(false);
-                                            }}
-                                        >
-                                            <span className="add-source-mode-option-icon">{option.icon}</span>
-                                            <span className="add-source-mode-option-info">
-                                                <span className="add-source-mode-option-label">{option.label}</span>
-                                                <span className="add-source-mode-option-desc">{option.desc}</span>
-                                            </span>
-                                            {searchMode === option.id ? (
-                                                <span className="add-source-mode-option-check">{Ic.check}</span>
-                                            ) : null}
-                                        </button>
-                                    ))}
-                                </div>
-                            ) : null}
+                            />
                         </div>
-                        <button type="button" className="add-source-search-submit" onClick={() => void handleSearchStart()} disabled={isBusy}>
-                            {isStartingSearch ? <span className="add-source-spinner" /> : Ic.send}
-                        </button>
+                        <div className="add-source-search-controls">
+                            <div className="add-source-mode-wrap" ref={modeMenuRef}>
+                                <button
+                                    type="button"
+                                    className="add-source-pill add-source-pill-select"
+                                    onClick={() => {
+                                        if (!isBusy) setShowModeMenu((current) => !current);
+                                    }}
+                                    aria-haspopup="menu"
+                                    aria-expanded={showModeMenu}
+                                    disabled={isBusy}
+                                >
+                                    <span className="add-source-pill-icon">{currentMode.icon}</span>
+                                    <span className="add-source-pill-value">{currentMode.label}</span>
+                                    <span className="add-source-pill-caret">{Ic.chevronDown}</span>
+                                </button>
+                                {showModeMenu ? (
+                                    <div className="add-source-mode-menu" role="menu" aria-label="搜索模式">
+                                        {modeOptions.map((option) => (
+                                            <button
+                                                key={option.id}
+                                                type="button"
+                                                className={`add-source-mode-option ${searchMode === option.id ? 'active' : ''}`}
+                                                onClick={() => {
+                                                    setSearchMode(option.id);
+                                                    setShowModeMenu(false);
+                                                }}
+                                            >
+                                                <span className="add-source-mode-option-icon">{option.icon}</span>
+                                                <span className="add-source-mode-option-info">
+                                                    <span className="add-source-mode-option-label">{option.label}</span>
+                                                    <span className="add-source-mode-option-desc">{option.desc}</span>
+                                                </span>
+                                                {searchMode === option.id ? (
+                                                    <span className="add-source-mode-option-check">{Ic.check}</span>
+                                                ) : null}
+                                            </button>
+                                        ))}
+                                    </div>
+                                ) : null}
+                            </div>
+                            <button type="button" className="add-source-search-submit" onClick={() => void handleSearchStart()} disabled={isBusy}>
+                                {isStartingSearch ? <span className="add-source-spinner" /> : Ic.send}
+                            </button>
+                        </div>
                     </div>
-                </div>
 
-                <div
-                    className={`add-source-dropzone ${isDragging ? 'dragging' : ''}`}
-                    onClick={() => { if (!isBusy) fileInputRef.current?.click(); }}
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                >
-                    <div className="add-source-dropzone-copy">
-                        <strong>或拖放文件</strong>
-                        <span>PDF、图片、文档、音频，等等</span>
-                    </div>
-                    <div className="add-source-quick-actions">
-                        <button type="button" className="add-source-quick-btn" onClick={(event) => { event.stopPropagation(); fileInputRef.current?.click(); }} disabled={isBusy}>
-                            <span>{Ic.upload}</span>
-                            <span>{isUploading ? '上传中...' : '上传文件'}</span>
-                        </button>
-                        <button type="button" className={`add-source-quick-btn ${activeQuickAction === 'cloud' ? 'active' : ''}`} onClick={(event) => { event.stopPropagation(); setActiveQuickAction((current) => (current === 'cloud' ? '' : 'cloud')); }} disabled={isBusy}>
-                            <span>{Ic.cloud}</span>
-                            <span>云端硬盘</span>
-                        </button>
-                        <button type="button" className={`add-source-quick-btn ${activeQuickAction === 'text' ? 'active' : ''}`} onClick={(event) => { event.stopPropagation(); setActiveQuickAction((current) => (current === 'text' ? '' : 'text')); }} disabled={isBusy}>
-                            <span>{Ic.clipboard}</span>
-                            <span>复制的文字</span>
-                        </button>
-                        <button type="button" className="add-source-quick-btn" onClick={(event) => { event.stopPropagation(); setShowImportRss(true); }} disabled={isBusy}>
-                            <span>{Ic.rss}</span>
-                            <span>从订阅源导入</span>
-                        </button>
-                    </div>
-                </div>
+                    {!activeQuickAction ? (
+                        <div
+                            className={`add-source-dropzone ${isDragging ? 'dragging' : ''}`}
+                            onClick={() => { if (!isBusy) fileInputRef.current?.click(); }}
+                            onDragOver={handleDragOver}
+                            onDragLeave={handleDragLeave}
+                            onDrop={handleDrop}
+                        >
+                            <div className="add-source-dropzone-copy">
+                                <span className="add-source-dropzone-copy-icon">{Ic.upload}</span>
+                                <strong>上传、粘贴或挑选现有来源</strong>
+                            </div>
+                            <div className="add-source-quick-actions">
+                                <button type="button" className="add-source-quick-btn" onClick={(event) => { event.stopPropagation(); fileInputRef.current?.click(); }} disabled={isBusy}>
+                                    <span>{Ic.upload}</span>
+                                    <span>{isUploading ? '上传中...' : '上传文件'}</span>
+                                </button>
+                                <button type="button" className={`add-source-quick-btn ${activeQuickAction === 'web' ? 'active' : ''}`} onClick={(event) => { event.stopPropagation(); setActiveQuickAction((current) => (current === 'web' ? '' : 'web')); }} disabled={isBusy}>
+                                    <span>{Ic.link}</span>
+                                    <span>网页链接</span>
+                                </button>
+                                <button type="button" className={`add-source-quick-btn ${activeQuickAction === 'text' ? 'active' : ''}`} onClick={(event) => { event.stopPropagation(); setActiveQuickAction((current) => (current === 'text' ? '' : 'text')); }} disabled={isBusy}>
+                                    <span>{Ic.clipboard}</span>
+                                    <span>复制文字</span>
+                                </button>
+                                <button type="button" className={`add-source-quick-btn ${activeQuickAction === 'rss' ? 'active' : ''}`} onClick={(event) => { event.stopPropagation(); setActiveQuickAction((current) => (current === 'rss' ? '' : 'rss')); }} disabled={isBusy}>
+                                    <span>{Ic.rss}</span>
+                                    <span>从订阅源导入</span>
+                                </button>
+                            </div>
+                        </div>
+                    ) : null}
 
-                {renderInlineForm()}
-                {error ? <p className="add-source-error">{error}</p> : null}
+                    {renderInlineForm()}
+                    {error ? <p className="add-source-error">{error}</p> : null}
+                </div>
 
                 <input
                     ref={fileInputRef}
@@ -409,19 +428,6 @@ export default function AddSourceModal({ notebookId, onClose, onImported, onStar
                         event.target.value = '';
                     }}
                 />
-                {showImportRss ? (
-                    <ImportRssModal
-                        notebookId={notebookId}
-                        onClose={() => setShowImportRss(false)}
-                        onImported={(detail) => {
-                            if (detail) {
-                                onImported?.(detail);
-                            }
-                            setShowImportRss(false);
-                            onClose();
-                        }}
-                    />
-                ) : null}
             </div>
         </div>
     );

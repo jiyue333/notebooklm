@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from functools import lru_cache
 
 import structlog
+import nltk
 
 from app.core.config import get_settings
 from app.modules.ingest.types import ChunkDraft, TOCNode
@@ -21,7 +23,7 @@ def build_chunks(
     chunk_size: int | None = None,
     chunk_overlap: int | None = None,
 ) -> list[ChunkDraft]:
-    """基于 clean_markdown 按字符数分块。"""
+    """基于 sentence splitter 对 clean_markdown 做分块。"""
 
     settings = get_settings()
     size = chunk_size or settings.chunk_target_tokens * 4
@@ -85,24 +87,26 @@ async def embed_chunks(chunks: list[ChunkDraft], *, user=None) -> list[ChunkDraf
 
 
 def _split_text(text: str, *, chunk_size: int, overlap: int) -> list[tuple[int, str]]:
+    from langchain_text_splitters import NLTKTextSplitter
+
+    _ensure_nltk_sentence_resources()
+    splitter = NLTKTextSplitter(
+        separator="\n\n",
+        chunk_size=max(int(chunk_size), 200),
+        chunk_overlap=max(int(overlap), 0),
+    )
+    raw_chunks = splitter.split_text(text)
     chunks: list[tuple[int, str]] = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunk = text[start:end]
-        if end < len(text):
-            last_break = chunk.rfind("\n\n")
-            if last_break > chunk_size // 2:
-                end = start + last_break
-                chunk = text[start:end]
-        stripped = chunk.strip()
-        if stripped:
-            chunks.append((start, stripped))
-        start = end - overlap
-        if start < 0:
-            start = 0
-        if end >= len(text):
-            break
+    search_from = 0
+    for chunk in raw_chunks:
+        stripped = str(chunk or "").strip()
+        if not stripped:
+            continue
+        start_pos = _find_chunk_offset(text, stripped, search_from=search_from)
+        if start_pos < 0:
+            start_pos = max(search_from, 0)
+        chunks.append((start_pos, stripped))
+        search_from = max(start_pos + max(len(stripped) - overlap, 1), 0)
     return chunks
 
 
@@ -129,6 +133,37 @@ def _build_heading_points(clean_markdown: str, toc: list[TOCNode]) -> list[tuple
             points.append((offset, node.id if node else slug or None, heading_title or None))
         offset += len(line)
     return points
+
+
+@lru_cache(maxsize=1)
+def _ensure_nltk_sentence_resources() -> None:
+    resources = [
+        ("tokenizers/punkt", "punkt"),
+        ("tokenizers/punkt_tab", "punkt_tab"),
+    ]
+    for path, package in resources:
+        try:
+            nltk.data.find(path)
+        except LookupError:
+            nltk.download(package, quiet=True)
+
+
+def _find_chunk_offset(text: str, chunk: str, *, search_from: int) -> int:
+    start = text.find(chunk, max(search_from, 0))
+    if start >= 0:
+        return start
+    compact_chunk = " ".join(chunk.split())
+    if not compact_chunk:
+        return -1
+    search_window = text[max(search_from - 200, 0):]
+    compact_window = " ".join(search_window.split())
+    compact_index = compact_window.find(compact_chunk)
+    if compact_index < 0:
+        return -1
+    needle = compact_chunk[:64]
+    if not needle:
+        return -1
+    return text.find(needle, max(search_from - 200, 0))
 
 
 def _heading_for_offset(

@@ -39,6 +39,15 @@ class SettingsUpdateRequest(BaseModel):
     confirmEmbeddingReindex: bool | None = None
 
 
+class ModelConnectionTestRequest(BaseModel):
+    useDefaultModelConfig: bool | None = None
+    modelProvider: str | None = Field(default=None, max_length=64)
+    modelName: str | None = Field(default=None, max_length=128)
+    apiUrl: str | None = Field(default=None, max_length=1024)
+    apiKey: str | None = None
+    clearApiKey: bool | None = None
+
+
 class ProfileUpdateRequest(BaseModel):
     username: str = Field(min_length=1, max_length=255)
     avatarUrl: str | None = Field(default=None, max_length=4_000_000)

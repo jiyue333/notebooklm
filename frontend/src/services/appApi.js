@@ -88,6 +88,7 @@ const DEFAULT_FEED_ENTRIES = [
         starred: false,
         aiSummary: '本文梳理了线上推理成本、延迟和吞吐之间的权衡。',
         contentPreview: 'Production LLM systems require balancing latency, quality, and cost...',
+        summaryText: 'Production LLM systems require balancing latency, quality, and cost. The article walks through model routing, batching, KV cache reuse, and the operational trade-offs behind real production inference stacks.',
         contentHtml: '<p>Production LLM systems require balancing latency, quality, and cost.</p>',
         hash: 'feed-001-entry-9001',
     },
@@ -105,6 +106,7 @@ const DEFAULT_FEED_ENTRIES = [
         starred: true,
         aiSummary: '文章总结了异步任务队列的幂等、回压与重试策略。',
         contentPreview: 'Async pipelines fail in subtle ways when idempotency and retries are ignored...',
+        summaryText: 'Async pipelines fail in subtle ways when idempotency and retries are ignored. The piece focuses on dead-letter queues, retry ceilings, observability, and how to keep background jobs resilient under burst traffic.',
         contentHtml: '<p>Async pipelines fail in subtle ways when idempotency and retries are ignored.</p>',
         hash: 'feed-001-entry-9002',
     },
@@ -265,7 +267,7 @@ const createRssSourceArticle = (entry, index) => ({
     date: entry.publishedAt || formatTimestamp(),
     sourceUrl: entry.url || '',
     selected: false,
-    content: `# ${entry.title || 'RSS 条目'}\n\n${entry.contentPreview || ''}\n\n来源链接：${entry.url || ''}`,
+    content: `# ${entry.title || 'RSS 条目'}\n\n${extractPlainExcerpt(entry.contentHtml || '') || entry.contentPreview || ''}\n\n来源链接：${entry.url || ''}`,
     toc: [],
 });
 
@@ -412,6 +414,18 @@ const buildMockSummary = (article) => ({
     summary: `${article.title} 主要围绕 ${extractPlainExcerpt(article.content).slice(0, 96)}。当前摘要为 mock 返回，后端接入后可直接替换为真实 LLM 结果。`,
 });
 
+const buildMockFeedEntrySummary = (entry) => {
+    const excerpt = String(
+        extractPlainExcerpt(entry?.contentHtml || '')
+        || entry?.contentPreview
+        || ''
+    ).trim();
+    if (!excerpt) {
+        return '该 RSS 条目暂无可用于生成摘要的正文内容。';
+    }
+    return `## ${entry?.title || 'RSS 文章摘要'}\n\n${excerpt}`;
+};
+
 const mockProvider = {
     async login({ username, password }) {
         await wait(350);
@@ -545,11 +559,32 @@ const mockProvider = {
         return { success: true };
     },
 
-    async getNotebookDetail(notebookId) {
+    async getNotebookDetail(notebookId, { contentArticleId } = {}) {
         await wait(180);
         const notebook = getNotebookRecord(notebookId);
         notebook.lastOpenedAt = new Date().toISOString();
-        return buildNotebookDetail(notebookId);
+        const detail = buildNotebookDetail(notebookId);
+        if (!contentArticleId) {
+            return detail;
+        }
+        const article = (detail.articles || []).find((item) => item.id === contentArticleId);
+        if (!article) {
+            return detail;
+        }
+        return {
+            ...detail,
+            articles: detail.articles.map((item) => (item.id === contentArticleId ? item : { ...item, content: '', contentHtml: '', toc: [] })),
+        };
+    },
+
+    async getNotebookArticle(notebookId, articleId) {
+        await wait(120);
+        const detail = buildNotebookDetail(notebookId);
+        const article = (detail.articles || []).find((item) => item.id === articleId);
+        if (!article) {
+            throw new Error('未找到对应文章');
+        }
+        return article;
     },
 
     async saveNote(notebookId, note) {
@@ -954,6 +989,24 @@ const mockProvider = {
         return clone(item);
     },
 
+    async streamFeedEntrySummary({ entryId, onToken }) {
+        await wait(120);
+        const item = (mockState.feedEntries || []).find((entry) => Number(entry.entryId) === Number(entryId));
+        if (!item) {
+            throw new Error('未找到对应 RSS 条目');
+        }
+        const result = normalizeSummaryStreamPayload({
+            entryId,
+            summaryText: buildMockFeedEntrySummary(item),
+        });
+        const chunks = result.summaryText.match(/.{1,24}/g) || [];
+        for (const chunk of chunks) {
+            await wait(45);
+            onToken?.(chunk);
+        }
+        return result;
+    },
+
     async updateEntriesStatus({ entryIds, status }) {
         await wait(140);
         const idSet = new Set((entryIds || []).map((item) => Number(item)));
@@ -1114,6 +1167,25 @@ const mockProvider = {
             ...nextSettings,
         };
         return buildSettingsView(mockState.user, mockState.settings);
+    },
+
+    async testModelConnection(payload) {
+        await wait(420);
+        const provider = payload?.useDefaultModelConfig
+            ? (mockState.settings.defaultModelProvider || 'Ollama')
+            : (payload?.modelProvider || mockState.settings.modelProvider || 'Ollama');
+        const modelName = payload?.useDefaultModelConfig
+            ? (mockState.settings.defaultModelName || 'qwen3.5:0.8b')
+            : (payload?.modelName || mockState.settings.modelName || 'qwen3.5:0.8b');
+        return {
+            ok: true,
+            provider,
+            modelName,
+            keySource: payload?.apiKey ? 'input' : 'mock',
+            latencyMs: 240,
+            message: '模型连接测试成功',
+            preview: 'pong',
+        };
     },
 
     async updateProfile(payload) {
@@ -1462,11 +1534,16 @@ const request = async (path, { method = 'GET', body, headers = {}, timeoutMs = r
     }
 };
 
-const normalizeSearchItem = (item = {}) => ({
-    id: item.id || null,
+const normalizeSearchItem = (item = {}, index = 0) => {
+    const fallbackId = String(item.url || '').trim()
+        || String(item.title || '').trim()
+        || `source-${index + 1}`;
+    return {
+        id: item.id || fallbackId,
     title: item.title || '未命名来源',
     url: item.url || '',
     domain: item.domain || item.sourceName || '',
+    faviconUrl: item.faviconUrl || item.favicon_url || '',
     sourceName: item.sourceName || '',
     sourceTypeBadge: item.sourceTypeBadge || '',
     publishedAt: item.publishedAt || null,
@@ -1484,8 +1561,9 @@ const normalizeSearchItem = (item = {}) => ({
     matchedPreferredSite: item.matchedPreferredSite || null,
     duplicateRisk: Boolean(item.duplicateRisk),
     selectedReasonTags: Array.isArray(item.selectedReasonTags) ? item.selectedReasonTags : [],
-    displayRank: item.displayRank || 0,
-});
+        displayRank: item.displayRank || 0,
+    };
+};
 
 const normalizeSearchPayload = (payload) => {
     const source = payload?.item?.run ? payload.item : payload;
@@ -1505,7 +1583,7 @@ const normalizeSearchPayload = (payload) => {
         maxRounds: run.maxRounds || 1,
         targetCount: run.targetCount || 10,
         elapsedMs: run.elapsedMs || source?.meta?.elapsedMs || payload?.meta?.elapsedMs || 0,
-        items: (source?.items || legacyItem.items || payload?.items || []).map(normalizeSearchItem),
+        items: (source?.items || legacyItem.items || payload?.items || []).map((item, index) => normalizeSearchItem(item, index)),
         taskSpec: source?.taskSpec || payload?.taskSpec || source?.meta?.intent || payload?.meta?.intent || {},
         recallSummary: source?.recallSummary || payload?.recallSummary || {},
         preferencesApplied: source?.preferencesApplied || payload?.preferencesApplied || {},
@@ -1524,6 +1602,7 @@ const normalizeSummaryStreamPayload = (payload = {}) => {
         confidence: payload.confidence ?? 0,
         promptVersion: payload.promptVersion || '',
         cacheHit: Boolean(payload.cacheHit),
+        temporaryUnavailable: Boolean(payload.temporaryUnavailable),
         evidenceSpans: Array.isArray(payload.evidenceSpans) ? payload.evidenceSpans : [],
         profileTags: payload.profileTags || {},
     };
@@ -1539,17 +1618,26 @@ const normalizeRelatedArticles = (articles = []) => articles
         ).toLowerCase();
         const rawIndex = Number(article.index ?? article.id ?? listIndex + 1);
         const normalizedIndex = Number.isFinite(rawIndex) && rawIndex > 0 ? rawIndex : listIndex + 1;
+        const displayIndex = Number(article.displayIndex ?? article.display_index ?? normalizedIndex) || normalizedIndex;
         return {
             index: normalizedIndex,
-            citationLabel: sourceType === 'web' ? `[W${normalizedIndex}]` : `[${normalizedIndex}]`,
+            displayIndex,
+            citationLabel: article.citationLabel
+                || article.citation_label
+                || (sourceType === 'web' ? `[W${displayIndex}]` : `[${displayIndex}]`),
             sourceType,
             articleId: article.articleId || article.article_id || null,
+            chunkId: article.chunkId || article.chunk_id || null,
+            chunkIndex: article.chunkIndex || article.chunk_index || null,
             title: article.title || article.article_title || '',
             notebookId: article.notebookId || article.notebook_id || null,
             notebookTitle: article.notebookTitle || article.notebook_title || '',
             whySimilar: article.whySimilar || article.why_similar || '',
             score: article.score ?? 0,
             snippet: article.snippet || article.text_preview || '',
+            locatorText: article.locatorText || article.locator_text || article.text_preview || '',
+            headingTitle: article.headingTitle || article.heading_title || '',
+            sectionPath: article.sectionPath || article.section_path || '',
             url: article.url || article.sourceUrl || article.source_url || '',
         };
     })
@@ -1575,6 +1663,7 @@ const normalizeChatStreamPayload = (payload = {}) => {
     );
     return {
         conversationId: payload.conversationId || null,
+        conversationTitle: payload.conversationTitle || payload.title || '',
         messageId: payload.messageId || null,
         route: payload.route || null,
         routeBadge: payload.routeBadge || '',
@@ -1678,8 +1767,18 @@ const backendProvider = {
         });
     },
 
-    async getNotebookDetail(notebookId) {
-        const payload = await request(`/notebooks/${notebookId}`);
+    async getNotebookDetail(notebookId, { contentArticleId } = {}) {
+        const params = new URLSearchParams();
+        if (contentArticleId) {
+            params.set('contentArticleId', contentArticleId);
+        }
+        const suffix = params.size ? `?${params.toString()}` : '';
+        const payload = await request(`/notebooks/${notebookId}${suffix}`);
+        return payload.item;
+    },
+
+    async getNotebookArticle(notebookId, articleId) {
+        const payload = await request(`/notebooks/${notebookId}/articles/${articleId}`);
         return payload.item;
     },
 
@@ -1871,6 +1970,14 @@ const backendProvider = {
         return payload.item;
     },
 
+    async streamFeedEntrySummary({ entryId, onToken }) {
+        const payload = await requestStream(`/feeds/entries/${entryId}/summary/stream`, {
+            onToken,
+            timeoutMs: 60_000,
+        });
+        return normalizeSummaryStreamPayload(payload);
+    },
+
     async updateEntriesStatus({ entryIds, status }) {
         await request('/feeds/entries/status', {
             method: 'PUT',
@@ -1925,6 +2032,15 @@ const backendProvider = {
         const payload = await request('/settings', {
             method: 'PUT',
             body: settings,
+        });
+        return payload.item;
+    },
+
+    async testModelConnection(settings) {
+        const payload = await request('/settings/model/test', {
+            method: 'POST',
+            body: settings,
+            timeoutMs: 40_000,
         });
         return payload.item;
     },
@@ -2000,7 +2116,7 @@ const backendProvider = {
     async streamSummary({ notebookId, articleId, onToken }) {
         const payload = await requestStream(
             `/notebooks/${notebookId}/articles/${articleId}/summary/stream`,
-            { onToken, timeoutMs: 60_000 },
+            { onToken, timeoutMs: 240_000 },
         );
         return normalizeSummaryStreamPayload(payload);
     },
@@ -2116,6 +2232,7 @@ export const appApi = {
         update: provider.updateNotebook,
         remove: provider.deleteNotebook,
         getDetail: provider.getNotebookDetail,
+        getArticle: provider.getNotebookArticle,
         exportNotebook: provider.exportNotebook,
     },
     notes: {
@@ -2142,6 +2259,7 @@ export const appApi = {
         refresh: provider.refreshFeed,
         listEntries: provider.listFeedEntries,
         getEntry: provider.getFeedEntry,
+        streamEntrySummary: provider.streamFeedEntrySummary,
         updateEntriesStatus: provider.updateEntriesStatus,
         toggleBookmark: provider.toggleEntryBookmark,
         listCategories: provider.listFeedCategories,
@@ -2153,6 +2271,7 @@ export const appApi = {
     settings: {
         get: provider.getSettings,
         update: provider.updateSettings,
+        testModelConnection: provider.testModelConnection,
         updateProfile: provider.updateProfile,
         uploadAvatar: provider.uploadAvatar,
         updatePassword: provider.updatePassword,

@@ -1,7 +1,7 @@
 """add article highlights
 
-Revision ID: 20260329_0019
-Revises: 20260325_0018
+Revision ID: 20260329_0023
+Revises: 20260329_0022
 Create Date: 2026-03-28 19:40:00
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql  # pragma: allowlist secret
 
-revision = "20260329_0019"
-down_revision = "20260325_0018"
+revision = "20260329_0023"
+down_revision = "20260329_0022"
 branch_labels = None
 depends_on = None
 

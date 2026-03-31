@@ -6,6 +6,7 @@ import asyncio
 import json
 import re
 import unicodedata
+from time import perf_counter
 
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -14,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.ingest.types import RemarkResult, TOCNode
 
 logger = structlog.get_logger(__name__)
-_SUMMARY_WARM_TIMEOUT_SECONDS = 5
+_SUMMARY_WARM_TIMEOUT_SECONDS = 60 
 _MAX_TOC_ITEMS = 60
 _MAX_TOC_CONTEXT_CHARS = 6000
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -29,24 +30,41 @@ async def ensure_toc(
     """确保 remark.toc 有值（优先 markdown headings，其次 LLM fallback）。"""
 
     if remark.toc:
+        logger.debug("enhance.toc_already_present", count=len(remark.toc))
         return
 
+    t0 = perf_counter()
     toc_from_markdown = _extract_toc_from_markdown(remark.clean_markdown)
     if toc_from_markdown:
         remark.toc = toc_from_markdown
-        logger.info("enhance.toc_built_from_markdown", count=len(remark.toc))
+        logger.info(
+            "enhance.toc_built_from_markdown",
+            count=len(remark.toc),
+            duration_ms=round((perf_counter() - t0) * 1000, 2),
+        )
         return
 
+    llm_t0 = perf_counter()
     llm_toc = await _generate_toc_via_llm(
         clean_markdown=remark.clean_markdown,
         title=title,
         language=language,
     )
+    llm_ms = round((perf_counter() - llm_t0) * 1000, 2)
     if llm_toc:
         remark.toc = llm_toc
-        logger.info("enhance.toc_built_from_llm", count=len(remark.toc))
+        logger.info(
+            "enhance.toc_built_from_llm",
+            count=len(remark.toc),
+            llm_duration_ms=llm_ms,
+            total_duration_ms=round((perf_counter() - t0) * 1000, 2),
+        )
     else:
-        logger.info("enhance.toc_missing_after_fallback")
+        logger.info(
+            "enhance.toc_missing_after_fallback",
+            llm_duration_ms=llm_ms,
+            total_duration_ms=round((perf_counter() - t0) * 1000, 2),
+        )
 
 
 async def warm_summary(
@@ -62,6 +80,7 @@ async def warm_summary(
 
     if not remark.clean_markdown:
         return
+    t0 = perf_counter()
     try:
         from app.modules.agent.summary.service import generate_summary
 
@@ -76,10 +95,23 @@ async def warm_summary(
             ),
             timeout=_SUMMARY_WARM_TIMEOUT_SECONDS,
         )
+        logger.debug(
+            "enhance.summary_warmed",
+            duration_ms=round((perf_counter() - t0) * 1000, 2),
+            markdown_chars=len(remark.clean_markdown),
+        )
     except asyncio.TimeoutError:
-        logger.warning("enhance.summary_timeout", timeout_s=_SUMMARY_WARM_TIMEOUT_SECONDS)
+        logger.warning(
+            "enhance.summary_timeout",
+            timeout_s=_SUMMARY_WARM_TIMEOUT_SECONDS,
+            elapsed_ms=round((perf_counter() - t0) * 1000, 2),
+        )
     except Exception as exc:
-        logger.warning("enhance.summary_failed", error=str(exc))
+        logger.warning(
+            "enhance.summary_failed",
+            error=str(exc),
+            duration_ms=round((perf_counter() - t0) * 1000, 2),
+        )
 
 
 async def enhance(

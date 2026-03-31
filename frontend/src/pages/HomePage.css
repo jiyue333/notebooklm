@@ -46,6 +46,16 @@
     background: transparent;
     cursor: pointer;
     padding: 0;
+    border-radius: 12px;
+    transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.home-logo-switcher:hover {
+    transform: scale(1.04);
+}
+
+.home-logo-switcher:active {
+    transform: scale(0.96);
 }
 
 .home-search-wrapper {

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import re
 from urllib.parse import quote
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse, RedirectResponse, Response
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_user_dep, db_session_dep
@@ -23,6 +25,7 @@ from app.modules.notebooks.service import (
     create_notebook,
     delete_notebook,
     export_notebook_markdown,
+    get_notebook_article,
     get_notebook_detail,
     invalidate_notebook_detail_cache,
     list_notebooks,
@@ -31,6 +34,12 @@ from app.modules.notebooks.service import (
 )
 
 router = APIRouter(prefix='/notebooks', tags=['notebooks'])
+_IMAGE_PROXY_TIMEOUT_SECONDS = 12.0
+_IMAGE_PROXY_MAX_BYTES = 8 * 1024 * 1024
+_IMAGE_PROXY_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36"
+)
 
 
 def _build_content_disposition(filename: str) -> str:
@@ -85,10 +94,16 @@ async def create_notebook_endpoint(
 @router.get('/{notebook_id}')
 async def get_notebook_detail_endpoint(
     notebook_id: str,
+    content_article_id: str | None = Query(default=None, alias='contentArticleId'),
     current_user=Depends(current_user_dep),
     session: AsyncSession = Depends(db_session_dep),
 ):
-    item = await get_notebook_detail(session, user_id=current_user.id, notebook_id=notebook_id)
+    item = await get_notebook_detail(
+        session,
+        user_id=current_user.id,
+        notebook_id=notebook_id,
+        content_article_id=content_article_id,
+    )
     return success_response(item=item)
 
 
@@ -177,6 +192,70 @@ async def get_article_file_endpoint(
         path=file_path,
         media_type=article.file_mime or 'application/octet-stream',
         filename=article.file_name or file_path.name,
+    )
+
+
+@router.get('/{notebook_id}/articles/{article_id}')
+async def get_article_endpoint(
+    notebook_id: str,
+    article_id: str,
+    current_user=Depends(current_user_dep),
+    session: AsyncSession = Depends(db_session_dep),
+):
+    item = await get_notebook_article(
+        session,
+        user_id=current_user.id,
+        notebook_id=notebook_id,
+        article_id=article_id,
+    )
+    return success_response(item=item)
+
+
+@router.get('/media/image-proxy')
+async def image_proxy_endpoint(
+    url: str = Query(min_length=8, max_length=2048),
+):
+    target = str(url or '').strip()
+    parsed = urlparse(target)
+    if parsed.scheme not in {'http', 'https'}:
+        raise AppError(422, '仅支持 http/https 图片链接', code='image_proxy_scheme_invalid')
+    if not parsed.netloc:
+        raise AppError(422, '图片链接无效', code='image_proxy_url_invalid')
+
+    headers = {
+        "User-Agent": _IMAGE_PROXY_USER_AGENT,
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Referer": f"{parsed.scheme}://{parsed.netloc}/",
+        "Cache-Control": "no-cache",
+    }
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(_IMAGE_PROXY_TIMEOUT_SECONDS),
+            follow_redirects=True,
+        ) as client:
+            resp = await client.get(target, headers=headers)
+    except Exception as exc:
+        raise AppError(502, f'图片拉取失败: {exc}', code='image_proxy_fetch_failed') from exc
+
+    if resp.status_code >= 400:
+        raise AppError(502, f'图片拉取失败({resp.status_code})', code='image_proxy_fetch_failed')
+
+    media_type = (resp.headers.get('content-type') or '').split(';')[0].strip().lower()
+    if not media_type.startswith('image/'):
+        raise AppError(415, '目标不是图片资源', code='image_proxy_invalid_content_type')
+
+    content = resp.content or b''
+    if not content:
+        raise AppError(502, '图片内容为空', code='image_proxy_empty')
+    if len(content) > _IMAGE_PROXY_MAX_BYTES:
+        raise AppError(413, '图片过大，暂不支持预览', code='image_proxy_too_large')
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "public, max-age=1800",
+        },
     )
 
 

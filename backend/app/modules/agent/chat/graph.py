@@ -1,6 +1,6 @@
 """Chat LangGraph 编排。
 
-flow: query_router → retrieval_planner → [retrieval_engine | skip] → web_search_broker
+flow: query_router → retrieval_planner → parallel_fetch(retrieval + web)
       → answer_generator → citation_verifier → END
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from time import perf_counter
 from typing import Awaitable, Callable
-from typing import Any, Literal
+from typing import Any
 
 import structlog
 from langgraph.graph import END, START, StateGraph
@@ -29,13 +29,6 @@ from app.modules.agent.chat.state import ChatGraphState, RetrievalPlanSpec
 logger = structlog.get_logger(__name__)
 
 
-def _should_retrieve(state: ChatGraphState) -> Literal["retrieve", "skip"]:
-    plan: RetrievalPlanSpec = state.get("retrieval_plan", RetrievalPlanSpec())
-    if plan.strategy == "skip":
-        return "skip"
-    return "retrieve"
-
-
 def _fallback_update(node_name: str, state: ChatGraphState) -> dict[str, Any]:
     route = state.get("route", "general")
     if node_name == "query_router":
@@ -44,6 +37,8 @@ def _fallback_update(node_name: str, state: ChatGraphState) -> dict[str, Any]:
             "retrieval_scope": "article" if state.get("article_id") else "none",
             "output_mode": "concise",
             "tools_needed": [],
+            "router_need_web_search": False,
+            "router_web_search_reason": "not_needed",
         }
     if node_name == "retrieval_planner":
         return {"retrieval_plan": RetrievalPlanSpec(strategy="skip")}
@@ -55,6 +50,11 @@ def _fallback_update(node_name: str, state: ChatGraphState) -> dict[str, Any]:
             "web_search_reason": "timeout",
             "web_evidence": [],
         }
+    if node_name == "parallel_fetch":
+        fallback: dict[str, Any] = {}
+        fallback.update(_fallback_update("retrieval_engine", state))
+        fallback.update(_fallback_update("web_search_broker", state))
+        return fallback
     if node_name == "answer_generator":
         return {
             "answer_text": "抱歉，本轮回答超时，请稍后重试或缩小问题范围。",
@@ -92,11 +92,20 @@ def _with_node_timeout(
     async def _wrapped(state: ChatGraphState) -> dict[str, Any]:
         route = state.get("route", "general")
         timeout_seconds = _resolve_node_timeout_seconds(state)
+        t_node = perf_counter()
+        logger.debug("chat.node_start", node=node_name, route=route,
+                     timeout_ms=round(timeout_seconds * 1000, 2))
         try:
             if timeout_seconds <= 0.011:
                 raise asyncio.TimeoutError()
-            return await asyncio.wait_for(node_fn(state), timeout=timeout_seconds)
+            result = await asyncio.wait_for(node_fn(state), timeout=timeout_seconds)
+            duration_ms = round((perf_counter() - t_node) * 1000, 2)
+            logger.info("chat.node_done", node=node_name, route=route, duration_ms=duration_ms)
+            return result
         except asyncio.TimeoutError:
+            duration_ms = round((perf_counter() - t_node) * 1000, 2)
+            logger.warning("chat.node_timeout", node=node_name, route=route,
+                           duration_ms=duration_ms, timeout_ms=round(timeout_seconds * 1000, 2))
             observe_chat_error(node=node_name)
             observe_chat_stage(
                 stage=node_name,
@@ -106,7 +115,9 @@ def _with_node_timeout(
             )
             return _fallback_update(node_name, state)
         except Exception as exc:
-            logger.warning("chat.node_failed", node=node_name, error=str(exc)[:200])
+            duration_ms = round((perf_counter() - t_node) * 1000, 2)
+            logger.warning("chat.node_failed", node=node_name, route=route,
+                           duration_ms=duration_ms, error=str(exc)[:200])
             observe_chat_error(node=node_name)
             observe_chat_stage(
                 stage=node_name,
@@ -121,21 +132,53 @@ def _with_node_timeout(
 def build_chat_graph() -> Any:
     builder = StateGraph(ChatGraphState)
 
-    builder.add_node("query_router", _with_node_timeout("query_router", query_router_node))
-    builder.add_node("retrieval_planner", _with_node_timeout("retrieval_planner", retrieval_planner_node))
-    builder.add_node("retrieval_engine", _with_node_timeout("retrieval_engine", retrieval_engine_node))
-    builder.add_node("web_search_broker", _with_node_timeout("web_search_broker", web_search_broker_node))
-    builder.add_node("answer_generator", _with_node_timeout("answer_generator", answer_generator_node))
-    builder.add_node("citation_verifier", _with_node_timeout("citation_verifier", citation_verifier_node))
+    query_router_wrapped = _with_node_timeout("query_router", query_router_node)
+    retrieval_planner_wrapped = _with_node_timeout("retrieval_planner", retrieval_planner_node)
+    retrieval_engine_wrapped = _with_node_timeout("retrieval_engine", retrieval_engine_node)
+    web_search_broker_wrapped = _with_node_timeout("web_search_broker", web_search_broker_node)
+    answer_generator_wrapped = _with_node_timeout("answer_generator", answer_generator_node)
+    citation_verifier_wrapped = _with_node_timeout("citation_verifier", citation_verifier_node)
+
+    async def _parallel_fetch(state: ChatGraphState) -> dict[str, Any]:
+        route = state.get("route", "general")
+        t0 = perf_counter()
+        retrieval_task = asyncio.create_task(retrieval_engine_wrapped(state))
+        web_task = asyncio.create_task(web_search_broker_wrapped(state))
+        retrieval_result, web_result = await asyncio.gather(
+            retrieval_task,
+            web_task,
+            return_exceptions=True,
+        )
+        merged: dict[str, Any] = {}
+        if isinstance(retrieval_result, Exception):
+            logger.warning("chat.parallel_fetch_retrieval_exception", route=route, error=str(retrieval_result)[:200])
+            merged.update(_fallback_update("retrieval_engine", state))
+        elif isinstance(retrieval_result, dict):
+            merged.update(retrieval_result)
+        else:
+            merged.update(_fallback_update("retrieval_engine", state))
+
+        if isinstance(web_result, Exception):
+            logger.warning("chat.parallel_fetch_web_exception", route=route, error=str(web_result)[:200])
+            merged.update(_fallback_update("web_search_broker", state))
+        elif isinstance(web_result, dict):
+            merged.update(web_result)
+        else:
+            merged.update(_fallback_update("web_search_broker", state))
+
+        logger.info("chat.parallel_fetch_done", route=route, duration_ms=round((perf_counter() - t0) * 1000, 2))
+        return merged
+
+    builder.add_node("query_router", query_router_wrapped)
+    builder.add_node("retrieval_planner", retrieval_planner_wrapped)
+    builder.add_node("parallel_fetch", _with_node_timeout("parallel_fetch", _parallel_fetch))
+    builder.add_node("answer_generator", answer_generator_wrapped)
+    builder.add_node("citation_verifier", citation_verifier_wrapped)
 
     builder.add_edge(START, "query_router")
     builder.add_edge("query_router", "retrieval_planner")
-    builder.add_conditional_edges("retrieval_planner", _should_retrieve, {
-        "retrieve": "retrieval_engine",
-        "skip": "web_search_broker",
-    })
-    builder.add_edge("retrieval_engine", "web_search_broker")
-    builder.add_edge("web_search_broker", "answer_generator")
+    builder.add_edge("retrieval_planner", "parallel_fetch")
+    builder.add_edge("parallel_fetch", "answer_generator")
     builder.add_edge("answer_generator", "citation_verifier")
     builder.add_edge("citation_verifier", END)
 

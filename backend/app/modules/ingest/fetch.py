@@ -8,9 +8,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import ipaddress
-import socket
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -22,16 +19,6 @@ from app.modules.ingest.types import IngestInput, InputType
 # 与 detect._EXT_ROUTE 同步：仅这些后缀才信任 URL 路径中的文件名（避免 arXiv id 等带点串）
 _TRUSTED_PATH_EXTS: frozenset[str] = frozenset(
     (".pdf", ".html", ".htm", ".doc", ".docx", ".ppt", ".pptx", ".png", ".jpg", ".jpeg", ".txt", ".md")
-)
-_BLOCKED_HOSTS: frozenset[str] = frozenset(
-    {
-        "localhost",
-        "127.0.0.1",
-        "::1",
-        "0.0.0.0",
-        "host.docker.internal",
-        "kubernetes.docker.internal",
-    }
 )
 
 logger = structlog.get_logger(__name__)
@@ -64,7 +51,6 @@ async def fetch_content(inp: IngestInput) -> tuple[bytes, str | None]:
         raise ValueError(f"{inp.input_type.value} 类型需要 source_url")
 
     _validate_source_url(inp.source_url)
-    await _guard_against_ssrf(inp.source_url)
 
     try:
         return await _download_url(inp.source_url, verify=True)
@@ -83,9 +69,6 @@ async def _download_url(source_url: str, *, verify: bool) -> tuple[bytes, str]:
     current_url = source_url
     async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT, follow_redirects=False, verify=verify) as http:
         for _ in range(_MAX_REDIRECTS + 1):
-            _validate_source_url(current_url)
-            await _guard_against_ssrf(current_url)
-
             async with http.stream("GET", current_url) as resp:
                 if 300 <= resp.status_code < 400:
                     location = (resp.headers.get("location") or "").strip()
@@ -139,41 +122,6 @@ def _validate_source_url(source_url: str) -> None:
         raise FetchContentError("fetch_invalid_scheme", f"仅支持 http/https 来源：{source_url}", retryable=False)
     if not parsed.netloc:
         raise FetchContentError("fetch_invalid_url", f"无效 URL：{source_url}", retryable=False)
-
-
-async def _guard_against_ssrf(source_url: str) -> None:
-    host = (urlparse(source_url).hostname or "").strip().lower()
-    if not host:
-        raise FetchContentError("fetch_invalid_url", f"无效 URL：{source_url}", retryable=False)
-    if host in _BLOCKED_HOSTS:
-        raise FetchContentError("fetch_ssrf_blocked", f"禁止访问内网地址：{host}", retryable=False)
-
-    try:
-        infos = await asyncio.to_thread(socket.getaddrinfo, host, None, type=socket.SOCK_STREAM)
-    except socket.gaierror:
-        # 域名解析失败交由上层 HTTP 错误处理，不视为 SSRF
-        return
-
-    for family, _, _, _, sockaddr in infos:
-        if family not in (socket.AF_INET, socket.AF_INET6):
-            continue
-        ip = sockaddr[0]
-        if _is_blocked_ip(ip):
-            raise FetchContentError("fetch_ssrf_blocked", f"禁止访问内网地址：{host} -> {ip}", retryable=False)
-
-
-def _is_blocked_ip(ip_value: str) -> bool:
-    try:
-        addr = ipaddress.ip_address(ip_value)
-    except ValueError:
-        return False
-    return (
-        addr.is_private
-        or addr.is_loopback
-        or addr.is_link_local
-        or addr.is_multicast
-        or addr.is_unspecified
-    )
 
 
 def _guess_filename(url: str, content_type: str) -> str:

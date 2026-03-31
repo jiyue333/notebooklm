@@ -44,13 +44,28 @@ class RouteDecision(BaseModel):
         default="concise",
         description="Preferred output format.",
     )
+    need_web_search: bool = Field(
+        default=False,
+        description="Whether web search should be used for this query.",
+    )
+    web_search_reason: str = Field(
+        default="not_needed",
+        description="Reason for web search decision.",
+    )
 
 
 # ── 快速规则 ──────────────────────────────────────────────────────
 
-_ARTICLE_HINTS = ("这篇", "本文", "文中", "文章里", "当前文章", "this article", "this paper")
 _RECOMMEND_HINTS = ("推荐", "相关", "类似", "similar", "recommend", "related")
 _NOTEBOOK_HINTS = ("所有文章", "笔记本", "对比", "综述", "总结", "compare", "across")
+_WEB_HINTS = (
+    "最新", "近期", "最近", "动态", "新闻", "官网", "价格", "版本", "发布", "政策",
+    "latest", "recent", "current", "news", "official", "price", "release", "update",
+)
+_GENERAL_WEB_HINTS = (
+    "今天", "现在", "本周", "本月", "热点", "实时",
+    "today", "now", "this week", "this month", "breaking",
+)
 
 _SCOPE_MAP = {
     "article_qa": "article",
@@ -72,18 +87,18 @@ async def query_router_node(state: ChatGraphState) -> dict[str, Any]:
     article_id = state.get("article_id")
     query_lower = query.lower()
 
-    # ========== 快速规则路由 ==========
-    rule_route = _rule_match(query, query_lower, article_id)
-    if rule_route:
-        observe_chat_stage(stage="query_router", route=rule_route, status="rule", duration_ms=_ms(t0))
-        return _build_result(rule_route)
-
     # ========== LLM 结构化输出路由 ==========
+    t_model = perf_counter()
     model = build_lite_llm()
+    logger.debug("chat.router_build_model", duration_ms=_ms(t_model))
     if model is None:
-        route = "article_qa" if article_id else "general"
-        observe_chat_stage(stage="query_router", route=route, status="fallback", duration_ms=_ms(t0))
-        return _build_result(route)
+        return _rule_fallback_result(
+            query=query,
+            query_lower=query_lower,
+            article_id=article_id,
+            duration_ms=_ms(t0),
+            status="model_unavailable",
+        )
 
     messages = [
         SystemMessage(content=ROUTER_SYSTEM),
@@ -98,17 +113,27 @@ async def query_router_node(state: ChatGraphState) -> dict[str, Any]:
 
     try:
         structured_model = model.with_structured_output(RouteDecision)
+        t_llm = perf_counter()
         decision: RouteDecision = await structured_model.ainvoke(messages)
+        logger.info("chat.router_llm_structured", duration_ms=_ms(t_llm), route=decision.route.value)
         route = decision.route.value
         observe_chat_stage(stage="query_router", route=route, status="ok", duration_ms=_ms(t0))
+        tools_needed, web_reason = _decide_tools(
+            route=route,
+            query=query_lower,
+            llm_need=bool(getattr(decision, "need_web_search", False)),
+            llm_reason=str(getattr(decision, "web_search_reason", "") or "").strip().lower(),
+        )
         return {
             "route": route,
             "retrieval_scope": decision.retrieval_scope,
             "output_mode": decision.output_mode,
-            "tools_needed": _TOOLS_MAP.get(route, []),
+            "tools_needed": tools_needed,
+            "router_need_web_search": "web_search" in tools_needed,
+            "router_web_search_reason": web_reason,
         }
     except Exception as exc:
-        logger.warning("chat.router_structured_failed", error=str(exc)[:200])
+        logger.warning("chat.router_structured_failed", error=str(exc)[:200], duration_ms=_ms(t0))
         observe_chat_error(node="query_router")
         try:
             fallback_prompt = HumanMessage(
@@ -117,18 +142,28 @@ async def query_router_node(state: ChatGraphState) -> dict[str, Any]:
                     "article_qa / notebook_search / recommendation / general。"
                 )
             )
+            t_llm_text = perf_counter()
             raw = await model.ainvoke([*messages, fallback_prompt])
             route = _extract_route_from_text(_message_text(raw))
             if route:
+                tools_needed, web_reason = _decide_tools(route=route, query=query_lower)
+                logger.info("chat.router_llm_text_fallback", duration_ms=_ms(t_llm_text), route=route)
                 observe_chat_stage(stage="query_router", route=route, status="llm_text", duration_ms=_ms(t0))
-                return _build_result(route)
+                return _build_result(
+                    route=route,
+                    tools_needed=tools_needed,
+                    web_reason=web_reason,
+                )
         except Exception as plain_exc:
             logger.warning("chat.router_text_fallback_failed", error=str(plain_exc)[:200])
 
-    # fallback
-    route = "article_qa" if article_id else "general"
-    observe_chat_stage(stage="query_router", route=route, status="fallback", duration_ms=_ms(t0))
-    return _build_result(route)
+    return _rule_fallback_result(
+        query=query,
+        query_lower=query_lower,
+        article_id=article_id,
+        duration_ms=_ms(t0),
+        status="rule_fallback",
+    )
 
 
 def _rule_match(query: str, query_lower: str, article_id: str | None) -> str | None:
@@ -142,13 +177,91 @@ def _rule_match(query: str, query_lower: str, article_id: str | None) -> str | N
     return None
 
 
-def _build_result(route: str) -> dict[str, Any]:
+def _rule_fallback_result(
+    *,
+    query: str,
+    query_lower: str,
+    article_id: str | None,
+    duration_ms: float,
+    status: str,
+) -> dict[str, Any]:
+    t_rule = perf_counter()
+    route = _rule_match(query, query_lower, article_id) or ("article_qa" if article_id else "general")
+    tools_needed, web_reason = _decide_tools(route=route, query=query_lower)
+    logger.debug(
+        "chat.router_rule_match",
+        route=route,
+        duration_ms=_ms(t_rule),
+        fallback_status=status,
+    )
+    observe_chat_stage(stage="query_router", route=route, status=status, duration_ms=duration_ms)
+    return _build_result(
+        route=route,
+        tools_needed=tools_needed,
+        web_reason=web_reason,
+    )
+
+
+def _build_result(route: str, *, tools_needed: list[str], web_reason: str) -> dict[str, Any]:
     return {
         "route": route,
         "retrieval_scope": _SCOPE_MAP.get(route, "none"),
         "output_mode": "list" if route == "recommendation" else ("detailed" if route != "general" else "concise"),
-        "tools_needed": _TOOLS_MAP.get(route, []),
+        "tools_needed": tools_needed,
+        "router_need_web_search": "web_search" in tools_needed,
+        "router_web_search_reason": web_reason,
     }
+
+
+def _decide_tools(
+    *,
+    route: str,
+    query: str,
+    llm_need: bool = False,
+    llm_reason: str = "",
+) -> tuple[list[str], str]:
+    tools = list(_TOOLS_MAP.get(route, []))
+    need_web = False
+    reason = "not_needed"
+
+    if llm_need:
+        need_web = True
+        reason = _normalize_web_reason(llm_reason)
+    elif any(hint in query for hint in _WEB_HINTS):
+        need_web = True
+        reason = "router_freshness"
+    elif route in {"recommendation", "notebook_search"}:
+        need_web = True
+        reason = "router_route_policy"
+    elif route == "general" and any(hint in query for hint in _GENERAL_WEB_HINTS):
+        need_web = True
+        reason = "router_general_freshness"
+
+    if need_web and "web_search" not in tools:
+        tools.append("web_search")
+    return tools, reason
+
+
+def _normalize_web_reason(reason: str) -> str:
+    value = (reason or "").strip().lower()
+    if not value:
+        return "router_llm"
+    allowed = {
+        "router_llm",
+        "router_freshness",
+        "router_route_policy",
+        "router_general_freshness",
+        "external_fact",
+        "freshness",
+        "not_needed",
+    }
+    if value in allowed:
+        return value
+    if any(hint in value for hint in ("fresh", "latest", "recent", "news", "动态", "最新", "近期")):
+        return "router_freshness"
+    if any(hint in value for hint in ("recommend", "related", "推荐", "相关")):
+        return "router_route_policy"
+    return "router_llm"
 
 
 def _format_history(history: list[dict]) -> str:

@@ -106,6 +106,8 @@ class Settings(BaseSettings):
     lite_llm_timeout: int = 60  # scoring 15 items can be slow; increase if score_fallback occurs
     lite_llm_max_tokens: int | None = Field(default=None, ge=1)
 
+    chat_model_timeout: int = 150  # HTTP-level timeout for user chat model (summary/chat nodes)
+
     rerank_model: str = "Qwen3-Reranker-8B"
     rerank_model_api_url: str = "https://router.tumuer.me/v1"
     rerank_model_api_key: str | None = None

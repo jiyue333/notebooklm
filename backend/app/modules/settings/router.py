@@ -7,11 +7,12 @@ from app.api.deps import current_user_dep, db_session_dep
 from app.api.response import success_response
 from app.modules.auth.account_service import update_avatar, update_password, update_profile
 from app.modules.settings.schemas import (
+    ModelConnectionTestRequest,
     PasswordUpdateRequest,
     ProfileUpdateRequest,
     SettingsUpdateRequest,
 )
-from app.modules.settings.service import get_settings, update_settings
+from app.modules.settings.service import get_settings, test_model_connection, update_settings
 
 router = APIRouter(tags=["settings"])
 
@@ -33,6 +34,15 @@ async def update_settings_endpoint(
         user=current_user,
         payload=payload.model_dump(exclude_unset=True),
     )
+    return success_response(item=item)
+
+
+@router.post("/settings/model/test")
+async def test_model_connection_endpoint(
+    payload: ModelConnectionTestRequest,
+    current_user=Depends(current_user_dep),
+):
+    item = await test_model_connection(user=current_user, payload=payload.model_dump(exclude_unset=True))
     return success_response(item=item)
 
 

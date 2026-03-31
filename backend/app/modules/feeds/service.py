@@ -18,6 +18,15 @@ from app.modules.settings.runtime import get_merged_user_settings
 
 _STRIP_HTML_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
+_SUMMARY_HTML_BLOCK_REPLACEMENTS = (
+    (r"(?i)<br\s*/?>", "\n"),
+    (r"(?i)</p\s*>", "\n\n"),
+    (r"(?i)</div\s*>", "\n\n"),
+    (r"(?i)</section\s*>", "\n\n"),
+    (r"(?i)</article\s*>", "\n\n"),
+    (r"(?i)</li\s*>", "\n"),
+    (r"(?is)<li[^>]*>", "- "),
+)
 
 
 @dataclass(slots=True)
@@ -172,12 +181,73 @@ def _build_preview(value: str | None, *, max_chars: int = 220) -> str:
     return f"{text[:max_chars].rstrip()}..."
 
 
-def _build_ai_summary(preview: str) -> str:
-    if not preview:
+def _truncate_text(text: str, *, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+
+    preferred_boundaries = [
+        text.rfind(symbol, 0, max_chars + 1)
+        for symbol in ("。", "！", "？", ".", "!", "?", "；", ";", "，", ",")
+    ]
+    boundary = max(preferred_boundaries)
+    if boundary >= int(max_chars * 0.58):
+        return f"{text[:boundary + 1].rstrip()}..."
+    return f"{text[:max_chars].rstrip()}..."
+
+
+def _build_ai_summary(value: str | None, *, max_chars: int = 320) -> str:
+    text = _strip_html(value)
+    if not text:
         return "暂无摘要"
-    if len(preview) <= 90:
-        return preview
-    return f"{preview[:90].rstrip()}..."
+    return _truncate_text(text, max_chars=max_chars)
+
+
+def _build_summary_text(value: str | None, *, max_chars: int = 1200) -> str:
+    text = _strip_html(value)
+    if not text:
+        return ""
+    return _truncate_text(text, max_chars=max_chars)
+
+
+def _convert_html_to_markdown(value: str | None) -> str:
+    raw = str(value or "")
+    if not raw:
+        return ""
+
+    stripped = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", raw)
+    for pattern, replacement in _SUMMARY_HTML_BLOCK_REPLACEMENTS:
+        stripped = re.sub(pattern, replacement, stripped)
+
+    for level in range(6, 0, -1):
+        stripped = re.sub(
+            rf"(?is)<h{level}[^>]*>(.*?)</h{level}>",
+            lambda match: f"\n\n{'#' * level} {_strip_html(match.group(1))}\n\n",
+            stripped,
+        )
+
+    stripped = re.sub(r"(?is)<[^>]+>", " ", stripped)
+    stripped = html.unescape(stripped)
+    stripped = re.sub(r"\r\n?", "\n", stripped)
+    stripped = re.sub(r"[ \t]+\n", "\n", stripped)
+    stripped = re.sub(r"\n{3,}", "\n\n", stripped)
+    return stripped.strip()
+
+
+def build_entry_summary_markdown(entry: dict[str, Any]) -> str:
+    title = str(entry.get("title") or "未命名文章").strip() or "未命名文章"
+    source_url = str(entry.get("url") or "").strip()
+    content_markdown = _convert_html_to_markdown(entry.get("content") or entry.get("summary") or "")
+    if not content_markdown:
+        fallback_text = _strip_html(entry.get("content") or entry.get("summary") or "")
+        if fallback_text:
+            content_markdown = fallback_text
+
+    parts = [f"# {title}"]
+    if source_url:
+        parts.append(f"来源：{source_url}")
+    if content_markdown:
+        parts.append(content_markdown)
+    return "\n\n".join(part for part in parts if part).strip()
 
 
 def _to_entry_view(entry: dict[str, Any], *, local_feed_map: dict[int, RssFeed], include_content: bool = False) -> dict:
@@ -191,7 +261,9 @@ def _to_entry_view(entry: dict[str, Any], *, local_feed_map: dict[int, RssFeed],
     local_feed = local_feed_map.get(miniflux_feed_id)
     feed_title = str(raw_feed.get("title") or local_feed.title if local_feed else raw_feed.get("title") or "")
 
-    preview = _build_preview(entry.get("content") or entry.get("summary") or "")
+    summary_source = entry.get("content") or entry.get("summary") or ""
+    preview = _build_preview(summary_source, max_chars=260)
+    summary_text = _build_summary_text(summary_source, max_chars=1200)
     published_at = entry.get("published_at") or entry.get("created_at")
 
     item = {
@@ -206,8 +278,9 @@ def _to_entry_view(entry: dict[str, Any], *, local_feed_map: dict[int, RssFeed],
         "readingTime": entry.get("reading_time") or entry.get("reading_time_minutes"),
         "status": entry.get("status") or "unread",
         "starred": bool(entry.get("starred")),
-        "aiSummary": _build_ai_summary(preview),
+        "aiSummary": _build_ai_summary(summary_source, max_chars=320),
         "contentPreview": preview,
+        "summaryText": summary_text,
         "hash": entry.get("hash"),
     }
 

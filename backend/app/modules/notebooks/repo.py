@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Select, desc, or_, select
+from sqlalchemy import Select, asc, desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from collections import defaultdict
@@ -70,7 +70,7 @@ async def list_articles_by_notebook(
     result = await session.execute(
         select(Article)
         .where(Article.user_id == user_id, Article.notebook_id == notebook_id)
-        .order_by(Article.created_at.desc())
+        .order_by(desc(Article.created_at), desc(Article.id))
     )
     return list(result.scalars().all())
 

@@ -23,7 +23,12 @@ from app.api.sse import build_sse_error_payload, encode_sse_event
 from app.infra.cache import get_json, search_context_key, set_json
 from app.modules.agent.chat.service import list_notebook_conversations, remove_notebook_conversation, stream_message
 from app.modules.agent.search import repo as search_repo
-from app.modules.agent.summary.service import generate_summary, list_notebook_summaries, normalize_summary_language
+from app.modules.agent.summary.service import (
+    cache_temporary_unavailable_summary,
+    generate_summary,
+    list_notebook_summaries,
+    normalize_summary_language,
+)
 from app.modules.notebooks import repo as notebooks_repo
 from app.modules.settings.runtime import (
     get_merged_user_settings,
@@ -194,6 +199,8 @@ async def summary_stream_endpoint(
     session: AsyncSession = Depends(db_session_dep),
 ):
     async def _stream() -> AsyncIterator[str]:
+        article = None
+        output_language = "auto"
         try:
             article = await notebooks_repo.get_article(
                 session,
@@ -266,15 +273,57 @@ async def summary_stream_endpoint(
                 if acquired:
                     _summary_stream_semaphore.release()
 
-            summary_text = result.get("summary_text", "")
+            summary_text = str(result.get("summary_text", "") or "").strip()
+            temporary_unavailable = bool(result.get("temporaryUnavailable", False))
+            if not summary_text:
+                try:
+                    summary_text = await cache_temporary_unavailable_summary(
+                        article_id=article.id,
+                        title=article.title,
+                        clean_markdown=article.clean_markdown or "",
+                        language=output_language,
+                        user=current_user,
+                    )
+                    temporary_unavailable = True
+                except Exception:
+                    logger.warning(
+                        "ai.summary.temp_unavailable_cache_failed",
+                        notebook_id=notebook_id,
+                        article_id=article_id,
+                    )
+                    summary_text = "摘要服务暂时不可用，请 1 分钟后重试。"
+                    temporary_unavailable = True
             if not streamed_len and summary_text:
                 yield encode_sse_event("token", {"text": summary_text})
             yield encode_sse_event("done", {
                 "summaryText": summary_text,
                 "cached": result.get("cached", False),
                 "language": output_language,
+                "temporaryUnavailable": temporary_unavailable,
             })
         except Exception as exc:
+            if article is not None and (article.clean_markdown or "").strip():
+                try:
+                    summary_text = await cache_temporary_unavailable_summary(
+                        article_id=article.id,
+                        title=article.title,
+                        clean_markdown=article.clean_markdown or "",
+                        language=output_language,
+                        user=current_user,
+                    )
+                    yield encode_sse_event("done", {
+                        "summaryText": summary_text,
+                        "cached": False,
+                        "language": output_language,
+                        "temporaryUnavailable": True,
+                    })
+                    return
+                except Exception:
+                    logger.warning(
+                        "ai.summary.temp_unavailable_emit_failed",
+                        notebook_id=notebook_id,
+                        article_id=article_id,
+                    )
             yield build_sse_error_payload(
                 exc, fallback_message="摘要生成失败", fallback_code="summary_failed",
                 logger=logger, log_event="ai.summary.stream_error",

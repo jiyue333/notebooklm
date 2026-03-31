@@ -2,20 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
 from time import perf_counter
 from typing import Any
 
 import structlog
-from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
-from app.infra.ai.lite_models import build_lite_llm
 from app.infra.cache import chat_web_search_key, get_json, set_json
 from app.infra.telemetry.metrics import observe_chat_error, observe_chat_stage, observe_chat_web_search
-from app.modules.agent.chat.prompts import WEB_BROKER_SYSTEM
 from app.modules.agent.chat.state import ChatGraphState
 from app.modules.settings.runtime import resolve_search_api_key, resolve_tavily_api_key
 
@@ -46,47 +41,24 @@ _TAVILY_FAILURE_STREAK = 0
 _TAVILY_COOLDOWN_SECONDS = 300
 
 
-class WebSearchDecision(BaseModel):
-    need_search: bool = Field(default=False)
-    reason: str = Field(default="not_needed")
-
-
 async def web_search_broker_node(state: ChatGraphState) -> dict[str, Any]:
     t0 = perf_counter()
     settings = get_settings()
     query = state["query"]
     route = state.get("route", "general")
-    local_evidence = state.get("local_evidence", [])
     tools_needed = state.get("tools_needed", [])
+    router_need_web = bool(state.get("router_need_web_search", False))
+    router_reason = str(state.get("router_web_search_reason", "") or "").strip().lower()
     user = state.get("user")
     user_id = str(state.get("user_id") or "")
 
-    # ========== 规则层快速判定 ==========
-    need = False
-    reason = "not_needed"
+    # ========== Router 决定是否联网 ==========
+    need = router_need_web or ("web_search" in tools_needed)
+    reason = _normalize_router_reason(router_reason) if router_reason else ("router_required" if need else "not_needed")
 
-    if "web_search" in tools_needed:
-        need, reason = True, "user_explicit"
-    elif _FRESHNESS_KEYWORDS.search(query):
+    # 兼容旧状态：若 router 未显式给出，但 query 明显是时效类，保守触发联网。
+    if not need and not router_reason and _FRESHNESS_KEYWORDS.search(query):
         need, reason = True, "freshness"
-    elif not local_evidence and route not in {"general", "recommendation"}:
-        need, reason = True, "insufficient_local"
-
-    if not need:
-        if local_evidence:
-            max_score = max(e.get("score", 0) for e in local_evidence)
-            if max_score < settings.chat_web_search_score_threshold and route not in {"general", "recommendation"}:
-                need, reason = True, "insufficient_local"
-
-    if not need:
-        llm_need, llm_reason = await _llm_decide_web_search(
-            query=query,
-            route=route,
-            local_evidence=local_evidence,
-        )
-        if llm_need:
-            need = True
-            reason = llm_reason or "external_fact"
 
     observe_chat_web_search(route=route, reason=reason)
 
@@ -100,10 +72,13 @@ async def web_search_broker_node(state: ChatGraphState) -> dict[str, Any]:
 
     # ========== 缓存命中 ==========
     cache_key = chat_web_search_key(user_id=user_id, route=route, query=query)
+    t_cache = perf_counter()
     cached = await get_json(cache_key)
+    logger.debug("chat.web_broker_cache_check", duration_ms=_ms(t_cache), hit=isinstance(cached, dict))
     if isinstance(cached, dict):
         cached_results = cached.get("results")
         if isinstance(cached_results, list):
+            logger.info("chat.web_broker_cache_hit", duration_ms=_ms(t0), result_count=len(cached_results))
             observe_chat_stage(stage="web_search_broker", route=route, status="cache_hit", duration_ms=_ms(t0))
             return {
                 "need_web_search": True,
@@ -112,10 +87,12 @@ async def web_search_broker_node(state: ChatGraphState) -> dict[str, Any]:
             }
 
     # ========== 搜索执行 ==========
+    t_search = perf_counter()
     try:
         web_results = await _execute_search(query, user)
+        logger.info("chat.web_broker_search_done", duration_ms=_ms(t_search), result_count=len(web_results))
     except Exception as exc:
-        logger.warning("chat.web_search_execute_failed", error=str(exc)[:200])
+        logger.warning("chat.web_search_execute_failed", duration_ms=_ms(t_search), error=str(exc)[:200])
         observe_chat_error(node="web_search_broker")
         observe_chat_stage(stage="web_search_broker", route=route, status="error", duration_ms=_ms(t0))
         return {"need_web_search": True, "web_search_reason": reason, "web_evidence": []}
@@ -151,6 +128,7 @@ async def _execute_search(query: str, user=None) -> list[dict]:
             from app.infra.providers.tavily.search_client import TavilySearchClient, TavilySearchRequest
 
             client = TavilySearchClient()
+            t_tavily = perf_counter()
             resp = await client.search(
                 TavilySearchRequest(
                     query=query,
@@ -161,13 +139,16 @@ async def _execute_search(query: str, user=None) -> list[dict]:
                 ),
                 api_key=tavily_key,
             )
+            results = _parse_tavily_results(resp)
+            logger.info("chat.tavily_search_done", duration_ms=_ms(t_tavily), result_count=len(results))
             _mark_tavily_success()
-            return _parse_tavily_results(resp)
+            return results
         except Exception as exc:
             disable_reason = _classify_tavily_failure(exc)
             _mark_tavily_failure(disable_reason)
             logger.warning(
                 "chat.tavily_search_failed",
+                duration_ms=_ms(t_tavily) if "t_tavily" in dir() else 0,
                 error=str(exc)[:200],
                 disable_tavily=bool(disable_reason),
                 disable_reason=disable_reason or "",
@@ -187,6 +168,7 @@ async def _execute_search(query: str, user=None) -> list[dict]:
 
 async def _search_with_exa(query: str, exa_key: str) -> list[dict]:
     client = None
+    t_exa = perf_counter()
     try:
         from app.infra.providers.exa.search_client import ExaSearchClient, ExaSearchRequest
 
@@ -195,9 +177,11 @@ async def _search_with_exa(query: str, exa_key: str) -> list[dict]:
             ExaSearchRequest(query=query, max_results=5, timeout_seconds=6.0),
             api_key=exa_key,
         )
-        return _parse_exa_results(resp)
+        results = _parse_exa_results(resp)
+        logger.info("chat.exa_search_done", duration_ms=_ms(t_exa), result_count=len(results))
+        return results
     except Exception as exc:
-        logger.warning("chat.exa_search_failed", error=str(exc)[:200])
+        logger.warning("chat.exa_search_failed", duration_ms=_ms(t_exa), error=str(exc)[:200])
         return []
     finally:
         if client is not None:
@@ -237,39 +221,6 @@ def _mark_tavily_failure(reason: str) -> None:
         _TAVILY_DISABLE_UNTIL_MONO = perf_counter() + _TAVILY_COOLDOWN_SECONDS
 
 
-async def _llm_decide_web_search(
-    *,
-    query: str,
-    route: str,
-    local_evidence: list[dict],
-) -> tuple[bool, str]:
-    model = build_lite_llm()
-    if model is None:
-        return False, "not_needed"
-    max_local_score = max((float(item.get("score") or 0.0) for item in local_evidence), default=0.0)
-    prompt = (
-        "Query:\n"
-        f"{query}\n\n"
-        f"Route: {route}\n"
-        f"Local evidence count: {len(local_evidence)}\n"
-        f"Local max score: {max_local_score:.3f}\n"
-        "Reply only JSON."
-    )
-    try:
-        structured = model.with_structured_output(WebSearchDecision)
-        decision = await asyncio.wait_for(
-            structured.ainvoke([
-                SystemMessage(content=WEB_BROKER_SYSTEM),
-                HumanMessage(content=prompt),
-            ]),
-            timeout=1.8,
-        )
-    except Exception:
-        return False, "not_needed"
-    reason = str(getattr(decision, "reason", "external_fact") or "external_fact").strip().lower()
-    return bool(getattr(decision, "need_search", False)), reason
-
-
 def _error_chain_text(exc: Exception, *, max_depth: int = 4) -> str:
     parts: list[str] = []
     current: BaseException | None = exc
@@ -294,6 +245,25 @@ def _error_chain_text(exc: Exception, *, max_depth: int = 4) -> str:
         current = current.__cause__ or current.__context__
         depth += 1
     return " | ".join(parts).lower()
+
+
+def _normalize_router_reason(reason: str) -> str:
+    value = (reason or "").strip().lower()
+    if not value:
+        return "router_required"
+    allowed = {
+        "router_llm",
+        "router_freshness",
+        "router_route_policy",
+        "router_general_freshness",
+        "router_required",
+        "freshness",
+        "not_needed",
+        "cache_hit",
+    }
+    if value in allowed:
+        return value
+    return "router_llm"
 
 
 def _parse_tavily_results(resp: dict) -> list[dict]:

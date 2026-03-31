@@ -94,6 +94,64 @@ function buildInterleavedTranslationMarkdown(originalMarkdown, translatedMarkdow
     return chunks.join('\n\n');
 }
 
+const INLINE_CITATION_PATTERN = /\[(W?)(\d+)\]/g;
+
+function getCitationAnchorId(sourceType, displayIndex) {
+    return `nb-chat-citation-${sourceType === 'web' ? 'w' : 'l'}-${displayIndex}`;
+}
+
+function extractChatCitationRefs(content) {
+    const refs = [];
+    const seen = new Set();
+    const text = String(content || '');
+    for (const match of text.matchAll(/\[(W?)(\d+)\]/g)) {
+        const sourceType = match[1] ? 'web' : 'local';
+        const displayIndex = Number(match[2]);
+        if (!Number.isFinite(displayIndex) || displayIndex <= 0) continue;
+        const key = `${sourceType}:${displayIndex}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        refs.push({ sourceType, displayIndex, citationLabel: sourceType === 'web' ? `[W${displayIndex}]` : `[${displayIndex}]` });
+    }
+    return refs;
+}
+
+function injectChatCitationLinks(content) {
+    return String(content || '').replace(INLINE_CITATION_PATTERN, (_, webMarker, rawIndex) => {
+        const sourceType = webMarker ? 'web' : 'local';
+        const displayIndex = Number(rawIndex);
+        if (!Number.isFinite(displayIndex) || displayIndex <= 0) {
+            return '';
+        }
+        const label = sourceType === 'web' ? `W${displayIndex}` : String(displayIndex);
+        return `[[${label}]](#${getCitationAnchorId(sourceType, displayIndex)})`;
+    });
+}
+
+function normalizeChatAnswerMarkdown(content) {
+    let text = String(content || '').replace(/\r\n?/g, '\n').trim();
+    if (!text) return '';
+
+    const hasStructuredMarkdown = /(^|\n)\s{0,3}(#{1,6}\s|[-*+]\s|\d+\.\s|>\s|```)/m.test(text);
+    if (!hasStructuredMarkdown) {
+        text = text
+            .replace(/([：:])\s*(\d+\.\s+)/g, '$1\n\n$2')
+            .replace(/([。！？!?；;])\s*(\d+\.\s+)/g, '$1\n\n$2')
+            .replace(/(\[[W]?\d+\])\s*-\s+/g, '$1\n- ')
+            .replace(/([。！？!?；;])\s*-\s+/g, '$1\n- ');
+        if (!text.includes('\n') && text.length > 140) {
+            text = text.replace(/([。！？!?；;])\s*/g, '$1\n\n');
+        }
+    }
+
+    text = text
+        .replace(/\n{3,}/g, '\n\n')
+        .replace(/[ \t]+\n/g, '\n')
+        .trim();
+
+    return injectChatCitationLinks(text);
+}
+
 function areTocEntriesEqual(left = [], right = []) {
     if (left === right) return true;
     if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
@@ -109,6 +167,37 @@ function areTocEntriesEqual(left = [], right = []) {
 
 function normalizeHeadingText(value) {
     return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function coerceArticleTocItems(rawToc) {
+    let source = rawToc;
+    if (typeof source === 'string') {
+        const trimmed = source.trim();
+        if (!trimmed) return [];
+        try {
+            source = JSON.parse(trimmed);
+        } catch {
+            return [];
+        }
+    }
+    if (source && typeof source === 'object' && !Array.isArray(source)) {
+        source = source.items || source.toc || source.headings || [];
+    }
+    if (!Array.isArray(source)) {
+        return [];
+    }
+    return source
+        .map((item, index) => {
+            const title = normalizeHeadingText(item?.title || item?.text || item?.name);
+            if (!title) return null;
+            return {
+                id: String(item?.id || item?.anchor || item?.slug || '').trim(),
+                title,
+                level: Number(item?.level) || 2,
+                matchIndex: index,
+            };
+        })
+        .filter(Boolean);
 }
 
 function formatArticleDate(value) {
@@ -215,20 +304,125 @@ function resolveRangeByOffsets(root, startOffset, endOffset) {
 function resolveRangeByTextOccurrence(root, text, occurrenceIndex = null) {
     if (!root || !text) return null;
     const hits = collectReaderSearchMatches(root, text, 500);
-    if (!hits.length) return null;
-    const targetIndex = Number.isFinite(occurrenceIndex) && occurrenceIndex >= 0 && occurrenceIndex < hits.length
-        ? occurrenceIndex
-        : 0;
-    const current = hits[targetIndex];
-    if (!current?.textNode) return null;
+    if (hits.length) {
+        const targetIndex = Number.isFinite(occurrenceIndex) && occurrenceIndex >= 0 && occurrenceIndex < hits.length
+            ? occurrenceIndex
+            : 0;
+        const current = hits[targetIndex];
+        if (!current?.textNode) return null;
+        try {
+            const range = document.createRange();
+            range.setStart(current.textNode, current.start);
+            range.setEnd(current.textNode, current.end);
+            return range;
+        } catch {
+            return null;
+        }
+    }
+    return resolveRangeAcrossTextFlow(root, text);
+}
+
+function resolveRangeAcrossTextFlow(root, text) {
+    const keyword = String(text || '').trim();
+    if (!root || !keyword) return null;
+
+    const walker = document.createTreeWalker(
+        root,
+        NodeFilter.SHOW_TEXT,
+        {
+            acceptNode(node) {
+                if (!node.nodeValue?.trim()) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                const parent = node.parentElement;
+                if (!parent || parent.closest('pre')) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                return NodeFilter.FILTER_ACCEPT;
+            },
+        },
+    );
+
+    const segments = [];
+    let combinedText = '';
+    while (walker.nextNode()) {
+        const textNode = walker.currentNode;
+        const rawText = textNode.nodeValue || '';
+        segments.push({
+            textNode,
+            start: combinedText.length,
+            end: combinedText.length + rawText.length,
+        });
+        combinedText += rawText;
+    }
+
+    if (!combinedText) return null;
+    const matchIndex = combinedText.toLocaleLowerCase().indexOf(keyword.toLocaleLowerCase());
+    if (matchIndex < 0) return null;
+
+    const startOffset = matchIndex;
+    const endOffset = matchIndex + keyword.length;
+    const startSegment = segments.find((segment) => startOffset >= segment.start && startOffset < segment.end);
+    const endSegment = segments.find((segment) => endOffset > segment.start && endOffset <= segment.end)
+        || segments.find((segment) => endOffset === segment.end);
+    if (!startSegment || !endSegment) return null;
+
     try {
         const range = document.createRange();
-        range.setStart(current.textNode, current.start);
-        range.setEnd(current.textNode, current.end);
+        range.setStart(startSegment.textNode, startOffset - startSegment.start);
+        range.setEnd(endSegment.textNode, Math.max(endOffset - endSegment.start, 0));
         return range;
     } catch {
         return null;
     }
+}
+
+function normalizeCitationLocatorText(value) {
+    return String(value || '')
+        .replace(/[`*_>#~[\]()]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function buildCitationLocatorCandidates(citation) {
+    const seedValues = [
+        citation?.locatorText,
+        citation?.snippet,
+        citation?.headingTitle,
+        citation?.sectionPath,
+    ];
+    const candidates = [];
+    const seen = new Set();
+
+    const pushCandidate = (value) => {
+        const candidate = String(value || '').trim();
+        if (!candidate || candidate.length < 8) return;
+        if (seen.has(candidate)) return;
+        seen.add(candidate);
+        candidates.push(candidate);
+    };
+
+    seedValues.forEach((value) => {
+        const normalized = normalizeCitationLocatorText(value);
+        if (!normalized) return;
+        pushCandidate(normalized);
+        normalized
+            .split(/[\n。！？!?；;:：]+/)
+            .map((part) => part.trim())
+            .filter((part) => part.length >= 8)
+            .forEach((part) => {
+                pushCandidate(part);
+                if (part.length > 96) {
+                    pushCandidate(part.slice(0, 96).trim());
+                }
+            });
+        if (normalized.length > 120) {
+            pushCandidate(normalized.slice(0, 72).trim());
+            pushCandidate(normalized.slice(-72).trim());
+        }
+    });
+
+    return candidates;
 }
 
 const HIGHLIGHT_COLOR_KEYS = ['yellow', 'blue', 'green', 'pink', 'purple', 'orange'];
@@ -420,8 +614,53 @@ function persistLayoutMode(mode) {
 
 const ARTICLE_MARKDOWN_REMARK_PLUGINS = [remarkGfm];
 const ARTICLE_MARKDOWN_REHYPE_PLUGINS = [rehypeRaw, rehypeSlug];
+const IMAGE_PROXY_API_PREFIX = '/api/notebooks/media/image-proxy?url=';
 
-const markdownComponents = {
+function resolveMarkdownImageUrl(rawSrc, imageBaseUrl) {
+    const src = String(rawSrc || '').trim();
+    if (!src) return '';
+    if (src.startsWith('data:') || src.startsWith('blob:')) return src;
+    if (/^https?:\/\//i.test(src)) return src;
+    if (src.startsWith('//')) return `https:${src}`;
+    if (src.startsWith('/')) {
+        const base = String(imageBaseUrl || '').trim();
+        if (base) {
+            try {
+                const parsed = new URL(base);
+                return `${parsed.origin}${src}`;
+            } catch {
+                return src;
+            }
+        }
+        return src;
+    }
+    try {
+        if (!imageBaseUrl) return src;
+        return new URL(src, imageBaseUrl).toString();
+    } catch {
+        return src;
+    }
+}
+
+function buildProxyImageUrl(rawSrc, imageBaseUrl) {
+    const absolute = resolveMarkdownImageUrl(rawSrc, imageBaseUrl);
+    if (!absolute) return { candidates: [] };
+    if (!/^https?:\/\//i.test(absolute)) {
+        return { candidates: [absolute] };
+    }
+    const stripped = absolute.replace(/^https?:\/\//i, '');
+    const rescue = `https://images.weserv.nl/?url=${encodeURIComponent(stripped)}`;
+    return {
+        candidates: [
+            `${IMAGE_PROXY_API_PREFIX}${encodeURIComponent(absolute)}`,
+            absolute,
+            rescue,
+        ],
+    };
+}
+
+function buildMarkdownComponents(imageBaseUrl) {
+    return {
     p({ node, children, ...props }) {
         const hasBlockChild = Array.isArray(node?.children) && node.children.some((child) => (
             child?.tagName === 'pre'
@@ -456,9 +695,41 @@ const markdownComponents = {
             </SyntaxHighlighter>
         );
     },
+    img({ src, alt, ...props }) {
+        const { candidates } = buildProxyImageUrl(src, imageBaseUrl);
+        const firstSrc = candidates?.[0] || '';
+        if (!firstSrc) {
+            return null;
+        }
+        return (
+            <img
+                {...props}
+                src={firstSrc}
+                alt={alt || ''}
+                loading="lazy"
+                decoding="async"
+                referrerPolicy="no-referrer"
+                data-image-src-index="0"
+                onError={(event) => {
+                    const img = event.currentTarget;
+                    const currentIndex = Number(img.dataset.imageSrcIndex || '0');
+                    const nextIndex = Number.isFinite(currentIndex) ? currentIndex + 1 : 1;
+                    if (nextIndex < candidates.length) {
+                        img.dataset.imageSrcIndex = String(nextIndex);
+                        img.src = candidates[nextIndex];
+                        return;
+                    }
+                    img.dataset.fallbackTried = '1';
+                    img.classList.add('nb-broken-image');
+                }}
+            />
+        );
+    },
 };
+}
 
-const MarkdownDocument = memo(function MarkdownDocument({ content, className }) {
+const MarkdownDocument = memo(function MarkdownDocument({ content, className, imageBaseUrl = '' }) {
+    const markdownComponents = useMemo(() => buildMarkdownComponents(imageBaseUrl), [imageBaseUrl]);
     if (!content?.trim()) {
         return null;
     }
@@ -476,8 +747,80 @@ const MarkdownDocument = memo(function MarkdownDocument({ content, className }) 
     );
 });
 
+function buildChatMarkdownComponents(onCitationJump) {
+    return {
+        a({ href, children, node: _node, ...props }) {
+            void _node;
+            if (typeof href === 'string' && href.startsWith('#nb-chat-citation-')) {
+                const anchorId = href.slice(1);
+                return (
+                    <button
+                        {...props}
+                        type="button"
+                        className="nb-chat-inline-citation"
+                        onClick={() => onCitationJump(anchorId)}
+                    >
+                        {children}
+                    </button>
+                );
+            }
+            return (
+                <a
+                    {...props}
+                    href={href}
+                    target={typeof href === 'string' && !href.startsWith('#') ? '_blank' : undefined}
+                    rel={typeof href === 'string' && !href.startsWith('#') ? 'noopener noreferrer' : undefined}
+                >
+                    {children}
+                </a>
+            );
+        },
+        code({ inline, className, children, node: _node, ...props }) {
+            void _node;
+            const codeText = String(children).replace(/\n$/, '');
+            const match = /language-(\w+)/.exec(className || '');
+            if (inline) {
+                return <code className={className} {...props}>{children}</code>;
+            }
+            return (
+                <SyntaxHighlighter
+                    style={oneDark}
+                    language={match?.[1] || 'text'}
+                    PreTag="pre"
+                    CodeTag="code"
+                    customStyle={{ borderRadius: '16px', margin: 0, fontSize: '0.86em' }}
+                    {...props}
+                >
+                    {codeText}
+                </SyntaxHighlighter>
+            );
+        },
+    };
+}
+
+const ChatMarkdown = memo(function ChatMarkdown({ content, onCitationJump }) {
+    const normalizedContent = useMemo(() => normalizeChatAnswerMarkdown(content), [content]);
+    const markdownComponents = useMemo(
+        () => buildChatMarkdownComponents(onCitationJump),
+        [onCitationJump],
+    );
+
+    if (!normalizedContent) {
+        return null;
+    }
+
+    return (
+        <div className="nb-chat-markdown">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                {normalizedContent}
+            </ReactMarkdown>
+        </div>
+    );
+});
+
 const ArticleContentPane = memo(function ArticleContentPane({
     articleId,
+    articleSourceUrl,
     articleProcessingHint,
     articleDisplayBlocked,
     renderedArticleContent,
@@ -561,11 +904,11 @@ const ArticleContentPane = memo(function ArticleContentPane({
                 </div>
             ) : showTranslation && translationText ? (
                 <div className="nb-article-markdown" data-role="article-body">
-                    <MarkdownDocument content={deferredArticleContent} />
+                    <MarkdownDocument content={deferredArticleContent} imageBaseUrl={articleSourceUrl} />
                 </div>
             ) : (
                 <div className="nb-article-markdown" data-role="article-body">
-                    <MarkdownDocument content={deferredArticleContent} />
+                    <MarkdownDocument content={deferredArticleContent} imageBaseUrl={articleSourceUrl} />
                 </div>
             )}
         </div>
@@ -592,7 +935,9 @@ const I = {
     settings: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" /></svg>,
     close: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>,
     send: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" /></svg>,
+    plus: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 11H13V5h-2v6H5v2h6v6h2v-6h6z" /></svg>,
     sparkle: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L14.85 9.15L22 12L14.85 14.85L12 22L9.15 14.85L2 12L9.15 9.15L12 2Z" /></svg>,
+    chevronDown: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6z" /></svg>,
     note: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z" /></svg>,
     toc: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z" /></svg>,
     font: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9.93 13.5h4.14L12 7.98 9.93 13.5zM20 2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-4.05 16.5l-1.14-3H9.17l-1.12 3H5.96l5.11-13h1.86l5.11 13h-2.09z" /></svg>,
@@ -609,15 +954,34 @@ const I = {
     article: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z" /></svg>,
 };
 
-function buildSiteFavicon(url) {
-    if (!url) return '';
+function extractHostname(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
     try {
-        const parsed = new URL(url.startsWith('http') ? url : `https://${url}`);
-        if (!parsed.hostname) return '';
-        return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(parsed.hostname)}&sz=64`;
+        const parsed = new URL(raw.startsWith('http') ? raw : `https://${raw}`);
+        return parsed.hostname || '';
     } catch {
         return '';
     }
+}
+
+function buildSiteFavicon(value) {
+    const hostname = extractHostname(value);
+    if (!hostname) return '';
+    return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostname)}&sz=64`;
+}
+
+function buildSiteFaviconCandidates(value, directFaviconUrl = '') {
+    const direct = String(directFaviconUrl || '').trim();
+    const hostname = extractHostname(value);
+    const candidates = [];
+    if (direct) candidates.push(direct);
+    if (hostname) {
+        candidates.push(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostname)}&sz=64`);
+        candidates.push(`https://icons.duckduckgo.com/ip3/${hostname}.ico`);
+        candidates.push(`https://${hostname}/favicon.ico`);
+    }
+    return [...new Set(candidates.filter(Boolean))];
 }
 
 function isUploadedArticle(article) {
@@ -640,18 +1004,39 @@ function isPdfArticle(article) {
 
 function resolveArticleIcon(article) {
     if (isUploadedArticle(article)) {
-        return { type: 'svg', value: I.article, fallback: I.article };
+        return { type: 'svg', value: I.article, fallback: I.article, candidates: [] };
     }
     if (isPdfArticle(article)) {
-        return { type: 'svg', value: I.paper, fallback: I.paper };
+        return { type: 'svg', value: I.paper, fallback: I.paper, candidates: [] };
     }
-    if (article?.sourceUrl) {
-        const favicon = buildSiteFavicon(article.sourceUrl);
+    const candidates = buildSiteFaviconCandidates(
+        article?.sourceDomain || article?.sourceUrl,
+        article?.faviconUrl || '',
+    );
+    if (candidates.length > 0) {
+        return { type: 'favicon', value: candidates[0], fallback: I.article, candidates };
+    }
+    if (article?.sourceDomain || article?.sourceUrl) {
+        const favicon = buildSiteFavicon(article.sourceDomain || article.sourceUrl);
         if (favicon) {
-            return { type: 'favicon', value: favicon, fallback: I.article };
+            return { type: 'favicon', value: favicon, fallback: I.article, candidates: [favicon] };
         }
     }
-    return { type: 'svg', value: I.article, fallback: I.article };
+    return { type: 'svg', value: I.article, fallback: I.article, candidates: [] };
+}
+
+function advanceFaviconCandidate(event, candidates = []) {
+    const img = event.currentTarget;
+    const wrap = img.closest('.nb-article-icon-wrap');
+    const currentIndex = Number(img.dataset.faviconIndex || '0');
+    const nextIndex = Number.isFinite(currentIndex) ? currentIndex + 1 : 1;
+    if (nextIndex < candidates.length) {
+        img.dataset.faviconIndex = String(nextIndex);
+        img.src = candidates[nextIndex];
+        return;
+    }
+    wrap?.classList.add('is-failed');
+    img.remove();
 }
 
 /* ============================================
@@ -694,11 +1079,12 @@ export default function NotebookPage() {
     const selectionToolbarRef = useRef(null);
     const commentBubbleLayerRef = useRef(null);
     const commentPopoverRef = useRef(null);
+    const chatSessionMenuRef = useRef(null);
     const centerBodyRef = useRef(null);
     const readerSearchInputRef = useRef(null);
     const readerSearchHitRefs = useRef([]);
     const chatFeedbackTimerRef = useRef(null);
-    const articleReadyRefreshRef = useRef(new Set());
+    const articleHydrationInFlightRef = useRef(new Set());
 
     // AI features
     const [showSummary, setShowSummary] = useState(false);
@@ -706,10 +1092,10 @@ export default function NotebookPage() {
     const [summaryLoading, setSummaryLoading] = useState(false);
     const [summaryCacheByArticleId, setSummaryCacheByArticleId] = useState({});
     const [showAiChat, setShowAiChat] = useState(false);
-    const [chatScope, setChatScope] = useState('article');
     const [chatSessions, setChatSessions] = useState([]);
     const [chatMessages, setChatMessages] = useState([]);
     const [chatConversationId, setChatConversationId] = useState(null);
+    const [showChatSessionMenu, setShowChatSessionMenu] = useState(false);
     const [chatInput, setChatInput] = useState('');
     const [isChatStreaming, setIsChatStreaming] = useState(false);
     const [chatReadingCursor, setChatReadingCursor] = useState({ page: null, sectionId: null, blockId: null });
@@ -737,9 +1123,11 @@ export default function NotebookPage() {
     });
     const [isPersistingHighlight, setIsPersistingHighlight] = useState(false);
     const [pendingHighlightFocusId, setPendingHighlightFocusId] = useState(null);
+    const [pendingCitationTarget, setPendingCitationTarget] = useState(null);
     const [commentBubbleAnchors, setCommentBubbleAnchors] = useState([]);
     const [activeCommentBubbleId, setActiveCommentBubbleId] = useState(null);
     const [commentComposer, setCommentComposer] = useState({ open: false, value: '' });
+    const [articleHydrationPendingId, setArticleHydrationPendingId] = useState(null);
 
     // Article settings
     const [fontSize, setFontSize] = useState(1.05);
@@ -792,7 +1180,8 @@ export default function NotebookPage() {
     }, []);
 
     useEffect(() => {
-        articleReadyRefreshRef.current = new Set();
+        articleHydrationInFlightRef.current = new Set();
+        setArticleHydrationPendingId(null);
         setIsSourceDetailMode(false);
     }, [id]);
 
@@ -872,7 +1261,19 @@ export default function NotebookPage() {
         setSummaryText('');
         setSummaryLoading(false);
         setShowSummary(false);
-    }, [selectedArticle?.id, summaryCacheByArticleId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedArticle?.id]);
+
+    useEffect(() => {
+        if (!selectedArticle?.id) return;
+        const cachedSummary = String(summaryCacheByArticleId[selectedArticle.id] || '').trim();
+        if (!cachedSummary) return;
+        if (summaryLoading) return;
+        if (showSummary && summaryText.trim()) return;
+        setSummaryText(cachedSummary);
+        setSummaryLoading(false);
+        setShowSummary(true);
+    }, [selectedArticle?.id, showSummary, summaryCacheByArticleId, summaryLoading, summaryText]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return undefined;
@@ -896,6 +1297,9 @@ export default function NotebookPage() {
             if (articleContextMenuRef.current && !articleContextMenuRef.current.contains(e.target)) {
                 setArticleContextMenu(null);
             }
+            if (chatSessionMenuRef.current && !chatSessionMenuRef.current.contains(e.target)) {
+                setShowChatSessionMenu(false);
+            }
             if (noteActionMenuRef.current && !noteActionMenuRef.current.contains(e.target)) {
                 setNoteActionMenuId(null);
             }
@@ -915,6 +1319,7 @@ export default function NotebookPage() {
                 setShowArticleMenu(false);
                 setShowLayoutPrefMenu(false);
                 setArticleContextMenu(null);
+                setShowChatSessionMenu(false);
                 setNoteActionMenuId(null);
                 setActiveCommentBubbleId(null);
                 setCommentComposer((prev) => (prev.open ? { open: false, value: '' } : prev));
@@ -974,6 +1379,35 @@ export default function NotebookPage() {
         });
     }, []);
 
+    const hydrateArticleContent = useCallback(async (articleId) => {
+        if (!id || !articleId) return;
+        if (articleHydrationInFlightRef.current.has(articleId)) return;
+        articleHydrationInFlightRef.current.add(articleId);
+        setArticleHydrationPendingId(articleId);
+        try {
+            const hydratedArticle = await appApi.notebooks.getArticle(id, articleId);
+            setNotebook((prev) => {
+                if (!prev) return prev;
+                return {
+                    ...prev,
+                    articles: (prev.articles || []).map((item) => (
+                        item.id === articleId ? { ...item, ...hydratedArticle } : item
+                    )),
+                };
+            });
+            setSelectedArticle((prev) => (
+                prev?.id === articleId ? { ...prev, ...hydratedArticle } : prev
+            ));
+        } catch (err) {
+            if (isAuthError(err)) {
+                redirectToLogin();
+            }
+        } finally {
+            articleHydrationInFlightRef.current.delete(articleId);
+            setArticleHydrationPendingId((current) => (current === articleId ? null : current));
+        }
+    }, [id, redirectToLogin]);
+
     useEffect(() => {
         let isMounted = true;
 
@@ -1018,6 +1452,14 @@ export default function NotebookPage() {
         }
     }, [notebook, requestedArticleId, selectedArticle?.id]);
 
+    useEffect(() => {
+        if (!selectedArticle?.id) return;
+        if (!selectedArticle.contentReady) return;
+        const hasContent = Boolean(String(selectedArticle.content || '').trim());
+        if (hasContent) return;
+        void hydrateArticleContent(selectedArticle.id);
+    }, [hydrateArticleContent, selectedArticle?.content, selectedArticle?.contentReady, selectedArticle?.id]);
+
     // Reset AI features when switching articles
     useEffect(() => {
         setShowTranslation(false);
@@ -1032,7 +1474,8 @@ export default function NotebookPage() {
             blockId: null,
         });
         setHighlightToolbar((prev) => ({ ...prev, visible: false }));
-    }, [selectedArticle?.id, selectedArticle?.toc]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedArticle?.id]);
 
     useEffect(() => {
         if (!id || !selectedArticle || selectedArticle.contentReady || selectedArticle.parseStatus === 'failed') {
@@ -1078,27 +1521,6 @@ export default function NotebookPage() {
     ]);
 
     useEffect(() => {
-        if (!id || !selectedArticle?.id || !selectedArticle?.contentReady) {
-            return undefined;
-        }
-        if (articleReadyRefreshRef.current.has(selectedArticle.id)) {
-            return undefined;
-        }
-        articleReadyRefreshRef.current.add(selectedArticle.id);
-        const timer = window.setTimeout(async () => {
-            try {
-                const detail = await appApi.notebooks.getDetail(id);
-                syncNotebookState(detail);
-            } catch (err) {
-                if (isAuthError(err)) {
-                    redirectToLogin();
-                }
-            }
-        }, 900);
-        return () => window.clearTimeout(timer);
-    }, [id, redirectToLogin, selectedArticle?.contentReady, selectedArticle?.id, syncNotebookState]);
-
-    useEffect(() => {
         if (!notebook?.id || !selectedArticle?.id) {
             setArticleHighlights([]);
             return;
@@ -1128,7 +1550,16 @@ export default function NotebookPage() {
         };
     }, [notebook?.id, redirectToLogin, selectedArticle?.id]);
 
-    const articleContentReady = selectedArticle?.contentReady ?? Boolean(selectedArticle?.content?.trim());
+    const selectedArticleHasContent = Boolean(String(selectedArticle?.content || '').trim());
+    const isSelectedArticleHydrating = articleHydrationPendingId === selectedArticle?.id;
+    const articleContentReady = selectedArticle
+        ? (selectedArticleHasContent || selectedArticle.contentReady === true)
+        : false;
+    const articleProcessingHint = (
+        isSelectedArticleHydrating
+            ? '正在加载正文，请稍候。'
+            : selectedArticle?.processingHint
+    );
     const articleDisplayBlocked = Boolean(selectedArticle) && !articleContentReady;
     const showTopbarReaderSearch = Boolean(selectedArticle) && !articleDisplayBlocked;
     const articleAiBlocked = !articleContentReady;
@@ -1137,7 +1568,8 @@ export default function NotebookPage() {
         && !articleContentReady
         && selectedArticle.parseStatus !== 'failed',
     );
-    const toc = renderedToc;
+    const articleTocFallback = useMemo(() => coerceArticleTocItems(selectedArticle?.toc), [selectedArticle?.toc]);
+    const toc = renderedToc.length > 0 ? renderedToc : articleTocFallback;
 
     useEffect(() => {
         setActiveCommentBubbleId(null);
@@ -1441,6 +1873,55 @@ export default function NotebookPage() {
         window.setTimeout(() => targetEl?.classList.remove('nb-highlight-locate-flash'), 900);
     }, []);
 
+    const focusCitationInReader = useCallback((citation) => {
+        const container = centerBodyRef.current;
+        const articleBody = getArticleBodyElement(container);
+        if (!container || !articleBody || !citation) return false;
+
+        const locatorCandidates = buildCitationLocatorCandidates(citation);
+
+        let range = null;
+        for (const candidate of locatorCandidates) {
+            range = resolveRangeByTextOccurrence(articleBody, candidate, 0);
+            if (range) break;
+        }
+
+        if (range) {
+            const selection = window.getSelection();
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+            const rangeRect = range.getBoundingClientRect();
+            const containerRect = container.getBoundingClientRect();
+            const nextDelta = rangeRect.top - containerRect.top - (container.clientHeight * 0.32);
+            container.scrollBy({ top: nextDelta, behavior: 'smooth' });
+            const targetEl = range.startContainer?.parentElement;
+            targetEl?.classList.add('nb-highlight-locate-flash');
+            window.setTimeout(() => targetEl?.classList.remove('nb-highlight-locate-flash'), 900);
+            return true;
+        }
+
+        const headingTitle = String(citation.headingTitle || citation.sectionPath || '').trim();
+        if (!headingTitle) return false;
+        const target = resolveHeadingTarget(articleBody, {
+            id: '',
+            title: headingTitle,
+            level: 2,
+            matchIndex: 0,
+        });
+        if (!target) return false;
+
+        const containerRect = container.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        const nextScrollTop = container.scrollTop + (targetRect.top - containerRect.top) - 12;
+        container.scrollTo({
+            top: Math.max(nextScrollTop, 0),
+            behavior: 'smooth',
+        });
+        target.classList.add('nb-highlight-locate-flash');
+        window.setTimeout(() => target.classList.remove('nb-highlight-locate-flash'), 900);
+        return true;
+    }, []);
+
     useEffect(() => {
         if (!pendingHighlightFocusId || !articleHighlights.length) return;
         const target = articleHighlights.find((item) => item.id === pendingHighlightFocusId);
@@ -1448,6 +1929,14 @@ export default function NotebookPage() {
         focusHighlightInReader(target);
         setPendingHighlightFocusId(null);
     }, [articleHighlights, focusHighlightInReader, pendingHighlightFocusId]);
+
+    useEffect(() => {
+        if (!pendingCitationTarget || !selectedArticle?.id || articleDisplayBlocked) return;
+        if (pendingCitationTarget.articleId !== selectedArticle.id) return;
+        if (focusCitationInReader(pendingCitationTarget)) {
+            setPendingCitationTarget(null);
+        }
+    }, [articleDisplayBlocked, focusCitationInReader, pendingCitationTarget, selectedArticle?.id]);
 
     useEffect(() => {
         if (articleDisplayBlocked || !selectedArticle?.id) {
@@ -1670,7 +2159,7 @@ export default function NotebookPage() {
         if (!notebook || !selectedArticle) return;
         const articleId = selectedArticle.id;
         setShowSummary(true);
-        const cachedSummary = String(summaryCacheByArticleId[articleId] || summaryText || '').trim();
+        const cachedSummary = String(summaryCacheByArticleId[articleId] || '').trim();
         if (cachedSummary) {
             setSummaryText(cachedSummary);
             setSummaryLoading(false);
@@ -1693,7 +2182,9 @@ export default function NotebookPage() {
             const finalSummary = String(result?.summaryText || streamedText).trim();
             if (finalSummary) {
                 setSummaryText(finalSummary);
-                setSummaryCacheByArticleId((prev) => ({ ...prev, [articleId]: finalSummary }));
+                if (!result?.temporaryUnavailable) {
+                    setSummaryCacheByArticleId((prev) => ({ ...prev, [articleId]: finalSummary }));
+                }
             } else {
                 setSummaryText('摘要生成结果为空，请重试。');
             }
@@ -1763,7 +2254,6 @@ export default function NotebookPage() {
             } else {
                 pushChatFeedback('已打开 AI 助手');
             }
-            if (!selectedArticle) setChatScope('notebook');
             try {
                 const sessions = await appApi.settings.listConversations({ notebookId: notebook.id });
                 setChatSessions(sessions);
@@ -1820,7 +2310,7 @@ export default function NotebookPage() {
         try {
             const result = await appApi.ai.streamAssistant({
                 notebookId: notebook.id,
-                articleId: chatScope === 'article' ? selectedArticle?.id : null,
+                articleId: selectedArticle?.id || null,
                 conversationId: chatConversationId,
                 message: prompt,
                 readingCursor: chatReadingCursor,
@@ -1838,9 +2328,17 @@ export default function NotebookPage() {
             setChatSessions((prev) => {
                 const nextSessionId = result.conversationId || chatConversationId;
                 if (!nextSessionId) return prev;
-                const existing = prev.find((item) => item.id === nextSessionId);
-                const nextSession = { id: nextSessionId, title: prompt.slice(0, 24), messages: [] };
-                return existing ? prev : [nextSession, ...prev];
+                const nextTitle = String(result.conversationTitle || '').trim() || prompt.slice(0, 24);
+                const existingIndex = prev.findIndex((item) => item.id === nextSessionId);
+                if (existingIndex >= 0) {
+                    const next = [...prev];
+                    next[existingIndex] = {
+                        ...next[existingIndex],
+                        title: nextTitle || next[existingIndex].title,
+                    };
+                    return next;
+                }
+                return [{ id: nextSessionId, title: nextTitle, messages: [] }, ...prev];
             });
             setChatMessages((prev) => prev.map((msg) => (
                 msg.id === pendingAssistantId
@@ -2053,18 +2551,8 @@ export default function NotebookPage() {
         }
     }, [notebook?.id, redirectToLogin, selectedArticle?.id, setSearchParams, sourceActionModal, syncNotebookState]);
 
-    const buildCitationMeta = useCallback((citation) => {
-        const parts = [];
-        if (citation.notebookTitle) {
-            parts.push(citation.notebookTitle);
-        }
-        if (citation.sourceType === 'web') {
-            parts.push('网络来源');
-        }
-        return parts.join(' · ');
-    }, []);
-
     const buildChatCitationItems = useCallback((message) => {
+        const citationRefs = extractChatCitationRefs(message?.content);
         const rows = [];
         const seen = new Set();
         const related = Array.isArray(message?.relatedArticles) ? message.relatedArticles : [];
@@ -2076,24 +2564,36 @@ export default function NotebookPage() {
             seen.add(key);
             rows.push({
                 ...citation,
-                citationLabel: citation.citationLabel || `[${citation.index || index + 1}]`,
                 title: citation.title || '未命名来源',
-                core: citation.snippet || '',
-                reason: citation.whySimilar || '',
             });
         });
         if (rows.length > 0) {
-            return rows;
+            return rows.map((citation, index) => {
+                const fallbackType = citation.sourceType === 'web' ? 'web' : 'local';
+                const fallbackDisplayIndex = Number(citation.displayIndex) > 0 ? Number(citation.displayIndex) : (index + 1);
+                const ref = citationRefs[index] || {
+                    sourceType: fallbackType,
+                    displayIndex: fallbackDisplayIndex,
+                    citationLabel: fallbackType === 'web' ? `[W${fallbackDisplayIndex}]` : `[${fallbackDisplayIndex}]`,
+                };
+                return {
+                    ...citation,
+                    sourceType: ref.sourceType,
+                    displayIndex: ref.displayIndex,
+                    citationLabel: ref.citationLabel,
+                    anchorId: getCitationAnchorId(ref.sourceType, ref.displayIndex),
+                };
+            });
         }
         const spans = Array.isArray(message?.evidenceSpans) ? message.evidenceSpans : [];
         return spans.slice(0, 6).map((span, index) => ({
             citationLabel: `[${span.index || index + 1}]`,
             title: span.role || span.sectionId || '证据片段',
-            core: span.text || '',
-            reason: '',
+            displayIndex: span.index || index + 1,
             articleId: span.articleId || null,
             notebookId: notebook?.id || null,
             sourceType: 'local',
+            anchorId: getCitationAnchorId('local', span.index || index + 1),
         }));
     }, [notebook?.id]);
 
@@ -2114,6 +2614,15 @@ export default function NotebookPage() {
         if (targetNotebookId === notebook?.id) {
             const article = notebook.articles.find((item) => item.id === citation.articleId);
             if (article) {
+                setPendingCitationTarget({
+                    articleId: citation.articleId,
+                    chunkId: citation.chunkId || null,
+                    chunkIndex: citation.chunkIndex || null,
+                    locatorText: citation.locatorText || citation.snippet || '',
+                    headingTitle: citation.headingTitle || '',
+                    sectionPath: citation.sectionPath || '',
+                    snippet: citation.snippet || '',
+                });
                 handleSelectArticle(article);
                 pushChatFeedback(`已跳转：${article.title}`);
             }
@@ -2144,14 +2653,29 @@ export default function NotebookPage() {
         });
     }, [chatConversationId, selectedArticle?.id, trackAiEvent]);
 
-    const clearChat = () => {
+    const activeChatSession = useMemo(
+        () => chatSessions.find((session) => session.id === chatConversationId) || null,
+        [chatConversationId, chatSessions],
+    );
+    const sessionTriggerLabel = activeChatSession?.title || '最近对话';
+
+    const startNewChat = useCallback(() => {
         setChatMessages([]);
         setChatConversationId(null);
+        setShowChatSessionMenu(false);
+        pushChatFeedback('已创建空白对话');
+    }, [pushChatFeedback]);
+
+    const clearChat = useCallback(() => {
+        setChatMessages([]);
+        setChatConversationId(null);
+        setShowChatSessionMenu(false);
         pushChatFeedback('已清空当前会话');
-    };
+    }, [pushChatFeedback]);
 
     const handleSwitchConversation = useCallback((session) => {
         setChatConversationId(session.id);
+        setShowChatSessionMenu(false);
         setChatMessages((session.messages || []).map((message, index) => ({
             id: `${session.id}-${index}`,
             role: message.role,
@@ -2170,6 +2694,7 @@ export default function NotebookPage() {
         try {
             await appApi.settings.deleteConversation({ notebookId: notebook.id, conversationId: session.id });
             setChatSessions((prev) => prev.filter((item) => item.id !== session.id));
+            setShowChatSessionMenu(false);
             if (chatConversationId === session.id) {
                 setChatConversationId(null);
                 setChatMessages([]);
@@ -2523,16 +3048,15 @@ export default function NotebookPage() {
                                                 title="右键可编辑或删除来源"
                                             >
                                                 {articleIcon.type === 'favicon' ? (
-                                                    <span className="nb-article-icon-wrap">
+                                                    <span className="nb-article-icon-wrap has-image">
                                                         <img
                                                             className="nb-article-favicon"
                                                             src={articleIcon.value}
                                                             alt=""
                                                             loading="lazy"
+                                                            data-favicon-index="0"
                                                             onError={(event) => {
-                                                                event.currentTarget.style.display = 'none';
-                                                                const fallback = event.currentTarget.parentElement?.querySelector('.nb-article-icon-fallback');
-                                                                if (fallback) fallback.style.display = 'inline-flex';
+                                                                advanceFaviconCandidate(event, articleIcon.candidates || []);
                                                             }}
                                                         />
                                                         <span className="nb-article-icon nb-article-icon-fallback">{articleIcon.fallback || I.article}</span>
@@ -2728,7 +3252,8 @@ export default function NotebookPage() {
                             <div className="nb-center-body" ref={centerBodyRef}>
                                 <ArticleContentPane
                                     articleId={selectedArticle.id}
-                                    articleProcessingHint={selectedArticle.processingHint}
+                                    articleSourceUrl={selectedArticle.sourceUrl}
+                                    articleProcessingHint={articleProcessingHint}
                                     articleDisplayBlocked={articleDisplayBlocked}
                                     renderedArticleContent={renderedArticleContent}
                                     fontSize={fontSize}
@@ -2809,7 +3334,71 @@ export default function NotebookPage() {
                     {showAiChat ? (
                         <div className={`nb-panel nb-right-full nb-chat-panel ${isChatTemporarilyBlocked ? 'blocked' : ''}`}>
                             <div className="nb-panel-header nb-chat-header">
-                                <span className="nb-panel-title">AI 助手</span>
+                                <div className="nb-chat-header-title">
+                                    <span className="nb-chat-header-icon">{I.chat}</span>
+                                </div>
+                                <div className="nb-chat-toolbar">
+                                    <div className="nb-chat-session-picker" ref={chatSessionMenuRef}>
+                                        <button
+                                            type="button"
+                                            className={`nb-chat-session-trigger ${showChatSessionMenu ? 'open' : ''}`}
+                                            onClick={() => setShowChatSessionMenu((prev) => !prev)}
+                                            aria-haspopup="menu"
+                                            aria-expanded={showChatSessionMenu}
+                                            title={sessionTriggerLabel}
+                                        >
+                                            <span className="nb-chat-session-trigger-icon">{I.toc}</span>
+                                            <span className="nb-chat-session-trigger-text">{sessionTriggerLabel}</span>
+                                            {chatSessions.length > 0 ? (
+                                                <span className="nb-chat-session-trigger-count">{chatSessions.length}</span>
+                                            ) : null}
+                                            <span className={`nb-chat-session-trigger-caret ${showChatSessionMenu ? 'open' : ''}`}>
+                                                {I.chevronDown}
+                                            </span>
+                                        </button>
+                                        {showChatSessionMenu ? (
+                                            <div className="nb-chat-session-dropdown" role="menu" aria-label="对话列表">
+                                                {chatSessions.length === 0 ? (
+                                                    <div className="nb-chat-session-empty">暂无历史对话</div>
+                                                ) : (
+                                                    chatSessions.map((session) => (
+                                                        <div
+                                                            key={session.id}
+                                                            className={`nb-chat-session-option ${chatConversationId === session.id ? 'active' : ''}`}
+                                                        >
+                                                            <button
+                                                                type="button"
+                                                                className="nb-chat-session-option-main"
+                                                                onClick={() => handleSwitchConversation(session)}
+                                                                role="menuitem"
+                                                                title={session.title}
+                                                            >
+                                                                <span className="nb-chat-session-option-title">{session.title}</span>
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                className="nb-chat-session-option-delete"
+                                                                onClick={() => { void handleDeleteConversation(session); }}
+                                                                title="删除对话"
+                                                                aria-label={`删除对话 ${session.title}`}
+                                                            >
+                                                                {I.close}
+                                                            </button>
+                                                        </div>
+                                                    ))
+                                                )}
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                    <button
+                                        type="button"
+                                        className="nb-chat-toolbar-btn"
+                                        onClick={startNewChat}
+                                        title="新建对话"
+                                    >
+                                        {I.plus}
+                                    </button>
+                                </div>
                                 <div className="nb-chat-header-actions">
                                     <button className="nb-icon-btn-sm" onClick={clearChat} title="清空对话">{I.deleteChat}</button>
                                     <button className="nb-icon-btn-sm" onClick={() => setShowAiChat(false)} title="关闭">{I.close}</button>
@@ -2818,28 +3407,7 @@ export default function NotebookPage() {
                             {isChatTemporarilyBlocked ? (
                                 <div className="nb-chat-blocking-banner">正文解析中，助手暂不可提问</div>
                             ) : null}
-                            <div className="nb-chat-sessions">
-                                <button
-                                    type="button"
-                                    className="nb-chat-session-new"
-                                    onClick={() => {
-                                        setChatConversationId(null);
-                                        setChatMessages([]);
-                                        pushChatFeedback('已创建空白对话');
-                                    }}
-                                >
-                                    新建对话
-                                </button>
-                                {chatFeedback ? <p className="nb-chat-feedback">{chatFeedback}</p> : null}
-                                {chatSessions.map((session) => (
-                                    <div key={session.id} className={`nb-chat-session-item ${chatConversationId === session.id ? 'active' : ''}`}>
-                                        <button type="button" className="nb-chat-session-switch" onClick={() => handleSwitchConversation(session)}>
-                                            {session.title}
-                                        </button>
-                                        <button type="button" className="nb-chat-session-delete" onClick={() => { void handleDeleteConversation(session); }}>✕</button>
-                                    </div>
-                                ))}
-                            </div>
+                            {chatFeedback ? <p className="nb-chat-feedback">{chatFeedback}</p> : null}
                             <div className="nb-chat-messages">
                                 {chatMessages.length === 0 && (
                                     <div className="nb-chat-welcome">
@@ -2848,16 +3416,19 @@ export default function NotebookPage() {
                                         <p className="nb-chat-welcome-hint">
                                             {isChatTemporarilyBlocked
                                                 ? '等待当前文章解析完成后即可提问'
-                                                : (chatScope === 'article' ? '围绕当前文章提问' : '围绕整个 notebook 提问')}
+                                                : '围绕当前文章提问，也可以直接发起跨文档问题'}
                                         </p>
                                         <div className="nb-chat-quick-actions">
-                                            <button disabled={isChatTemporarilyBlocked} onClick={() => setChatInput('创建详细摘要')}>创建详细摘要</button>
-                                            <button disabled={isChatTemporarilyBlocked} onClick={() => setChatScope((current) => current === 'article' ? 'notebook' : 'article')}>{chatScope === 'article' ? '切换为 notebook 对话' : '切换为文章对话'}</button>
+                                            <button disabled={isChatTemporarilyBlocked} onClick={() => setChatInput('创建详细摘要')}>
+                                                <span className="nb-chat-quick-action-icon">{I.summary}</span>
+                                                <span>详细摘要</span>
+                                            </button>
                                         </div>
                                     </div>
                                 )}
                                 {chatMessages.map((msg, idx) => {
                                     const citationItems = msg.role === 'assistant' ? buildChatCitationItems(msg) : [];
+                                    const citationByAnchorId = new Map(citationItems.map((item) => [item.anchorId, item]));
                                     return (
                                     <div key={msg.id || idx} className={`nb-chat-msg nb-chat-msg-${msg.role}`}>
                                         <div
@@ -2870,11 +3441,14 @@ export default function NotebookPage() {
                                                 </div>
                                             )}
                                             {msg.content ? (
-                                                <div className="nb-chat-markdown">
-                                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                                        {msg.content}
-                                                    </ReactMarkdown>
-                                                </div>
+                                                <ChatMarkdown
+                                                    content={msg.content}
+                                                    onCitationJump={(anchorId) => {
+                                                        const citation = citationByAnchorId.get(anchorId);
+                                                        if (!citation) return;
+                                                        handleOpenCitation(citation, msg.route || 'none');
+                                                    }}
+                                                />
                                             ) : (
                                                 <div>{msg.isStreaming ? '正在生成...' : ''}</div>
                                             )}
@@ -2884,20 +3458,14 @@ export default function NotebookPage() {
                                                         <button
                                                             key={`${citation.citationLabel || citationIndex}-${citation.articleId || citation.url || citationIndex}`}
                                                             type="button"
+                                                            id={citation.anchorId}
                                                             className="nb-chat-citation-row"
                                                             onClick={() => handleOpenCitation(citation, msg.route || 'none')}
+                                                            aria-label={citation.citationLabel ? `${citation.citationLabel} ${citation.title || '来源'}` : (citation.title || '来源')}
                                                         >
                                                             <span className="nb-chat-citation-row-title">
-                                                                {citation.citationLabel ? `${citation.citationLabel} ` : ''}
                                                                 {citation.title || '来源'}
                                                             </span>
-                                                            <span className="nb-chat-citation-row-meta">{buildCitationMeta(citation)}</span>
-                                                            {citation.core ? (
-                                                                <span className="nb-chat-citation-row-core">{citation.core}</span>
-                                                            ) : null}
-                                                            {citation.reason ? (
-                                                                <span className="nb-chat-citation-row-reason">{citation.reason}</span>
-                                                            ) : null}
                                                         </button>
                                                     ))}
                                                 </div>
@@ -2909,7 +3477,7 @@ export default function NotebookPage() {
                             </div>
                             <div className="nb-chat-input-area">
                                 <div className="nb-chat-input-wrapper">
-                                    <textarea className="nb-chat-input nb-chat-textarea" disabled={isChatTemporarilyBlocked} placeholder={isChatTemporarilyBlocked ? '正文解析中，请稍后...' : (chatScope === 'article' ? '针对当前文章提问...' : '针对整个 notebook 提问...')} value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendChat(); } }} rows={3} />
+                                    <textarea className="nb-chat-input nb-chat-textarea" disabled={isChatTemporarilyBlocked} placeholder={isChatTemporarilyBlocked ? '正文解析中，请稍后...' : '围绕当前文章提问，或直接发起跨文档问题...'} value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendChat(); } }} rows={3} />
                                     <button className="nb-chat-send-btn" onClick={handleSendChat} disabled={!chatInput.trim() || isChatStreaming || isChatTemporarilyBlocked}>{I.send}</button>
                                 </div>
                             </div>
@@ -3058,7 +3626,6 @@ export default function NotebookPage() {
                                 if (!text) return;
                                 applyLayoutMode('triple');
                                 setShowAiChat(true);
-                                setChatScope('article');
                                 setChatInput(`请结合这段原文回答：\n${text}`);
                                 setHighlightToolbar((prev) => ({ ...prev, visible: false }));
                                 clearTextSelection();

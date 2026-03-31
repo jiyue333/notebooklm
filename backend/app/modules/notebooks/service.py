@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+import logging
 import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,10 +11,13 @@ from app.api.errors import AppError
 from app.core.config import get_settings
 from app.infra.ai.lite_models import build_lite_llm
 from app.infra.cache import delete_keys, get_json, notebook_detail_key, set_json
+from app.infra.db.session import get_session_manager
 from app.infra.storage.file_store import is_object_storage_enabled
 from app.modules.highlights import repo as highlights_repo
 from app.modules.notes import repo as notes_repo
 from app.modules.notebooks import assembler, repo
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_tags(tags: list[str] | None) -> list[str]:
@@ -30,8 +34,10 @@ def _normalize_tags(tags: list[str] | None) -> list[str]:
 
 
 _AUTO_NOTEBOOK_TITLE_MAX_LEN = 64
-_AUTO_NOTEBOOK_ICON_TIMEOUT_SECONDS = 4.0
-_AUTO_NOTEBOOK_TITLE_TIMEOUT_SECONDS = 4.0
+_AUTO_NOTEBOOK_ICON_TIMEOUT_SECONDS = 6.0
+_AUTO_NOTEBOOK_TITLE_TIMEOUT_SECONDS = 6.0
+_NOTEBOOK_ICON_TASK_GUARD: set[tuple[str, str]] = set()
+_NOTEBOOK_ICON_TASK_GUARD_LOCK = asyncio.Lock()
 
 
 def _sanitize_notebook_title(value: str | None) -> str:
@@ -167,6 +173,50 @@ async def _ensure_notebook_icon(
         await session.flush()
 
 
+async def _schedule_notebook_icon_generation(*, user_id: str, notebook_id: str) -> None:
+    task_key = (user_id, notebook_id)
+    async with _NOTEBOOK_ICON_TASK_GUARD_LOCK:
+        if task_key in _NOTEBOOK_ICON_TASK_GUARD:
+            return
+        _NOTEBOOK_ICON_TASK_GUARD.add(task_key)
+
+    async def _runner() -> None:
+        try:
+            session_manager = get_session_manager()
+            async for session in session_manager.session():
+                notebook = await repo.get_notebook(session, user_id=user_id, notebook_id=notebook_id)
+                if notebook is None or notebook.emoji:
+                    return
+                articles = await repo.list_articles_by_notebook(
+                    session,
+                    user_id=user_id,
+                    notebook_id=notebook_id,
+                )
+                article_titles = [
+                    _sanitize_notebook_title(article.title)
+                    for article in articles
+                    if _sanitize_notebook_title(article.title)
+                ]
+                if not article_titles:
+                    return
+                await _ensure_notebook_icon(
+                    session,
+                    notebook=notebook,
+                    article_titles=article_titles,
+                )
+                if notebook.emoji:
+                    await session.commit()
+                    await invalidate_notebook_detail_cache(user_id=user_id, notebook_id=notebook_id)
+                return
+        except Exception:
+            logger.exception("notebook.icon_backfill_failed", extra={"user_id": user_id, "notebook_id": notebook_id})
+        finally:
+            async with _NOTEBOOK_ICON_TASK_GUARD_LOCK:
+                _NOTEBOOK_ICON_TASK_GUARD.discard(task_key)
+
+    asyncio.create_task(_runner(), name=f"notebook-icon-backfill:{notebook_id}")
+
+
 async def list_notebooks(session: AsyncSession, *, user_id: str, query: str | None = None) -> list[dict]:
     notebooks = await repo.list_notebooks(session, user_id=user_id, query=query)
     counts = await repo.count_articles_by_notebook_ids(
@@ -206,20 +256,7 @@ async def list_notebooks(session: AsyncSession, *, user_id: str, query: str | No
             should_commit = True
 
         if counts.get(notebook.id, 0) > 0 and not notebook.emoji:
-            articles = await _get_notebook_articles(notebook.id)
-            article_titles = [
-                _sanitize_notebook_title(article.title)
-                for article in articles
-                if _sanitize_notebook_title(article.title)
-            ]
-            before = notebook.emoji
-            await _ensure_notebook_icon(
-                session,
-                notebook=notebook,
-                article_titles=article_titles,
-            )
-            if notebook.emoji != before:
-                should_commit = True
+            await _schedule_notebook_icon_generation(user_id=user_id, notebook_id=notebook.id)
 
     if should_commit:
         await session.commit()
@@ -267,16 +304,25 @@ async def create_notebook(
     return detail
 
 
-async def get_notebook_detail(session: AsyncSession, *, user_id: str, notebook_id: str, mark_opened: bool = True) -> dict:
+async def get_notebook_detail(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    notebook_id: str,
+    mark_opened: bool = True,
+    content_article_id: str | None = None,
+) -> dict:
+    use_cache = not content_article_id
     cache_key = notebook_detail_key(user_id=user_id, notebook_id=notebook_id)
-    cached = await get_json(cache_key)
-    if isinstance(cached, dict) and not _should_refresh_cached_notebook_detail(cached):
-        if mark_opened:
-            notebook = await repo.get_notebook(session, user_id=user_id, notebook_id=notebook_id)
-            if notebook is not None:
-                await repo.mark_notebook_opened(session, notebook=notebook, opened_at=datetime.now(UTC))
-                await session.commit()
-        return cached
+    if use_cache:
+        cached = await get_json(cache_key)
+        if isinstance(cached, dict) and not _should_refresh_cached_notebook_detail(cached):
+            if mark_opened:
+                notebook = await repo.get_notebook(session, user_id=user_id, notebook_id=notebook_id)
+                if notebook is not None:
+                    await repo.mark_notebook_opened(session, notebook=notebook, opened_at=datetime.now(UTC))
+                    await session.commit()
+            return cached
 
     notebook = await repo.get_notebook(session, user_id=user_id, notebook_id=notebook_id)
     if notebook is None:
@@ -291,15 +337,37 @@ async def get_notebook_detail(session: AsyncSession, *, user_id: str, notebook_i
         user_id=user_id,
         notebook_id=notebook_id,
     )
-    await _ensure_notebook_icon(
-        session,
-        notebook=notebook,
-        article_titles=[_sanitize_notebook_title(article.title) for article in articles if _sanitize_notebook_title(article.title)],
+    if not notebook.emoji and articles:
+        await _schedule_notebook_icon_generation(user_id=user_id, notebook_id=notebook_id)
+    detail = assembler.build_notebook_detail(
+        notebook,
+        notes,
+        articles,
+        source_count=len(articles),
+        content_article_id=content_article_id,
     )
-    detail = assembler.build_notebook_detail(notebook, notes, articles, source_count=len(articles))
-    await set_json(cache_key, detail, ttl_seconds=_resolve_notebook_detail_ttl(detail))
+    if use_cache:
+        await set_json(cache_key, detail, ttl_seconds=_resolve_notebook_detail_ttl(detail))
     await session.commit()
     return detail
+
+
+async def get_notebook_article(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    notebook_id: str,
+    article_id: str,
+) -> dict:
+    article = await repo.get_article(
+        session,
+        user_id=user_id,
+        notebook_id=notebook_id,
+        article_id=article_id,
+    )
+    if article is None:
+        raise AppError(404, '未找到对应文章', code='article_not_found')
+    return assembler.build_article_view(article, include_content=True)
 
 
 async def update_notebook(

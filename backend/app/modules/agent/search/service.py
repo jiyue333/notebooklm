@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import re
 from datetime import UTC, datetime
 from time import perf_counter
 
@@ -42,7 +41,6 @@ _SEARCH_RUN_TIMEOUT_SECONDS_BY_MODE = {
     "deep": 480,
 }
 _SEARCH_ACTIVE_SESSION_LIMIT = 3
-_SENSITIVE_ERROR_PATTERN = re.compile(r"(sk-[A-Za-z0-9]{16,}|api[_-]?key[=:][^\\s,;]+|token[=:][^\\s,;]+)", re.IGNORECASE)
 
 
 def _normalize_preferred_sites(preferred_sites: list[str] | None) -> list[str]:
@@ -76,13 +74,6 @@ def _build_query_signature(
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _sanitize_error_message(value: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return "搜索执行失败"
-    return _SENSITIVE_ERROR_PATTERN.sub("[REDACTED]", text)[:500]
-
-
 async def _mark_session_failed(
     *,
     user_id: str,
@@ -91,7 +82,7 @@ async def _mark_session_failed(
     error_code: str,
     error_message: str,
 ) -> None:
-    safe_message = _sanitize_error_message(error_message)
+    safe_message = str(error_message or "搜索执行失败").strip()[:500]
     async for session in get_session_manager().session():
         search_session = await repo.get_search_session_by_id(
             session,
@@ -456,7 +447,7 @@ async def get_search_session(
     is_expired = bool(search_session.expires_at and search_session.expires_at <= now)
     zombie_timeout_seconds = _SEARCH_SESSION_ZOMBIE_TIMEOUT_SECONDS_BY_MODE.get(
         search_session.mode or "",
-        120,
+        600,
     )
     is_zombie = (
         search_session.status in {"queued", "running"}
@@ -594,7 +585,7 @@ async def sweep_stale_search_sessions(*, limit: int = 200) -> int:
     async for session in get_session_manager().session():
         pending = await repo.list_pending_sessions_for_sweep(session, limit=limit)
         for item in pending:
-            timeout_seconds = _SEARCH_SESSION_ZOMBIE_TIMEOUT_SECONDS_BY_MODE.get(item.mode or "", 120)
+            timeout_seconds = _SEARCH_SESSION_ZOMBIE_TIMEOUT_SECONDS_BY_MODE.get(item.mode or "", 600)
             age_seconds = (now - item.created_at).total_seconds()
             if age_seconds <= timeout_seconds:
                 continue

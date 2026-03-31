@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import re
 from time import perf_counter
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import structlog
@@ -30,11 +31,12 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 _CJK_RATIO_THRESHOLD = 0.15
-_SUMMARY_GENERATION_TIMEOUT_SECONDS = 90
+_SUMMARY_GENERATION_TIMEOUT_SECONDS = 150
 _SUMMARY_BACKFILL_LIMIT = 1
-_SUMMARY_BACKFILL_TIMEOUT_SECONDS = 5
-_SUMMARY_FALLBACK_MODEL_PROVIDER = "fallback"
-_SUMMARY_FALLBACK_MODEL_NAME = "heuristic-v1"
+_SUMMARY_BACKFILL_TIMEOUT_SECONDS = 30
+_TRANSIENT_SUMMARY_ARTICLE_ID = "00000000-0000-0000-0000-000000000001"
+_SUMMARY_TEMP_UNAVAILABLE_TEXT = "摘要服务暂时不可用，请 1 分钟后重试。"
+_SUMMARY_TEMP_UNAVAILABLE_TTL_SECONDS = 60
 _summary_generation_locks: dict[str, asyncio.Lock] = {}
 _summary_generation_locks_guard = asyncio.Lock()
 _LANGUAGE_ALIASES = {
@@ -72,6 +74,47 @@ def normalize_summary_language(language: str | None) -> str:
     return "auto"
 
 
+def build_summary_user_snapshot(user):
+    if user is None:
+        return None
+    return SimpleNamespace(
+        id=getattr(user, "id", None),
+        settings_json={**(getattr(user, "settings_json", None) or {})},
+        llm_api_key_ciphertext=getattr(user, "llm_api_key_ciphertext", None),
+    )
+
+
+def _normalize_compare_text(text: str | None) -> str:
+    return " ".join(str(text or "").split()).strip().lower()
+
+
+def _is_unusable_summary(summary_text: str, source_text: str) -> bool:
+    summary = _normalize_compare_text(summary_text)
+    source = _normalize_compare_text(source_text)
+    if not summary:
+        return True
+    if not source:
+        return False
+
+    if summary == source:
+        return True
+
+    summary_len = len(summary)
+    source_len = len(source)
+    if source_len <= 0:
+        return False
+
+    if source_len >= 2000 and summary_len >= int(source_len * 0.9):
+        return True
+
+    if source_len >= 1500 and summary_len >= int(source_len * 0.75):
+        probe = source[: min(1200, source_len)]
+        if probe and probe in summary:
+            return True
+
+    return False
+
+
 async def generate_summary(
     db: AsyncSession,
     *,
@@ -103,14 +146,29 @@ async def generate_summary(
         f"{article_id}:{content_hash}:{PROMPT_VERSION}:"
         f"{provider}:{model_name}:{normalized_language}"
     )
+    t_lock = perf_counter()
     generation_lock = await _acquire_summary_generation_lock(lock_key)
     await generation_lock.acquire()
+    logger.debug(
+        "summary.lock_acquired",
+        article_id=article_id,
+        elapsed_ms=round((perf_counter() - t_lock) * 1000, 2),
+    )
     audit_committed = False
     try:
+        source_text = clean_markdown or ""
+        t_redis = perf_counter()
         redis_cached = await get_json(redis_key)
+        logger.debug(
+            "summary.redis_cache_check",
+            article_id=article_id,
+            elapsed_ms=round((perf_counter() - t_redis) * 1000, 2),
+            hit=isinstance(redis_cached, dict),
+        )
         if isinstance(redis_cached, dict):
             redis_text = str(redis_cached.get("summary_text") or "").strip()
-            if redis_text:
+            redis_temp_unavailable = bool(redis_cached.get("temporaryUnavailable"))
+            if redis_text and (redis_temp_unavailable or not _is_unusable_summary(redis_text, source_text)):
                 observe_summary_cache_hit()
                 await _append_summary_audit(
                     db,
@@ -134,8 +192,14 @@ async def generate_summary(
                 )
                 await db.commit()
                 audit_committed = True
-                return {"summary_text": redis_text, "cached": True, "language": normalized_language}
+                return {
+                    "summary_text": redis_text,
+                    "cached": True,
+                    "language": normalized_language,
+                    "temporaryUnavailable": redis_temp_unavailable,
+                }
 
+        t_db_cache = perf_counter()
         cached = await repo.get_cached_summary(
             db,
             article_id=article_id,
@@ -145,48 +209,19 @@ async def generate_summary(
             model_name=str(model_name),
             output_language=normalized_language,
         )
+        logger.debug(
+            "summary.db_cache_check",
+            article_id=article_id,
+            elapsed_ms=round((perf_counter() - t_db_cache) * 1000, 2),
+            hit=cached is not None,
+        )
         if cached:
-            observe_summary_cache_hit()
             text = str(cached.summary_text or "").strip()
-            await _set_summary_cache(redis_key=redis_key, summary_text=text, language=normalized_language)
-            await _append_summary_audit(
-                db,
-                article_id=article_id,
-                content_hash=content_hash,
-                prompt_version=PROMPT_VERSION,
-                model_provider=provider,
-                model_name=str(model_name),
-                output_language=normalized_language,
-                status="cache_hit",
-                summary_strategy="cache",
-                article_type="general",
-                validation_passed=True,
-                fallback_used=False,
-                fallback_reason="",
-                retry_count=0,
-                summary_length=len(text),
-                latency_ms=0,
-                error_code=None,
-                error_message=None,
-            )
-            await db.commit()
-            audit_committed = True
-            return {"summary_text": text, "cached": True, "language": normalized_language}
-
-        # zh 请求允许复用任意语言缓存并做翻译（避免重复全链路摘要）
-        if normalized_language == "zh":
-            latest_cached = await repo.get_latest_cached_summary(
-                db,
-                article_id=article_id,
-                content_hash=content_hash,
-                prompt_version=PROMPT_VERSION,
-            )
-            if latest_cached and str(latest_cached.summary_text or "").strip():
-                text = str(latest_cached.summary_text).strip()
-                if _needs_chinese_translation(text) and user:
-                    text = await _translate_to_chinese(text, user)
-                await _set_summary_cache(redis_key=redis_key, summary_text=text, language=normalized_language)
+            if _is_unusable_summary(text, source_text):
+                text = ""
+            if text:
                 observe_summary_cache_hit()
+                await _set_summary_cache(redis_key=redis_key, summary_text=text, language=normalized_language)
                 await _append_summary_audit(
                     db,
                     article_id=article_id,
@@ -196,7 +231,7 @@ async def generate_summary(
                     model_name=str(model_name),
                     output_language=normalized_language,
                     status="cache_hit",
-                    summary_strategy="cache_translate",
+                    summary_strategy="cache",
                     article_type="general",
                     validation_passed=True,
                     fallback_used=False,
@@ -211,9 +246,67 @@ async def generate_summary(
                 audit_committed = True
                 return {"summary_text": text, "cached": True, "language": normalized_language}
 
+        # zh 请求允许复用任意语言缓存并做翻译（避免重复全链路摘要）
+        if normalized_language == "zh":
+            t_zh_cache = perf_counter()
+            latest_cached = await repo.get_latest_cached_summary(
+                db,
+                article_id=article_id,
+                content_hash=content_hash,
+                prompt_version=PROMPT_VERSION,
+            )
+            logger.debug(
+                "summary.zh_latest_cache_check",
+                article_id=article_id,
+                elapsed_ms=round((perf_counter() - t_zh_cache) * 1000, 2),
+                found=latest_cached is not None,
+            )
+            if latest_cached and str(latest_cached.summary_text or "").strip():
+                text = str(latest_cached.summary_text).strip()
+                if _needs_chinese_translation(text) and user:
+                    t_translate = perf_counter()
+                    text = await _translate_to_chinese(text, user)
+                    logger.info(
+                        "summary.zh_translate_done",
+                        article_id=article_id,
+                        elapsed_ms=round((perf_counter() - t_translate) * 1000, 2),
+                    )
+                if not _is_unusable_summary(text, source_text):
+                    await _set_summary_cache(redis_key=redis_key, summary_text=text, language=normalized_language)
+                    observe_summary_cache_hit()
+                    await _append_summary_audit(
+                        db,
+                        article_id=article_id,
+                        content_hash=content_hash,
+                        prompt_version=PROMPT_VERSION,
+                        model_provider=provider,
+                        model_name=str(model_name),
+                        output_language=normalized_language,
+                        status="cache_hit",
+                        summary_strategy="cache_translate",
+                        article_type="general",
+                        validation_passed=True,
+                        fallback_used=False,
+                        fallback_reason="",
+                        retry_count=0,
+                        summary_length=len(text),
+                        latency_ms=0,
+                        error_code=None,
+                        error_message=None,
+                    )
+                    await db.commit()
+                    audit_committed = True
+                    return {"summary_text": text, "cached": True, "language": normalized_language}
+
         # ========== phase 2 执行 LangGraph ==========
         t0 = perf_counter()
         graph = get_summary_graph()
+        logger.debug(
+            "summary.langgraph_start",
+            article_id=article_id,
+            language=normalized_language,
+            content_chars=len(clean_markdown),
+        )
 
         try:
             result = await asyncio.wait_for(
@@ -247,20 +340,30 @@ async def generate_summary(
         except asyncio.TimeoutError:
             logger.warning("summary.generate_timeout", article_id=article_id)
             result = {
-                "summary_text": _build_quick_summary(title=title, text=clean_markdown, language=normalized_language),
+                "summary_text": "",
                 "article_type": "general",
                 "validation_passed": False,
                 "fallback_used": True,
                 "fallback_reason": "summary_timeout",
             }
 
-        summary_text = str(result.get("summary_text", "") or "").strip()
         article_type = result.get("article_type", "general")
         summary_strategy = str(result.get("summary_strategy", "direct") or "direct")
         retry_count = int(result.get("retry_count", 0) or 0)
         validation_passed = bool(result.get("validation_passed", False))
         fallback_used = bool(result.get("fallback_used", False))
         fallback_reason = str(result.get("fallback_reason", "") or "")
+        summary_text = str(result.get("summary_text", "") or "").strip()
+
+        # LLM 阶段已进入 fallback（模型缺失/失败）时，不返回降级正文片段，
+        # 统一交给上层使用短时“服务暂不可用”缓存。
+        if fallback_used:
+            summary_text = ""
+
+        if _is_unusable_summary(summary_text, source_text):
+            summary_text = ""
+            fallback_used = True
+            fallback_reason = "summary_rejected_source_like"
 
         elapsed_ms = round((perf_counter() - t0) * 1000, 2)
         observe_summary_e2e(duration_ms=elapsed_ms)
@@ -277,22 +380,35 @@ async def generate_summary(
         )
 
         # ========== phase 3 保存缓存 ==========
-        if summary_text and article_id != "00000000-0000-0000-0000-000000000001":
-            await repo.save_summary_cache(
-                db,
-                article_id=article_id,
-                content_hash=content_hash,
-                prompt_version=PROMPT_VERSION,
-                model_provider=provider,
-                model_name=str(model_name),
-                output_language=normalized_language,
-                summary_text=summary_text,
-            )
-            await db.commit()
+        if summary_text:
+            if article_id != _TRANSIENT_SUMMARY_ARTICLE_ID:
+                t_db_save = perf_counter()
+                await repo.save_summary_cache(
+                    db,
+                    article_id=article_id,
+                    content_hash=content_hash,
+                    prompt_version=PROMPT_VERSION,
+                    model_provider=provider,
+                    model_name=str(model_name),
+                    output_language=normalized_language,
+                    summary_text=summary_text,
+                )
+                await db.commit()
+                logger.debug(
+                    "summary.db_cache_save",
+                    article_id=article_id,
+                    elapsed_ms=round((perf_counter() - t_db_save) * 1000, 2),
+                )
+            t_redis_save = perf_counter()
             await _set_summary_cache(
                 redis_key=redis_key,
                 summary_text=summary_text,
                 language=normalized_language,
+            )
+            logger.debug(
+                "summary.redis_cache_save",
+                article_id=article_id,
+                elapsed_ms=round((perf_counter() - t_redis_save) * 1000, 2),
             )
         status = "success"
         if fallback_used:
@@ -383,10 +499,13 @@ async def list_notebook_summaries(
     for article in articles:
         if not article.content_hash:
             continue
+        source_text = str(article.clean_markdown or "")
         cached = latest_by_article_id.get(article.id)
         summary_text = ""
         if cached is not None and getattr(cached, "content_hash", None) == article.content_hash:
             summary_text = str(getattr(cached, "summary_text", "") or "").strip()
+            if _is_unusable_summary(summary_text, source_text):
+                summary_text = ""
 
         if not summary_text and user and backfilled < max(0, backfill_limit) and (article.clean_markdown or "").strip():
             try:
@@ -402,46 +521,11 @@ async def list_notebook_summaries(
                     timeout=_SUMMARY_BACKFILL_TIMEOUT_SECONDS,
                 )
                 summary_text = str(generated.get("summary_text") or "").strip()
+                if _is_unusable_summary(summary_text, source_text):
+                    summary_text = ""
                 backfilled += 1
             except asyncio.TimeoutError:
-                summary_text = _build_quick_summary(
-                    title=article.title,
-                    text=article.clean_markdown or "",
-                    language=normalized_language,
-                )
-                if summary_text and article.id != "00000000-0000-0000-0000-000000000001":
-                    await repo.save_summary_cache(
-                        db,
-                        article_id=article.id,
-                        content_hash=article.content_hash,
-                        prompt_version=PROMPT_VERSION,
-                        model_provider=_SUMMARY_FALLBACK_MODEL_PROVIDER,
-                        model_name=_SUMMARY_FALLBACK_MODEL_NAME,
-                        output_language=normalized_language,
-                        summary_text=summary_text,
-                    )
-                    await _append_summary_audit(
-                        db,
-                        article_id=article.id,
-                        content_hash=str(article.content_hash or ""),
-                        prompt_version=PROMPT_VERSION,
-                        model_provider=_SUMMARY_FALLBACK_MODEL_PROVIDER,
-                        model_name=_SUMMARY_FALLBACK_MODEL_NAME,
-                        output_language=normalized_language,
-                        status="fallback",
-                        summary_strategy="backfill",
-                        article_type="general",
-                        validation_passed=False,
-                        fallback_used=True,
-                        fallback_reason="backfill_timeout",
-                        retry_count=0,
-                        summary_length=len(summary_text),
-                        latency_ms=0,
-                        error_code="backfill_timeout",
-                        error_message="summary backfill timeout",
-                    )
-                    await db.commit()
-                backfilled += 1
+                logger.warning("summary.backfill_timeout", article_id=article.id)
             except Exception as exc:
                 logger.warning(
                     "summary.backfill_failed",
@@ -457,6 +541,26 @@ async def list_notebook_summaries(
             "summaryText": summary_text,
         })
     return summaries
+
+
+async def generate_transient_summary(
+    db: AsyncSession,
+    *,
+    title: str,
+    clean_markdown: str,
+    language: str = "auto",
+    user=None,
+    token_sink=None,
+) -> dict:
+    return await generate_summary(
+        db,
+        article_id=_TRANSIENT_SUMMARY_ARTICLE_ID,
+        title=title,
+        clean_markdown=clean_markdown,
+        language=language,
+        user=user,
+        token_sink=token_sink,
+    )
 
 
 def _needs_chinese_translation(text: str) -> bool:
@@ -496,6 +600,50 @@ async def _set_summary_cache(*, redis_key: str, summary_text: str, language: str
     )
 
 
+async def cache_temporary_unavailable_summary(
+    *,
+    article_id: str,
+    title: str,
+    clean_markdown: str,
+    language: str = "auto",
+    user=None,
+) -> str:
+    normalized_language = normalize_summary_language(language)
+    body = (clean_markdown or "").strip()
+    if not body:
+        return _SUMMARY_TEMP_UNAVAILABLE_TEXT
+
+    content_hash = hashlib.sha256(body.encode()).hexdigest()
+    model = build_user_chat_model(user) if user else None
+    provider, model_name = get_model_identity(model) if model else ("unknown", "unknown")
+    redis_key = summary_cache_key(
+        article_id=article_id,
+        content_hash=content_hash,
+        prompt_version=PROMPT_VERSION,
+        model_provider=provider,
+        model_name=str(model_name),
+        output_language=normalized_language,
+    )
+    await set_json(
+        redis_key,
+        {
+            "summary_text": _SUMMARY_TEMP_UNAVAILABLE_TEXT,
+            "language": normalized_language,
+            "temporaryUnavailable": True,
+        },
+        ttl_seconds=_SUMMARY_TEMP_UNAVAILABLE_TTL_SECONDS,
+    )
+    logger.warning(
+        "summary.temp_unavailable_cached",
+        article_id=article_id,
+        title=title,
+        language=normalized_language,
+        model_provider=provider,
+        model_name=str(model_name),
+    )
+    return _SUMMARY_TEMP_UNAVAILABLE_TEXT
+
+
 async def _acquire_summary_generation_lock(lock_key: str) -> asyncio.Lock:
     async with _summary_generation_locks_guard:
         lock = _summary_generation_locks.get(lock_key)
@@ -526,6 +674,8 @@ async def _append_summary_audit(
     error_code: str | None,
     error_message: str | None,
 ) -> None:
+    if article_id == _TRANSIENT_SUMMARY_ARTICLE_ID:
+        return
     try:
         await repo.append_generation_audit(
             db,

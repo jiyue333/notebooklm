@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+from time import perf_counter
 
 import structlog
 
@@ -34,6 +35,9 @@ def _needs_generative_context(text: str) -> bool:
     return bool(_PRONOUN_PATTERN.search(first_80))
 
 
+_CTX_LLM_SLOW_MS = 5_000  # 单次 LLM 调用超过此值打 warning
+
+
 async def _generate_context_sentence(
     text: str,
     *,
@@ -41,6 +45,7 @@ async def _generate_context_sentence(
     heading: str,
 ) -> str:
     """用 lite_model 生成 1-2 句上下文描述。失败时返回空字符串。"""
+    t0 = perf_counter()
     try:
         from app.infra.ai.lite_models import build_lite_llm
 
@@ -60,9 +65,18 @@ async def _generate_context_sentence(
             )),
         ]
         resp = await model.ainvoke(messages)
-        return (resp.content or "").strip()
+        duration_ms = round((perf_counter() - t0) * 1000, 2)
+        result = (resp.content or "").strip()
+        log_fn = logger.warning if duration_ms > _CTX_LLM_SLOW_MS else logger.debug
+        log_fn(
+            "contextualize.llm_call_done",
+            duration_ms=duration_ms,
+            result_chars=len(result),
+        )
+        return result
     except Exception as exc:
-        logger.debug("contextualize.llm_failed", error=str(exc)[:120])
+        duration_ms = round((perf_counter() - t0) * 1000, 2)
+        logger.debug("contextualize.llm_failed", error=str(exc)[:120], duration_ms=duration_ms)
         return ""
 
 
@@ -80,6 +94,9 @@ async def contextualize_chunks(
         return chunks
 
     toc_list = toc or []
+    total_t0 = perf_counter()
+    llm_call_count = 0
+    llm_total_ms = 0.0
 
     for chunk in chunks:
         heading = (
@@ -100,11 +117,14 @@ async def contextualize_chunks(
         # ====== step 2 可选生成式上下文 ======
         gen_ctx = ""
         if _needs_generative_context(chunk.text):
+            llm_t0 = perf_counter()
             gen_ctx = await _generate_context_sentence(
                 chunk.text,
                 article_title=article_title,
                 heading=heading,
             )
+            llm_call_count += 1
+            llm_total_ms += round((perf_counter() - llm_t0) * 1000, 2)
 
         # ====== step 3 组装 ======
         parts: list[str] = []
@@ -116,9 +136,14 @@ async def contextualize_chunks(
 
         chunk.contextualized_text = "\n".join(parts)
 
+    total_ms = round((perf_counter() - total_t0) * 1000, 2)
     logger.info(
         "contextualize.complete",
         total=len(chunks),
-        generative_count=sum(1 for c in chunks if _needs_generative_context(c.text)),
+        llm_calls=llm_call_count,
+        llm_total_ms=round(llm_total_ms, 2),
+        llm_avg_ms=round(llm_total_ms / llm_call_count, 2) if llm_call_count else 0,
+        prefix_only_count=len(chunks) - llm_call_count,
+        total_ms=total_ms,
     )
     return chunks

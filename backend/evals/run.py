@@ -751,6 +751,42 @@ def _aggregate_case_attempts(attempts: list[dict[str, Any]]) -> dict[str, Any]:
     scores = [float(item["judge"]["score"]) for item in attempts]
     pass_count = sum(1 for item in attempts if item["judge"]["pass"])
     errors = [item.get("error") for item in attempts if item.get("error")]
+
+    stage_samples: dict[str, list[float]] = defaultdict(list)
+    subscore_values: dict[str, list[float]] = defaultdict(list)
+    for attempt in attempts:
+        telemetry = attempt.get("telemetry") or {}
+        for stage, values in (telemetry.get("stage_samples") or {}).items():
+            stage_samples[stage].extend(float(v) for v in values)
+        for key, value in (attempt["judge"].get("subscores") or {}).items():
+            subscore_values[key].append(float(value))
+
+    stage_metrics = {stage: _distribution(values) for stage, values in sorted(stage_samples.items())}
+    subscores: dict[str, dict[str, float]] = {}
+    for key, values in sorted(subscore_values.items()):
+        if not values:
+            continue
+        subscores[key] = {
+            "avg": round(statistics.fmean(values), 4),
+            "min": round(min(values), 4),
+            "max": round(max(values), 4),
+        }
+
+    attempt_details: list[dict[str, Any]] = []
+    for attempt in attempts:
+        detail: dict[str, Any] = {
+            "repeat_index": attempt["repeat_index"],
+            "success": attempt.get("success", False),
+            "judge_pass": attempt["judge"]["pass"],
+            "judge_score": round(float(attempt["judge"]["score"]), 4),
+            "judge_reason": attempt["judge"]["reason"],
+            "duration_ms": round(float(attempt["duration_ms"]), 2),
+            "started_at": attempt.get("started_at", ""),
+        }
+        if attempt.get("error"):
+            detail["error"] = attempt["error"]
+        attempt_details.append(detail)
+
     return {
         "attempts": len(attempts),
         "success_rate": round(sum(1 for item in attempts if item.get("success")) / max(len(attempts), 1), 4),
@@ -760,6 +796,9 @@ def _aggregate_case_attempts(attempts: list[dict[str, Any]]) -> dict[str, Any]:
         "ttfb_ms": _distribution(ttfb_values) if ttfb_values else {"samples": 0, "avg": 0.0, "p50": 0.0, "p90": 0.0, "p95": 0.0},
         "error_count": len(errors),
         "latest_error": errors[-1] if errors else None,
+        "stage_metrics": stage_metrics,
+        "subscores": subscores,
+        "attempt_details": attempt_details,
     }
 
 
@@ -1118,6 +1157,9 @@ def _build_all_report(bench_run_id: str, profile: str, reports: list[dict[str, A
 
 
 async def main_async(pipeline: str, profile: str) -> dict[str, Any]:
+    from app.infra.telemetry.logging import setup_logging
+
+    setup_logging()
     configure_langsmith()
     run_started_at = datetime.now(UTC)
     app_version = _git_sha()
@@ -1148,9 +1190,65 @@ async def main_async(pipeline: str, profile: str) -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("pipeline", choices=["search", "ingest", "summary", "chat", "all"])
-    parser.add_argument("profile", default="smoke")
+    parser = argparse.ArgumentParser(
+        prog="python -m evals.run",
+        description=(
+            "运行 pipeline 基准评测（eval benchmark）。\n\n"
+            "每次运行会在 evals/runs/<bench_run_id>/ 下生成评测报告，\n"
+            "包含 report.json、report.md 以及各 case 的详细结果。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "环境变量\n"
+            "--------\n"
+            "  EVAL_CASE_IDS          逗号分隔的 case_id 白名单，只运行指定 case。\n"
+            "                         示例: EVAL_CASE_IDS=s01,s02 python -m evals.run search smoke\n\n"
+            "  EVAL_MAX_CASES         最多运行前 N 条 case（整数）。\n"
+            "                         示例: EVAL_MAX_CASES=2 python -m evals.run search smoke\n\n"
+            "  EVAL_REPEAT_OVERRIDE   覆盖每条 case 的重复执行次数（整数）。\n"
+            "                         默认重复次数按 profile 决定：\n"
+            f"                           smoke={DEFAULT_REPEAT_BY_PROFILE['smoke']}  "
+            f"stable={DEFAULT_REPEAT_BY_PROFILE['stable']}  "
+            f"full={DEFAULT_REPEAT_BY_PROFILE['full']}\n\n"
+            "使用示例\n"
+            "--------\n"
+            "  # 运行 search pipeline 的 smoke 评测\n"
+            "  python -m evals.run search smoke\n\n"
+            "  # 运行 ingest pipeline 的 stable 评测\n"
+            "  python -m evals.run ingest stable\n\n"
+            "  # 一次性运行所有 pipeline 的 full 评测\n"
+            "  python -m evals.run all full\n\n"
+            "  # 只运行指定 case，且只重复 1 次\n"
+            "  EVAL_CASE_IDS=s01,s03 EVAL_REPEAT_OVERRIDE=1 python -m evals.run search smoke\n"
+        ),
+    )
+    parser.add_argument(
+        "pipeline",
+        choices=["search", "ingest", "summary", "chat", "all"],
+        metavar="pipeline",
+        help=(
+            "要评测的 pipeline，可选值：\n"
+            "  search  — 搜索 pipeline（Agent 网络搜索）\n"
+            "  ingest  — 摄入 pipeline（文档解析与向量化入库）\n"
+            "  summary — 摘要 pipeline（文章摘要生成）\n"
+            "  chat    — 对话 pipeline（Notebook 问答）\n"
+            "  all     — 依次运行以上全部四条 pipeline"
+        ),
+    )
+    parser.add_argument(
+        "profile",
+        nargs="?",
+        default="smoke",
+        metavar="profile",
+        help=(
+            "评测规模档位，对应 evals/cases/<pipeline>/<profile>.jsonl。\n"
+            "内置档位（可自定义扩展）：\n"
+            f"  smoke  — 快速冒烟，每 case 重复 {DEFAULT_REPEAT_BY_PROFILE['smoke']} 次（默认）\n"
+            f"  stable — 稳定性评测，每 case 重复 {DEFAULT_REPEAT_BY_PROFILE['stable']} 次\n"
+            f"  full   — 完整基准，每 case 重复 {DEFAULT_REPEAT_BY_PROFILE['full']} 次\n"
+            "（默认: smoke）"
+        ),
+    )
     args = parser.parse_args()
     asyncio.run(main_async(args.pipeline, args.profile))
 

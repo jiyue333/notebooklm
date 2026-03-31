@@ -90,6 +90,7 @@ async def _run_retrieval_with_session(
     try:
         if plan.strategy == "chunk_only":
             target_article_ids = plan.target_article_ids
+            t_hybrid = perf_counter()
             results = await hybrid_retrieval(db, HybridRetrievalRequest(
                 query=query,
                 scope_article_ids=target_article_ids,
@@ -102,18 +103,29 @@ async def _run_retrieval_with_session(
                 rerank_top_n=rerank_top_n,
                 user=user,
             ))
+            logger.info("chat.retrieval_hybrid", strategy="chunk_only", duration_ms=_ms(t_hybrid),
+                        article_count=len(target_article_ids), result_count=len(results),
+                        dense_top_k=dense_top_k, sparse_top_k=sparse_top_k,
+                        rerank_top_n=rerank_top_n, use_rerank=plan.use_rerank)
         elif plan.strategy == "article_then_chunk":
+            t_recall = perf_counter()
             articles = await article_recall(
                 db,
                 query=query,
                 notebook_id=notebook_id,
                 top_k=min(max(rerank_top_n, 5), 8),
             )
+            logger.info("chat.retrieval_article_recall", duration_ms=_ms(t_recall),
+                        recalled_count=len(articles))
             target_article_ids = [a.article_id for a in articles]
             if not target_article_ids:
+                t_fallback = perf_counter()
                 fallback = await _build_fallback_evidence(db, plan.target_article_ids, notebook_id)
+                logger.info("chat.retrieval_fallback_evidence", duration_ms=_ms(t_fallback),
+                            count=len(fallback), reason="no_recalled_articles")
                 observe_chat_stage(stage="retrieval_engine", route=route, status="fallback", duration_ms=_ms(started))
                 return {"local_evidence": fallback}
+            t_hybrid = perf_counter()
             results = await hybrid_retrieval(db, HybridRetrievalRequest(
                 query=query,
                 scope_article_ids=target_article_ids,
@@ -126,17 +138,28 @@ async def _run_retrieval_with_session(
                 rerank_top_n=rerank_top_n,
                 user=user,
             ))
+            logger.info("chat.retrieval_hybrid", strategy="article_then_chunk", duration_ms=_ms(t_hybrid),
+                        article_count=len(target_article_ids), result_count=len(results),
+                        dense_top_k=dense_top_k, sparse_top_k=sparse_top_k,
+                        rerank_top_n=rerank_top_n, use_rerank=plan.use_rerank)
         elif plan.strategy == "hybrid":
+            t_scope = perf_counter()
             target_article_ids = await _get_notebook_article_ids(
                 db,
                 notebook_id,
                 query=query,
                 cap=max(int(settings.chat_notebook_scope_article_cap), 12),
             )
+            logger.info("chat.retrieval_scope_articles", duration_ms=_ms(t_scope),
+                        article_count=len(target_article_ids))
             if not target_article_ids:
+                t_fallback = perf_counter()
                 fallback = await _build_fallback_evidence(db, [], notebook_id)
+                logger.info("chat.retrieval_fallback_evidence", duration_ms=_ms(t_fallback),
+                            count=len(fallback), reason="no_scope_articles")
                 observe_chat_stage(stage="retrieval_engine", route=route, status="fallback", duration_ms=_ms(started))
                 return {"local_evidence": fallback}
+            t_hybrid = perf_counter()
             results = await hybrid_retrieval(db, HybridRetrievalRequest(
                 query=query,
                 scope_article_ids=target_article_ids,
@@ -149,14 +172,21 @@ async def _run_retrieval_with_session(
                 rerank_top_n=rerank_top_n,
                 user=user,
             ))
+            logger.info("chat.retrieval_hybrid", strategy="hybrid", duration_ms=_ms(t_hybrid),
+                        article_count=len(target_article_ids), result_count=len(results),
+                        dense_top_k=dense_top_k, sparse_top_k=sparse_top_k,
+                        rerank_top_n=rerank_top_n, use_rerank=plan.use_rerank)
         else:
             target_article_ids = []
             results = []
 
         evidence = [r.to_evidence_dict() for r in results]
         if not evidence:
+            t_fallback = perf_counter()
             fallback = await _build_fallback_evidence(db, target_article_ids, notebook_id)
             if fallback:
+                logger.info("chat.retrieval_fallback_evidence", duration_ms=_ms(t_fallback),
+                            count=len(fallback), reason="empty_hybrid_results")
                 observe_chat_stage(stage="retrieval_engine", route=route, status="fallback", duration_ms=_ms(started))
                 return {"local_evidence": fallback}
 
@@ -165,11 +195,15 @@ async def _run_retrieval_with_session(
             observe_chat_rerank_top_score(score=top_score)
 
         observe_chat_stage(stage="retrieval_engine", route=route, status="ok", duration_ms=_ms(started))
-        logger.info("chat.retrieval_done", strategy=plan.strategy, count=len(evidence))
+        logger.info("chat.retrieval_done", strategy=plan.strategy, count=len(evidence),
+                    total_ms=_ms(started))
         return {"local_evidence": evidence}
     except Exception as exc:
-        logger.exception("chat.retrieval_failed", error=str(exc)[:200])
+        logger.exception("chat.retrieval_failed", error=str(exc)[:200], total_ms=_ms(started))
+        t_fallback = perf_counter()
         fallback = await _build_fallback_evidence(db, plan.target_article_ids, notebook_id)
+        logger.info("chat.retrieval_fallback_evidence", duration_ms=_ms(t_fallback),
+                    count=len(fallback), reason="exception")
         observe_chat_error(node="retrieval_engine")
         observe_chat_stage(stage="retrieval_engine", route=route, status="error", duration_ms=_ms(started))
         return {"local_evidence": fallback}
@@ -239,9 +273,12 @@ async def _build_fallback_evidence(
             continue
         evidence.append({
             "chunk_id": f"article_fallback:{row.id}",
+            "chunk_index": None,
             "article_id": row.id,
             "article_title": row.title or "",
             "raw_text": text[:420],
+            "evidence_text": text[:420],
+            "locator_text": text[:240],
             "score": 0.22,
             "section_path": "article_summary",
             "heading_title": "摘要降级证据",

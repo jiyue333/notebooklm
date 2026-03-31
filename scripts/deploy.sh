@@ -25,6 +25,9 @@ if [[ -n "$SSH_KEY" ]]; then
   SSH_OPTS="$SSH_OPTS -i $SSH_KEY"
 fi
 
+CLI_PROXY_LOCAL_DIR="${CLI_PROXY_LOCAL_DIR:-$HOME/Documents/CliProxyAPI}"
+CLI_PROXY_REMOTE_DIR="${CLI_PROXY_REMOTE_DIR:-/opt/CliProxyAPI}"
+
 # ========== 工具函数 ==========
 
 info()  { echo -e "\033[1;34m[INFO]\033[0m  $*"; }
@@ -100,6 +103,146 @@ sync_code() {
     "$PROJECT_DIR/" "${REMOTE_HOST}:${REMOTE_DIR}/"
 
   ok "代码同步完成"
+
+  # 覆盖服务器 .env 中需要与本地不同的配置项
+  # Docker 容器内无法用 127.0.0.1 访问宿主机，统一替换为 host.docker.internal
+  step "修补服务器 .env（将 127.0.0.1 替换为 host.docker.internal）"
+  ssh_cmd bash <<-PATCH_EOF
+    ENV_FILE="${REMOTE_DIR}/.env"
+    if [[ ! -f "\$ENV_FILE" ]]; then
+      echo "警告：\$ENV_FILE 不存在，跳过修补"
+    else
+      sed -i 's|http://127\.0\.0\.1:|http://host.docker.internal:|g' "\$ENV_FILE"
+      sed -i 's|http://localhost:|http://host.docker.internal:|g' "\$ENV_FILE"
+      echo "修补完成"
+    fi
+PATCH_EOF
+}
+
+# ========== 同步并启动 CliProxyAPI ==========
+
+sync_cli_proxy() {
+  step "同步 CliProxyAPI 到 ${REMOTE_HOST}:${CLI_PROXY_REMOTE_DIR}"
+
+  if [[ ! -d "$CLI_PROXY_LOCAL_DIR" ]]; then
+    err "本地目录不存在: ${CLI_PROXY_LOCAL_DIR}"
+    err "请在 .env 中设置 CLI_PROXY_LOCAL_DIR 指向正确路径"
+    exit 1
+  fi
+
+  ssh_cmd "mkdir -p ${CLI_PROXY_REMOTE_DIR}"
+
+  # 同步所有文件（配置、数据等），跳过本地二进制（macOS 格式，无法在 Linux 上运行）
+  rsync -az --delete \
+    -e "ssh ${SSH_OPTS}" \
+    --exclude='.DS_Store' \
+    --exclude='*.log' \
+    --exclude='cli-proxy-api' \
+    "${CLI_PROXY_LOCAL_DIR}/" "${REMOTE_HOST}:${CLI_PROXY_REMOTE_DIR}/"
+
+  # 同步本地 auth 目录（~/.cli-proxy-api）到服务器同路径
+  local local_auth_dir="${HOME}/.cli-proxy-api"
+  if [[ -d "$local_auth_dir" ]]; then
+    info "同步 auth 目录 ${local_auth_dir} ..."
+    ssh_cmd "mkdir -p /root/.cli-proxy-api"
+    rsync -az \
+      -e "ssh ${SSH_OPTS}" \
+      --exclude='.DS_Store' \
+      "${local_auth_dir}/" "${REMOTE_HOST}:/root/.cli-proxy-api/"
+    ok "auth 目录同步完成"
+  else
+    info "本地 auth 目录 ${local_auth_dir} 不存在，跳过"
+  fi
+
+  ok "CliProxyAPI 同步完成"
+}
+
+start_cli_proxy() {
+  step "启动 CliProxyAPI（${CLI_PROXY_REMOTE_DIR}）"
+
+  # 从本地二进制读取版本号，确保服务器与本地版本一致
+  local local_binary="${CLI_PROXY_LOCAL_DIR}/cli-proxy-api"
+  local version=""
+  if [[ -f "$local_binary" ]]; then
+    version=$("$local_binary" --version 2>&1 | grep -oE 'Version: [^,]+' | sed 's/Version: //' || true)
+  fi
+  if [[ -z "$version" ]]; then
+    err "无法从本地二进制读取版本号，请确认 ${local_binary} 存在"
+    exit 1
+  fi
+  info "本地版本: ${version}，将在服务器上下载对应 Linux 版本"
+
+  ssh_cmd bash <<-PROXY_EOF
+    set -euo pipefail
+
+    REMOTE_DIR="${CLI_PROXY_REMOTE_DIR}"
+    BINARY="\${REMOTE_DIR}/cli-proxy-api"
+    TARGET_VERSION="${version}"
+
+    # 检测服务器架构
+    ARCH=\$(uname -m)
+    case "\$ARCH" in
+      x86_64)  GO_ARCH="amd64" ;;
+      aarch64) GO_ARCH="arm64" ;;
+      *)
+        echo "不支持的架构: \$ARCH"
+        exit 1
+        ;;
+    esac
+
+    # 检查服务器上的版本是否已经匹配
+    CURRENT_VERSION=""
+    if [[ -f "\$BINARY" ]] && file "\$BINARY" 2>/dev/null | grep -q "ELF"; then
+      CURRENT_VERSION=\$("\$BINARY" --version 2>&1 | grep -oE 'Version: [^,]+' | sed 's/Version: //' || true)
+    fi
+
+    if [[ "\$CURRENT_VERSION" == "\$TARGET_VERSION" ]]; then
+      echo "服务器已是 v\${TARGET_VERSION}，跳过下载"
+    else
+      echo "下载 CLIProxyAPI v\${TARGET_VERSION} (linux/\${GO_ARCH})..."
+      DOWNLOAD_URL="https://github.com/router-for-me/CLIProxyAPI/releases/download/v\${TARGET_VERSION}/CLIProxyAPI_\${TARGET_VERSION}_linux_\${GO_ARCH}.tar.gz"
+      curl -fsSL "\$DOWNLOAD_URL" -o /tmp/cliproxyapi.tar.gz
+      tar -xzf /tmp/cliproxyapi.tar.gz -C "\$REMOTE_DIR" cli-proxy-api
+      rm -f /tmp/cliproxyapi.tar.gz
+      echo "下载完成"
+    fi
+
+    chmod +x "\$BINARY"
+
+    # 停止占用目标端口的所有进程（比 pgrep 更可靠）
+    CLI_PORT=\$(grep -E "^\s*port\s*:" "\${REMOTE_DIR}/config.yaml" 2>/dev/null | awk '{print \$2}' | tr -d '"' || echo "8317")
+    CLI_PORT=\${CLI_PORT:-8317}
+    echo "检查端口 \$CLI_PORT 是否被占用..."
+    PORT_PID=\$(fuser "\${CLI_PORT}/tcp" 2>/dev/null | tr -d ' ' || true)
+    if [[ -n "\$PORT_PID" ]]; then
+      echo "停止占用端口 \${CLI_PORT} 的进程 PID=\${PORT_PID} ..."
+      kill \$PORT_PID 2>/dev/null || true
+      sleep 1
+    fi
+    # 兜底：按进程名杀
+    OLD_PID=\$(pgrep -f "\${REMOTE_DIR}/cli-proxy-api" || true)
+    if [[ -n "\$OLD_PID" ]]; then
+      kill \$OLD_PID 2>/dev/null || true
+      sleep 1
+    fi
+
+    # 后台启动
+    cd "\$REMOTE_DIR"
+    nohup ./cli-proxy-api >> "\${REMOTE_DIR}/cli-proxy-api.log" 2>&1 &
+    NEW_PID=\$!
+    sleep 1
+
+    if kill -0 "\$NEW_PID" 2>/dev/null; then
+      echo "CliProxyAPI v\${TARGET_VERSION} 已启动，PID=\$NEW_PID"
+      echo "日志: \${REMOTE_DIR}/cli-proxy-api.log"
+    else
+      echo "错误：CliProxyAPI 启动后立即退出，请检查日志："
+      tail -20 "\${REMOTE_DIR}/cli-proxy-api.log" || true
+      exit 1
+    fi
+PROXY_EOF
+
+  ok "CliProxyAPI 启动完成"
 }
 
 # ========== 远程构建并部署 ==========
@@ -126,6 +269,36 @@ remote_deploy() {
 DEPLOY_EOF
 
   ok "部署完成"
+}
+
+# ========== 清理并重新部署（清空所有 volumes） ==========
+
+remote_clean_deploy() {
+  step "清理服务器数据并重新部署（将删除所有 volumes！）"
+
+  ssh_cmd bash <<-CLEAN_EOF
+    set -euo pipefail
+    cd "${REMOTE_DIR}"
+
+    echo "[1/4] 停止所有服务并删除 volumes..."
+    docker compose -f ${COMPOSE_FILE} down --volumes --timeout 30
+    docker image prune -f
+
+    echo "[2/4] 构建镜像..."
+    docker compose -f ${COMPOSE_FILE} build --parallel
+
+    echo "[3/4] 启动服务..."
+    docker compose -f ${COMPOSE_FILE} up -d
+
+    echo "[4/4] 等待服务就绪..."
+    sleep 5
+
+    echo ""
+    echo "========== 服务状态 =========="
+    docker compose -f ${COMPOSE_FILE} ps
+CLEAN_EOF
+
+  ok "清理部署完成"
 }
 
 # ========== 回滚：使用已有镜像重启 ==========
@@ -165,6 +338,73 @@ remote_logs() {
   fi
 }
 
+remote_health() {
+  step "服务健康检查"
+
+  ssh_cmd bash <<-HEALTH_EOF
+    set -euo pipefail
+
+    GREEN='\033[0;32m'
+    RED='\033[0;31m'
+    YELLOW='\033[1;33m'
+    NC='\033[0m'
+
+    ok()   { echo -e "  \${GREEN}[OK]\${NC}    \$*"; }
+    fail() { echo -e "  \${RED}[FAIL]\${NC}  \$*"; }
+    warn() { echo -e "  \${YELLOW}[WARN]\${NC}  \$*"; }
+
+    echo ""
+    echo "========== Docker 容器状态 =========="
+    cd "${REMOTE_DIR}"
+    docker compose -f ${COMPOSE_FILE} ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
+
+    echo ""
+    echo "========== HTTP 健康检查 =========="
+
+    check_http() {
+      local name="\$1" url="\$2"
+      if curl -fsSL --max-time 5 "\$url" >/dev/null 2>&1; then
+        ok "\$name  (\$url)"
+      else
+        fail "\$name  (\$url)"
+      fi
+    }
+
+    check_http "Backend API"   "http://localhost:8080/api/health"
+    check_http "Frontend"      "http://localhost:80"
+    check_http "Miniflux"      "http://localhost:8085/healthcheck"
+    check_http "Grafana"       "http://localhost:3000/api/health"
+    check_http "Prometheus"    "http://localhost:9090/-/healthy"
+
+    echo ""
+    echo "========== CliProxyAPI =========="
+    CLI_PORT=\$(grep -E "^\s*port\s*:" "${CLI_PROXY_REMOTE_DIR}/config.yaml" 2>/dev/null | awk '{print \$2}' | tr -d '"' || echo "8317")
+    CLI_PORT=\${CLI_PORT:-8317}
+    CLI_PID=\$(pgrep -f "${CLI_PROXY_REMOTE_DIR}/cli-proxy-api" || true)
+    if [[ -n "\$CLI_PID" ]]; then
+      ok "进程运行中  PID=\$CLI_PID"
+    else
+      fail "进程未运行"
+    fi
+    if curl -fsSL --max-time 3 "http://localhost:\${CLI_PORT}/v0/management/get-auth-status" >/dev/null 2>&1; then
+      ok "HTTP 端口 \${CLI_PORT} 响应正常"
+    else
+      fail "HTTP 端口 \${CLI_PORT} 无响应"
+    fi
+
+    echo ""
+    echo "========== 磁盘 / 内存 =========="
+    df -h / | awk 'NR==2 {printf "  磁盘: %s 已用 / %s 总计 (%s)\n", \$3, \$2, \$5}'
+    free -h | awk '/Mem:/ {printf "  内存: %s 已用 / %s 总计\n", \$3, \$2}'
+HEALTH_EOF
+}
+
+remote_proxy_logs() {
+  local lines="${1:-100}"
+  step "查看 CliProxyAPI 日志（最近 ${lines} 行）"
+  ssh_cmd "tail -n ${lines} ${CLI_PROXY_REMOTE_DIR}/cli-proxy-api.log 2>/dev/null || echo '(日志文件不存在)'"
+}
+
 # ========== 使用说明 ==========
 
 usage() {
@@ -172,17 +412,23 @@ usage() {
 =============== deploy.sh ===============
 用法:
   ./scripts/deploy.sh deploy          完整部署（同步代码 + 构建 + 启动）
+  ./scripts/deploy.sh clean-deploy    清空所有数据后全新部署（⚠️ 删除 volumes！）
   ./scripts/deploy.sh sync            仅同步代码到服务器
   ./scripts/deploy.sh build           仅远程构建镜像（不重启）
   ./scripts/deploy.sh restart         重启所有服务（不重新构建）
   ./scripts/deploy.sh rollback        回滚（使用已有镜像重启）
-  ./scripts/deploy.sh status          查看远程服务状态
-  ./scripts/deploy.sh logs [service]  查看远程日志
+  ./scripts/deploy.sh cli-proxy             同步并重启 CliProxyAPI
+  ./scripts/deploy.sh status               查看远程服务状态
+  ./scripts/deploy.sh health               全面健康检查（Docker + HTTP + CLI proxy + 资源）
+  ./scripts/deploy.sh logs [service]       查看 Docker 服务日志
+  ./scripts/deploy.sh proxy-logs [lines]   查看 CliProxyAPI 日志（默认最近 100 行）
 
 配置项（在 .env 中填写）:
-  DEPLOY_HOST       必填，SSH 地址（如 root@1.2.3.4）
-  DEPLOY_DIR        远程项目目录（默认 /opt/notebooklm）
-  DEPLOY_SSH_PORT   SSH 端口（默认 22）
+  DEPLOY_HOST          必填，SSH 地址（如 root@1.2.3.4）
+  DEPLOY_DIR           远程项目目录（默认 /opt/notebooklm）
+  DEPLOY_SSH_PORT      SSH 端口（默认 22）
+  CLI_PROXY_LOCAL_DIR  本地 CliProxyAPI 目录（默认 ~/Documents/CliProxyAPI）
+  CLI_PROXY_REMOTE_DIR 远程 CliProxyAPI 目录（默认 /opt/CliProxyAPI）
 
 示例:
   ./scripts/deploy.sh deploy
@@ -199,7 +445,17 @@ case "$COMMAND" in
     preflight
     confirm "即将同步代码并部署到 ${REMOTE_HOST}:${REMOTE_DIR}，确认？"
     sync_code
+    sync_cli_proxy
     remote_deploy
+    start_cli_proxy
+    ;;
+  clean-deploy)
+    preflight
+    confirm "⚠️  即将清空服务器所有数据（volumes）并重新部署到 ${REMOTE_HOST}:${REMOTE_DIR}，此操作不可逆！确认？"
+    sync_code
+    sync_cli_proxy
+    remote_clean_deploy
+    start_cli_proxy
     ;;
   sync)
     preflight
@@ -226,9 +482,22 @@ case "$COMMAND" in
     preflight
     remote_status
     ;;
+  health)
+    preflight
+    remote_health
+    ;;
   logs)
     preflight
     remote_logs "$@"
+    ;;
+  proxy-logs)
+    preflight
+    remote_proxy_logs "$@"
+    ;;
+  cli-proxy)
+    preflight
+    sync_cli_proxy
+    start_cli_proxy
     ;;
   --help|-h|help)
     usage

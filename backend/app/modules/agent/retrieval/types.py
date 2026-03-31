@@ -13,18 +13,23 @@ class RetrievalResult:
     raw_text: str
     contextualized_text: str
     score: float
+    locator_text: str = ""
     dense_score: float | None = None
     sparse_score: float | None = None
     rerank_score: float | None = None
+    chunk_index: int | None = None
     section_path: str | None = None
     heading_title: str | None = None
 
     def to_evidence_dict(self) -> dict:
         return {
             "chunk_id": self.chunk_id,
+            "chunk_index": self.chunk_index,
             "article_id": self.article_id,
             "article_title": self.article_title,
             "raw_text": self.raw_text,
+            "evidence_text": self.contextualized_text or self.raw_text,
+            "locator_text": self.locator_text or self.raw_text,
             "score": round(self.score, 4),
             "section_path": self.section_path,
             "heading_title": self.heading_title,

@@ -1,7 +1,7 @@
 export const LOGO_OPTION_META = [
-    { id: 'stack', label: '堆叠卡片' },
-    { id: 'spark-notes', label: '灵感闪光' },
-    { id: 'orbit', label: '知识轨道' },
+    { id: 'page', label: '智慧之页' },
+    { id: 'spark', label: '灵感之星' },
+    { id: 'orbit', label: '知识星环' },
 ];
 
 export function getLogoOptions() {

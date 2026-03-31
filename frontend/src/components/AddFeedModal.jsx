@@ -3,6 +3,10 @@ import useEscapeToClose from '../hooks/useEscapeToClose';
 import { appApi } from '../services/appApi';
 import './AddFeedModal.css';
 
+function isHiddenCategoryTitle(value) {
+    return String(value || '').trim().toLowerCase() === 'all';
+}
+
 export default function AddFeedModal({ onClose, onCreated }) {
     const [feedUrl, setFeedUrl] = useState('');
     const [categoryName, setCategoryName] = useState('');
@@ -40,7 +44,7 @@ export default function AddFeedModal({ onClose, onCreated }) {
         const deduped = [];
         (categories || []).forEach((item) => {
             const normalized = String(item?.title || '').trim();
-            if (!normalized || deduped.includes(normalized)) return;
+            if (!normalized || isHiddenCategoryTitle(normalized) || deduped.includes(normalized)) return;
             deduped.push(normalized);
         });
         return deduped;

@@ -25,14 +25,6 @@ from app.modules.agent.chat.prompts import (
 from app.modules.agent.chat.state import ChatGraphState
 
 logger = structlog.get_logger(__name__)
-_PROMPT_INJECTION_PATTERN = re.compile(
-    r"(ignore\s+previous|system\s+prompt|developer\s+message|bypass|越狱|忽略以上|请无视|sudo|rm\s+-rf)",
-    re.IGNORECASE,
-)
-_SECRET_PATTERN = re.compile(
-    r"(sk-[A-Za-z0-9_\-]{16,}|api[_-]?key\s*[:=]\s*[A-Za-z0-9_\-]{8,}|AKIA[0-9A-Z]{16})",
-    re.IGNORECASE,
-)
 
 _LENGTH_PREFERENCE_HINTS = {
     "concise": "回答保持简洁，优先 3-5 条要点，避免冗长铺陈。",
@@ -51,7 +43,9 @@ async def answer_generator_node(state: ChatGraphState) -> dict[str, Any]:
     route = state.get("route", "general")
     settings = get_settings()
     user = state.get("user")
+    t_build_model = perf_counter()
     model = build_user_chat_model(user) if user else None
+    logger.debug("chat.answer_gen_build_model", duration_ms=_ms(t_build_model))
     if model is None:
         observe_chat_stage(stage="answer_generator", route=route, status="skip", duration_ms=_ms(t0))
         return {"answer_text": "模型未配置，无法生成回答。", "raw_citations": []}
@@ -74,11 +68,11 @@ async def answer_generator_node(state: ChatGraphState) -> dict[str, Any]:
     # ========== 按 route 构建 user message ==========
     if route == "general":
         evidence_parts: list[str] = []
-        local_text, local_safety = _format_local_evidence(
+        local_text = _format_local_evidence(
             local_evidence,
             max_chars=max(int(settings.chat_evidence_context_budget_chars * 0.65), 1200),
         )
-        web_text, web_safety = _format_web_evidence(
+        web_text = _format_web_evidence(
             web_evidence,
             max_chars=max(int(settings.chat_evidence_context_budget_chars * 0.35), 600),
         )
@@ -93,11 +87,11 @@ async def answer_generator_node(state: ChatGraphState) -> dict[str, Any]:
             query=state["query"],
         )
     else:
-        local_text, local_safety = _format_local_evidence(
+        local_text = _format_local_evidence(
             local_evidence,
             max_chars=max(int(settings.chat_evidence_context_budget_chars * 0.7), 1400),
         )
-        web_text, web_safety = _format_web_evidence(
+        web_text = _format_web_evidence(
             web_evidence,
             max_chars=max(int(settings.chat_evidence_context_budget_chars * 0.3), 700),
         )
@@ -122,25 +116,33 @@ async def answer_generator_node(state: ChatGraphState) -> dict[str, Any]:
         HumanMessage(content=user_msg),
     ]
 
+    local_count = len(local_evidence)
+    web_count = len(web_evidence)
+    logger.info("chat.answer_gen_context", route=route, local_evidence=local_count,
+                web_evidence=web_count, history_turns=len(history))
+    t_llm = perf_counter()
     try:
         resp = await model.ainvoke(messages)
         answer = (resp.content or "").strip()
         tokens = _extract_token_cost(resp)
+        logger.info("chat.answer_gen_llm_done", duration_ms=_ms(t_llm), route=route,
+                    tokens=tokens, answer_len=len(answer))
         if tokens:
             observe_chat_token_cost(route=route, tokens=tokens)
     except Exception as exc:
-        logger.exception("chat.answer_gen_failed", error=str(exc)[:200])
+        logger.exception("chat.answer_gen_failed", duration_ms=_ms(t_llm), error=str(exc)[:200])
         observe_chat_error(node="answer_generator")
         observe_chat_stage(stage="answer_generator", route=route, status="error", duration_ms=_ms(t0))
         answer = f"抱歉，生成回答时出错了：{str(exc)[:100]}"
 
     citations = _extract_citations(answer)
-    security_flags = {
-        "local_injection_filtered": local_safety["injection_filtered"],
-        "local_secret_masked": local_safety["secret_masked"],
-        "web_injection_filtered": web_safety["injection_filtered"],
-        "web_secret_masked": web_safety["secret_masked"],
-    }
+    logger.info(
+        "chat.answer_gen_output",
+        route=route,
+        answer_preview=answer[:500],
+        raw_citation_count=len(citations),
+        raw_citations=citations[:12],
+    )
 
     observe_chat_answer_length(route=route, length=len(answer))
     observe_chat_stage(stage="answer_generator", route=route, status="ok", duration_ms=_ms(t0))
@@ -148,7 +150,6 @@ async def answer_generator_node(state: ChatGraphState) -> dict[str, Any]:
     return {
         "answer_text": answer,
         "raw_citations": citations,
-        "security_flags": security_flags,
     }
 
 
@@ -156,53 +157,43 @@ def _format_local_evidence(
     evidence: list[dict],
     *,
     max_chars: int,
-) -> tuple[str, dict[str, bool]]:
+) -> str:
     if not evidence:
-        return "", {"injection_filtered": False, "secret_masked": False}
+        return ""
     lines: list[str] = []
     total = 0
-    injection_filtered = False
-    secret_masked = False
     for i, e in enumerate(evidence, 1):
         heading = e.get("heading_title") or e.get("section_path") or ""
         title = e.get("article_title", "")
         prefix = f"{title} > {heading}" if heading else title
-        raw_text = e.get("raw_text", "")[:420]
-        safe_text, safe_meta = _sanitize_evidence_text(raw_text)
-        injection_filtered = injection_filtered or safe_meta["injection_filtered"]
-        secret_masked = secret_masked or safe_meta["secret_masked"]
-        line = f"[{i}] {prefix}: {safe_text}"
+        evidence_text = re.sub(r"\s+", " ", (e.get("evidence_text") or e.get("raw_text") or "")[:420]).strip()
+        line = f"[{i}] {prefix}: {evidence_text}"
         if total + len(line) > max_chars:
             break
         total += len(line)
         lines.append(line)
-    return "\n\n".join(lines), {"injection_filtered": injection_filtered, "secret_masked": secret_masked}
+    return "\n\n".join(lines)
 
 
 def _format_web_evidence(
     evidence: list[dict],
     *,
     max_chars: int,
-) -> tuple[str, dict[str, bool]]:
+) -> str:
     if not evidence:
-        return "", {"injection_filtered": False, "secret_masked": False}
+        return ""
     lines: list[str] = []
     total = 0
-    injection_filtered = False
-    secret_masked = False
     for i, e in enumerate(evidence, 1):
         title = e.get("title", "")
         url = e.get("url", "")
-        snippet_raw = e.get("snippet", "")[:320]
-        snippet, safe_meta = _sanitize_evidence_text(snippet_raw)
-        injection_filtered = injection_filtered or safe_meta["injection_filtered"]
-        secret_masked = secret_masked or safe_meta["secret_masked"]
+        snippet = re.sub(r"\s+", " ", (e.get("snippet") or "")[:320]).strip()
         line = f"[W{i}] {title} ({url}): {snippet}"
         if total + len(line) > max_chars:
             break
         total += len(line)
         lines.append(line)
-    return "\n\n".join(lines), {"injection_filtered": injection_filtered, "secret_masked": secret_masked}
+    return "\n\n".join(lines)
 
 
 def _format_history(history: list[dict]) -> str:
@@ -237,29 +228,12 @@ def _format_recent_highlights(items: list[dict]) -> str:
 
 
 def _extract_citations(text: str) -> list[dict]:
-    """从回答文本中提取 [N] 和 [WN] 引用标记。"""
     citations: list[dict] = []
     for m in re.finditer(r"\[(\d+)\]", text):
         citations.append({"id": int(m.group(1)), "type": "local"})
     for m in re.finditer(r"\[W(\d+)\]", text):
         citations.append({"id": int(m.group(1)), "type": "web"})
     return citations
-
-
-def _sanitize_evidence_text(text: str) -> tuple[str, dict[str, bool]]:
-    normalized = re.sub(r"\s+", " ", text or "").strip()
-    if not normalized:
-        return "", {"injection_filtered": False, "secret_masked": False}
-    injection_filtered = False
-    secret_masked = False
-    if _PROMPT_INJECTION_PATTERN.search(normalized):
-        normalized = _PROMPT_INJECTION_PATTERN.sub("[filtered_instruction]", normalized)
-        injection_filtered = True
-    if _SECRET_PATTERN.search(normalized):
-        normalized = _SECRET_PATTERN.sub("[masked_secret]", normalized)
-        secret_masked = True
-    normalized = normalized.replace("<script", "[script]").replace("</script>", "[/script]")
-    return normalized[:420], {"injection_filtered": injection_filtered, "secret_masked": secret_masked}
 
 
 def _ms(start: float) -> float:

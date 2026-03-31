@@ -41,6 +41,8 @@ class ChatGraphState(TypedDict):
     retrieval_scope: str                # article | notebook | none
     output_mode: str                    # concise | detailed | list
     tools_needed: list[str]
+    router_need_web_search: bool
+    router_web_search_reason: str
 
     # ---- Retrieval Planner 输出 ----
     retrieval_plan: RetrievalPlanSpec

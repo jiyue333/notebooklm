@@ -122,6 +122,20 @@ async def update_conversation_rolling_summary(
     await session.flush()
 
 
+async def update_conversation_title(
+    session: AsyncSession,
+    *,
+    conversation_id: str,
+    title: str,
+) -> None:
+    conversation = await session.get(Conversation, conversation_id)
+    if conversation is None:
+        return
+    conversation.title = title
+    conversation.updated_at = datetime.now(UTC)
+    await session.flush()
+
+
 
 
 async def list_conversations(

@@ -36,7 +36,6 @@ _NON_RETRYABLE_INGEST_ERROR_TAGS = frozenset(
         "unsupported_upload_type",
         "fetch_invalid_scheme",
         "fetch_invalid_url",
-        "fetch_ssrf_blocked",
         "parse_empty",
     }
 )

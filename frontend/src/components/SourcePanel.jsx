@@ -19,6 +19,7 @@ const SEARCH_MODE_LABELS = {
     auto: 'Auto Research',
     deep: 'Deep Research',
 };
+const SUMMARY_PREVIEW_LIMIT = 2;
 const getSearchPollAttempts = (mode) => {
     if (mode === 'deep') return 1200;
     if (mode === 'auto') return 960;
@@ -46,6 +47,28 @@ const truncateCardText = (value, maxLength) => {
     if (!normalized) return '';
     if (normalized.length <= maxLength) return normalized;
     return `${normalized.slice(0, maxLength).trimEnd()}…`;
+};
+const stripReasonText = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    const normalized = raw
+        .replace(/推荐理由\s*[:：]\s*/gi, ' ')
+        .replace(/why\s*selected\s*[:：]\s*/gi, ' ')
+        .replace(/核心内容\s*[:：]\s*/gi, ' ')
+        .replace(/\n+/g, ' ');
+    const splitByReason = normalized.split(/(?:推荐理由|why\s*selected)/i);
+    return String(splitByReason[0] || normalized).trim();
+};
+const dedupeStrings = (values = []) => {
+    const seen = new Set();
+    const result = [];
+    values.forEach((value) => {
+        const normalized = String(value || '').trim();
+        if (!normalized || seen.has(normalized)) return;
+        seen.add(normalized);
+        result.push(normalized);
+    });
+    return result;
 };
 const normalizeSearchStatus = (status) => String(status || '').toLowerCase();
 const isTerminalSearchStatus = (status) => TERMINAL_SEARCH_STATUSES.has(normalizeSearchStatus(status));
@@ -96,9 +119,7 @@ export default function SourcePanel({
     const [mode, setMode] = useState('auto');
     const [showModeDropdown, setShowModeDropdown] = useState(false);
     const [showDetailedResults, setShowDetailedResults] = useState(false);
-    const [summaryPreviewCount, setSummaryPreviewCount] = useState(3);
     const modeDropRef = useRef(null);
-    const summaryCardRef = useRef(null);
     const searchLockRef = useRef(false);
     const importLockRef = useRef(false);
     const pollTokenRef = useRef(0);
@@ -107,7 +128,7 @@ export default function SourcePanel({
     const allSelected = sources.length > 0 && sources.every((source) => source.selected);
     const selectedCount = sources.filter((source) => source.selected).length;
     const sortedSources = useMemo(() => [...sources].sort((left, right) => (right.finalScore || 0) - (left.finalScore || 0)), [sources]);
-    const summarySources = sortedSources.slice(0, Math.max(1, Math.min(sortedSources.length, summaryPreviewCount)));
+    const summarySources = sortedSources.slice(0, Math.min(sortedSources.length, SUMMARY_PREVIEW_LIMIT));
     const normalizedSearchStatus = normalizeSearchStatus(searchStatus);
     const isSearchingState = isSearching || normalizedSearchStatus === 'queued' || normalizedSearchStatus === 'running';
     const isCompletedState = normalizedSearchStatus === 'completed' || normalizedSearchStatus === 'partial';
@@ -161,7 +182,6 @@ export default function SourcePanel({
         setSearchModeLabel('Auto Research');
         setSearchStatus('idle');
         setShowDetailedResults(false);
-        setSummaryPreviewCount(3);
         setError('');
     }, [notebookId]);
 
@@ -194,43 +214,6 @@ export default function SourcePanel({
         }
         setSearchViewState('idle');
     }, [isCompletedState, isSearchingState, normalizedSearchStatus, view]);
-
-    useEffect(() => {
-        if (!isCompletedState || showDetailedResults || sortedSources.length === 0) {
-            return undefined;
-        }
-
-        let frameId = 0;
-        const measurePreviewCount = () => {
-            const card = summaryCardRef.current;
-            if (!card) return;
-            const headerHeight = card.querySelector('.sp-summary-header')?.offsetHeight || 0;
-            const actionsHeight = card.querySelector('.sp-summary-actions')?.offsetHeight || 0;
-            const moreLineHeight = card.querySelector('.sp-summary-more-line')?.offsetHeight || 0;
-            const sampleItem = card.querySelector('.sp-summary-item');
-            const sampleHeight = sampleItem?.getBoundingClientRect().height || 0;
-            if (sampleHeight <= 0) return;
-            const availableHeight = Math.max(0, card.clientHeight - headerHeight - actionsHeight - moreLineHeight);
-            const maxVisible = Math.max(1, Math.min(sortedSources.length, Math.floor(availableHeight / sampleHeight)));
-            setSummaryPreviewCount((prev) => (prev === maxVisible ? prev : maxVisible));
-        };
-
-        const scheduleMeasure = () => {
-            if (frameId) {
-                window.cancelAnimationFrame(frameId);
-            }
-            frameId = window.requestAnimationFrame(measurePreviewCount);
-        };
-
-        scheduleMeasure();
-        window.addEventListener('resize', scheduleMeasure);
-        return () => {
-            if (frameId) {
-                window.cancelAnimationFrame(frameId);
-            }
-            window.removeEventListener('resize', scheduleMeasure);
-        };
-    }, [isCompletedState, showDetailedResults, sortedSources.length]);
 
     const pollSearchSession = useCallback(async (sessionId, activeToken, searchMode = 'auto') => {
         const maxAttempts = getSearchPollAttempts(searchMode);
@@ -321,7 +304,6 @@ export default function SourcePanel({
         setSearchViewState('searching');
         setSearchStatus('queued');
         setShowDetailedResults(false);
-        setSummaryPreviewCount(3);
         setShowModeDropdown(false);
         setMode(nextMode);
         setActiveSearchQuery(normalizedQuery);
@@ -419,7 +401,6 @@ export default function SourcePanel({
             setSearchViewState('idle');
             setSearchStatus('idle');
             setShowDetailedResults(false);
-            setSummaryPreviewCount(3);
             setSearchInputValue('');
             setActiveSearchQuery('');
             setSources([]);
@@ -433,17 +414,49 @@ export default function SourcePanel({
         }
     };
 
-    const buildFavicon = (source) => source.faviconUrl || `https://www.google.com/s2/favicons?domain=${encodeURIComponent(source.domain || source.url || '')}&sz=64`;
+    const buildFaviconCandidates = (source) => {
+        const direct = String(source?.faviconUrl || '').trim();
+        const candidates = [];
+        if (direct) candidates.push(direct);
+
+        const tryExtractHost = (raw) => {
+            const normalized = String(raw || '').trim();
+            if (!normalized) return '';
+            try {
+                const parsed = new URL(normalized.startsWith('http') ? normalized : `https://${normalized}`);
+                return parsed.hostname || '';
+            } catch {
+                return '';
+            }
+        };
+
+        const host = tryExtractHost(source?.domain) || tryExtractHost(source?.url);
+        if (host) {
+            candidates.push(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`);
+            candidates.push(`https://icons.duckduckgo.com/ip3/${host}.ico`);
+            candidates.push(`https://${host}/favicon.ico`);
+        }
+        return dedupeStrings(candidates);
+    };
+    const advanceFaviconCandidate = (event, candidates = []) => {
+        const img = event.currentTarget;
+        const wrap = img.closest('.sp-summary-favicon-wrap, .sp-result-favicon-wrap');
+        const currentIndex = Number(img.dataset.faviconIndex || '0');
+        const nextIndex = Number.isFinite(currentIndex) ? currentIndex + 1 : 1;
+        if (nextIndex < candidates.length) {
+            img.dataset.faviconIndex = String(nextIndex);
+            img.src = candidates[nextIndex];
+            return;
+        }
+        wrap?.classList.add('is-failed');
+        img.remove();
+    };
     const buildSourceCoreContent = (source, maxLength = 150) => {
-        const rawContent = source.description
-            || (Array.isArray(source.highlights) && source.highlights[0])
+        const rawContent = stripReasonText(source.description)
+            || stripReasonText(Array.isArray(source.highlights) ? source.highlights[0] : '')
             || '该来源可补充当前研究主题的关键信息';
         return truncateCardText(rawContent, maxLength);
     };
-    const buildSourceReason = (source, maxLength = 150) => (
-        truncateCardText(source.whySelected || '与当前研究任务相关', maxLength)
-    );
-
     const handleClearSearchResult = () => {
         if (isBusy) return;
         pollTokenRef.current += 1;
@@ -456,7 +469,6 @@ export default function SourcePanel({
         setSearchSessionId(null);
         setSources([]);
         setShowDetailedResults(false);
-        setSummaryPreviewCount(3);
         setSearchInputValue('');
         setActiveSearchQuery('');
         setError('');
@@ -551,10 +563,10 @@ export default function SourcePanel({
                     {isSearchingState ? (
                         <div className="sp-running-card">
                             <span className="sp-running-icon">{Ic.refresh}</span>
-                            <span>正在研究网站...</span>
+                            <span>正在研究...</span>
                         </div>
                     ) : isCompletedState && sortedSources.length > 0 ? (
-                        <div className="sp-summary-card" ref={summaryCardRef}>
+                        <div className="sp-summary-card">
                             <div className="sp-summary-header">
                                 <div className="sp-summary-title-wrap">
                                     <span className="sp-summary-icon">{Ic.spark}</span>
@@ -566,34 +578,39 @@ export default function SourcePanel({
                                 </button>
                             </div>
                             <div className="sp-summary-list">
-                                {summarySources.map((source) => (
-                                    <button
-                                        key={source.id}
-                                        type="button"
-                                        className="sp-summary-item"
-                                        aria-label={source.title}
-                                        onClick={() => setShowDetailedResults(true)}
-                                    >
-                                        <span className="sp-summary-favicon-wrap">
-                                            <img
-                                                className="sp-summary-favicon"
-                                                src={buildFavicon(source)}
-                                                alt=""
-                                                loading="lazy"
-                                                onError={(event) => {
-                                                    event.currentTarget.style.display = 'none';
-                                                    const fallback = event.currentTarget.parentElement?.querySelector('.sp-summary-favicon-fallback');
-                                                    if (fallback) fallback.style.display = 'inline-flex';
-                                                }}
-                                            />
-                                            <span className="sp-summary-favicon-fallback" aria-hidden>{Ic.link}</span>
-                                        </span>
-                                        <span className="sp-summary-item-text">
-                                            <span className="sp-summary-item-title">{source.title}</span>
-                                            <span className="sp-summary-item-desc">{buildSourceCoreContent(source, 96)}</span>
-                                        </span>
-                                    </button>
-                                ))}
+                                {summarySources.map((source, index) => {
+                                    const faviconCandidates = buildFaviconCandidates(source);
+                                    const favicon = faviconCandidates[0] || '';
+                                    const sourceKey = source.id || source.url || `${source.title || 'source'}-${index + 1}`;
+                                    return (
+                                        <button
+                                            key={sourceKey}
+                                            type="button"
+                                            className="sp-summary-item"
+                                            aria-label={source.title}
+                                            onClick={() => setShowDetailedResults(true)}
+                                        >
+                                            <span className={`sp-summary-favicon-wrap ${favicon ? 'has-image' : 'no-image'}`}>
+                                                {favicon ? (
+                                                    <img
+                                                        className="sp-summary-favicon"
+                                                        src={favicon}
+                                                        alt=""
+                                                        loading="lazy"
+                                                        data-favicon-index="0"
+                                                        onError={(event) => {
+                                                            advanceFaviconCandidate(event, faviconCandidates);
+                                                        }}
+                                                    />
+                                                ) : null}
+                                                <span className="sp-summary-favicon-fallback" aria-hidden>{Ic.link}</span>
+                                            </span>
+                                            <span className="sp-summary-item-text">
+                                                <span className="sp-summary-item-title">{source.title}</span>
+                                            </span>
+                                        </button>
+                                    );
+                                })}
                             </div>
                             {sortedSources.length > summarySources.length ? (
                                 <button type="button" className="sp-summary-more-line" onClick={() => setShowDetailedResults(true)}>
@@ -601,17 +618,15 @@ export default function SourcePanel({
                                 </button>
                             ) : null}
                             <div className="sp-summary-actions">
-                                <div className="sp-summary-feedback">
-                                    <button type="button" className="sp-summary-ghost-btn" disabled={isBusy}>{Ic.thumbUp}</button>
-                                    <button type="button" className="sp-summary-ghost-btn" disabled={isBusy}>{Ic.thumbDown}</button>
+                                <div className="sp-summary-action-group">
                                     <button type="button" className="sp-summary-delete-btn" onClick={handleClearSearchResult} disabled={isBusy}>
                                         {Ic.trash}
                                         <span>删除</span>
                                     </button>
+                                    <button type="button" className="sp-import-btn" onClick={handleImport} disabled={selectedCount === 0 || isBusy}>
+                                        {isImporting ? '导入中...' : '导入'}
+                                    </button>
                                 </div>
-                                <button type="button" className="sp-import-btn" onClick={handleImport} disabled={selectedCount === 0 || isBusy}>
-                                    {isImporting ? '导入中...' : '导入'}
-                                </button>
                             </div>
                         </div>
                     ) : (
@@ -646,49 +661,51 @@ export default function SourcePanel({
                 </div>
 
                 <div className="sp-results-list">
-                    {sortedSources.length > 0 ? sortedSources.map((source) => (
-                        <div key={source.id} className="sp-result-row">
-                            <span className="sp-result-favicon-wrap">
-                                <img
-                                    className="sp-result-favicon"
-                                    src={buildFavicon(source)}
-                                    alt=""
-                                    loading="lazy"
-                                    onError={(event) => {
-                                        event.currentTarget.style.display = 'none';
-                                        const fallback = event.currentTarget.parentElement?.querySelector('.sp-result-favicon-fallback');
-                                        if (fallback) fallback.style.display = 'inline-flex';
-                                    }}
-                                />
-                                <span className="sp-result-favicon-fallback" aria-hidden>{Ic.link}</span>
-                            </span>
-                            <div className="sp-result-content">
-                                <div className="sp-result-title-row">
-                                    <span className="sp-result-title">{source.title}</span>
+                    {sortedSources.length > 0 ? sortedSources.map((source, index) => {
+                        const faviconCandidates = buildFaviconCandidates(source);
+                        const favicon = faviconCandidates[0] || '';
+                        const sourceKey = source.id || source.url || `${source.title || 'source'}-${index + 1}`;
+                        return (
+                            <div key={sourceKey} className="sp-result-row">
+                                <span className={`sp-result-favicon-wrap ${favicon ? 'has-image' : 'no-image'}`}>
+                                    {favicon ? (
+                                        <img
+                                            className="sp-result-favicon"
+                                            src={favicon}
+                                            alt=""
+                                            loading="lazy"
+                                            data-favicon-index="0"
+                                            onError={(event) => {
+                                                advanceFaviconCandidate(event, faviconCandidates);
+                                            }}
+                                        />
+                                    ) : null}
+                                    <span className="sp-result-favicon-fallback" aria-hidden>{Ic.link}</span>
+                                </span>
+                                <div className="sp-result-content">
+                                    <div className="sp-result-title-row">
+                                        <span className="sp-result-title">{source.title}</span>
+                                    </div>
+                                    <div className="sp-result-field">
+                                        <span className="sp-result-field-label">核心内容</span>
+                                        <span className="sp-result-desc">{buildSourceCoreContent(source, 150)}</span>
+                                    </div>
                                 </div>
-                                <div className="sp-result-field">
-                                    <span className="sp-result-field-label">核心内容</span>
-                                    <span className="sp-result-desc">{buildSourceCoreContent(source, 150)}</span>
-                                </div>
-                                <div className="sp-result-field">
-                                    <span className="sp-result-field-label">推荐理由</span>
-                                    <span className="sp-result-reason">{buildSourceReason(source, 150)}</span>
-                                </div>
+                                <button
+                                    type="button"
+                                    className="sp-result-link"
+                                    title="打开原网页"
+                                    onClick={() => window.open(source.url, '_blank', 'noopener,noreferrer')}
+                                    disabled={isBusy}
+                                >
+                                    {Ic.openLink}
+                                </button>
+                                <button type="button" className={`sp-checkbox ${source.selected ? 'checked' : ''}`} onClick={() => toggleSource(source.id)} disabled={isBusy}>
+                                    {source.selected ? Ic.check : null}
+                                </button>
                             </div>
-                            <button
-                                type="button"
-                                className="sp-result-link"
-                                title="打开原网页"
-                                onClick={() => window.open(source.url, '_blank', 'noopener,noreferrer')}
-                                disabled={isBusy}
-                            >
-                                {Ic.openLink}
-                            </button>
-                            <button type="button" className={`sp-checkbox ${source.selected ? 'checked' : ''}`} onClick={() => toggleSource(source.id)} disabled={isBusy}>
-                                {source.selected ? Ic.check : null}
-                            </button>
-                        </div>
-                    )) : (
+                        );
+                    }) : (
                         <div className="sp-feedback-empty sp-feedback-empty-card">
                             没有找到相关来源
                         </div>

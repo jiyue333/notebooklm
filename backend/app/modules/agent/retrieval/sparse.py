@@ -30,6 +30,7 @@ async def sparse_retrieval(
         select(
             ArticleChunk.id,
             ArticleChunk.article_id,
+            ArticleChunk.chunk_index,
             ArticleChunk.chunk_text,
             ArticleChunk.contextualized_text,
             ArticleChunk.section_path,
@@ -54,10 +55,14 @@ async def sparse_retrieval(
             chunk_id=row.id,
             article_id=row.article_id,
             article_title=article_titles.get(row.article_id, ""),
+            chunk_index=row.chunk_index,
             raw_text=row.chunk_text,
             contextualized_text=row.contextualized_text or row.chunk_text,
+            locator_text=_build_locator_text(row.chunk_text),
             score=float(row.rank),
             sparse_score=float(row.rank),
+            section_path=row.section_path,
+            heading_title=row.heading_title,
         )
         for row in rows
     ]
@@ -73,3 +78,16 @@ async def _load_article_titles(
         select(Article.id, Article.title).where(Article.id.in_(article_ids))
     )
     return {row.id: row.title for row in result.all()}
+
+
+def _build_locator_text(raw_text: str) -> str:
+    text = str(raw_text or "")
+    text = text.replace("\r", " ").replace("\n", " ")
+    text = text.replace("`", "")
+    text = text.replace("#", " ")
+    text = text.replace("*", " ")
+    text = text.replace("_", " ")
+    text = text.replace("[", " ").replace("]", " ")
+    text = text.replace("(", " ").replace(")", " ")
+    text = " ".join(text.split())
+    return text[:240]

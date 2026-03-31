@@ -11,6 +11,7 @@ import json
 from collections import OrderedDict
 from copy import deepcopy
 from pathlib import Path
+from time import perf_counter
 
 import structlog
 
@@ -27,12 +28,21 @@ _RESULT_CACHE: OrderedDict[str, RemarkResult] = OrderedDict()
 _RESULT_CACHE_LOCK = asyncio.Lock()
 
 
+_REMARK_SLOW_MS = 2_000  # remark 单次调用超过此值打 warning
+
+
 async def process_markdown(raw_markdown: str) -> RemarkResult:
     """调用 Node.js remark-processor，返回规范化结果。"""
 
     cache_key = hashlib.sha256(raw_markdown.encode("utf-8")).hexdigest()
     cached = await _cache_get(cache_key)
     if cached:
+        logger.debug(
+            "normalize.cache_hit",
+            key=cache_key[:16],
+            input_chars=len(raw_markdown),
+            output_chars=len(cached.clean_markdown),
+        )
         return cached
 
     settings = get_settings()
@@ -41,14 +51,27 @@ async def process_markdown(raw_markdown: str) -> RemarkResult:
     cache_size = max(32, int(getattr(settings, "remark_cache_size", 256)))
 
     payload = json.dumps({"markdown": raw_markdown})
+    t0 = perf_counter()
     data = await _invoke_remark_worker(payload=payload, script_path=script_path, timeout=timeout)
+    remark_ms = round((perf_counter() - t0) * 1000, 2)
+
     if not data:
+        logger.warning(
+            "normalize.remark_no_data_fallback",
+            input_chars=len(raw_markdown),
+            duration_ms=remark_ms,
+        )
         result = _fallback_result(raw_markdown)
         await _cache_set(cache_key, result, max_items=cache_size)
         return _clone_result(result)
 
     if data.get("error"):
-        logger.warning("normalize.remark_failed", stderr=str(data.get("error"))[:500])
+        logger.warning(
+            "normalize.remark_failed",
+            stderr=str(data.get("error"))[:500],
+            input_chars=len(raw_markdown),
+            duration_ms=remark_ms,
+        )
         result = _fallback_result(raw_markdown)
         await _cache_set(cache_key, result, max_items=cache_size)
         return _clone_result(result)
@@ -56,9 +79,20 @@ async def process_markdown(raw_markdown: str) -> RemarkResult:
     try:
         result = _build_remark_result(data, raw_markdown=raw_markdown)
     except Exception as exc:
-        logger.warning("normalize.remark_json_error", error=str(exc))
+        logger.warning("normalize.remark_json_error", error=str(exc), duration_ms=remark_ms)
         result = _fallback_result(raw_markdown)
+        await _cache_set(cache_key, result, max_items=cache_size)
+        return _clone_result(result)
 
+    log_fn = logger.warning if remark_ms > _REMARK_SLOW_MS else logger.debug
+    log_fn(
+        "normalize.remark_done",
+        input_chars=len(raw_markdown),
+        output_chars=len(result.clean_markdown),
+        toc_count=len(result.toc),
+        fixes=result.fixes_applied,
+        duration_ms=remark_ms,
+    )
     await _cache_set(cache_key, result, max_items=cache_size)
     return _clone_result(result)
 
