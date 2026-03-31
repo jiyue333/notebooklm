@@ -29,6 +29,11 @@ CLI_PROXY_LOCAL_DIR="${CLI_PROXY_LOCAL_DIR:-$HOME/Documents/CliProxyAPI}"
 CLI_PROXY_REMOTE_DIR="${CLI_PROXY_REMOTE_DIR:-/opt/CliProxyAPI}"
 POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-notebooklm-postgres}"
 SITE_DOMAIN="${SITE_DOMAIN:-}"
+MIHOMO_CONFIG_FILE="${MIHOMO_CONFIG_FILE:-$PROJECT_DIR/docker/mihomo/config.private.yaml}"
+MIHOMO_SUBSCRIPTION_URL="${MIHOMO_SUBSCRIPTION_URL:-}"
+MIHOMO_SOCKS_PORT="${MIHOMO_SOCKS_PORT:-7891}"
+MIHOMO_MIXED_PORT="${MIHOMO_MIXED_PORT:-7893}"
+MIHOMO_CONTROLLER_PORT="${MIHOMO_CONTROLLER_PORT:-19090}"
 MIHOMO_SUBSCRIPTION_URL="${MIHOMO_SUBSCRIPTION_URL:-}"
 MIHOMO_MIXED_PORT="${MIHOMO_MIXED_PORT:-7890}"
 MIHOMO_CONTROLLER_PORT="${MIHOMO_CONTROLLER_PORT:-9090}"
@@ -98,6 +103,11 @@ preflight() {
 
   if [[ -z "$SITE_DOMAIN" ]]; then
     err "请在 .env 中设置 SITE_DOMAIN，例如 app.example.com"
+    exit 1
+  fi
+
+  if [[ ! -f "$MIHOMO_CONFIG_FILE" && -z "$MIHOMO_SUBSCRIPTION_URL" ]]; then
+    err "请配置 MIHOMO_CONFIG_FILE（静态配置文件）或 MIHOMO_SUBSCRIPTION_URL（二选一）"
     exit 1
   fi
 
@@ -217,6 +227,96 @@ remote_patch_mihomo_config() {
   local escaped_subscription_url
   escaped_subscription_url="$(printf '%s' "$MIHOMO_SUBSCRIPTION_URL" | sed 's/[&|]/\\&/g')"
 
+  if [[ -f "$MIHOMO_CONFIG_FILE" ]]; then
+    info "使用本地静态 Mihomo 配置: ${MIHOMO_CONFIG_FILE}"
+    rsync -az \
+      -e "ssh ${SSH_OPTS}" \
+      "$MIHOMO_CONFIG_FILE" "${REMOTE_HOST}:${REMOTE_DIR}/docker/mihomo/config.yaml"
+  fi
+
+  ssh_cmd bash <<-MIHOMO_EOF
+    set -euo pipefail
+
+    CONFIG_FILE="${REMOTE_DIR}/docker/mihomo/config.yaml"
+    if [[ ! -f "\$CONFIG_FILE" ]]; then
+      echo "错误：未找到 Mihomo 配置文件 \$CONFIG_FILE"
+      exit 1
+    fi
+
+    if grep -q '__MIHOMO_SUBSCRIPTION_URL__' "\$CONFIG_FILE"; then
+      sed -i 's|__MIHOMO_SUBSCRIPTION_URL__|${escaped_subscription_url}|g' "\$CONFIG_FILE"
+    fi
+
+    if grep -q '^socks-port:' "\$CONFIG_FILE"; then
+      sed -i 's|^socks-port:.*$|socks-port: ${MIHOMO_SOCKS_PORT}|g' "\$CONFIG_FILE"
+    else
+      printf 'socks-port: %s\n' "${MIHOMO_SOCKS_PORT}" >> "\$CONFIG_FILE"
+    fi
+
+    if grep -q '^mixed-port:' "\$CONFIG_FILE"; then
+      sed -i 's|^mixed-port:.*$|mixed-port: ${MIHOMO_MIXED_PORT}|g' "\$CONFIG_FILE"
+    else
+      printf 'mixed-port: %s\n' "${MIHOMO_MIXED_PORT}" >> "\$CONFIG_FILE"
+    fi
+
+    if grep -q '^allow-lan:' "\$CONFIG_FILE"; then
+      sed -i 's|^allow-lan:.*$|allow-lan: true|g' "\$CONFIG_FILE"
+    else
+      printf 'allow-lan: true\n' >> "\$CONFIG_FILE"
+    fi
+
+    if grep -q '^bind-address:' "\$CONFIG_FILE"; then
+      sed -i 's|^bind-address:.*$|bind-address: 0.0.0.0|g' "\$CONFIG_FILE"
+    else
+      printf 'bind-address: 0.0.0.0\n' >> "\$CONFIG_FILE"
+    fi
+
+    if grep -q '^external-controller:' "\$CONFIG_FILE"; then
+      sed -i 's|^external-controller:.*$|external-controller: 0.0.0.0:${MIHOMO_CONTROLLER_PORT}|g' "\$CONFIG_FILE"
+    else
+      printf 'external-controller: 0.0.0.0:%s\n' "${MIHOMO_CONTROLLER_PORT}" >> "\$CONFIG_FILE"
+    fi
+MIHOMO_EOF
+
+  ok "远端 Mihomo 配置已修补"
+}
+
+remote_patch_cli_proxy_config() {
+  step "修补远端 CliProxyAPI 配置"
+
+  ssh_cmd bash <<-CPA_EOF
+    set -euo pipefail
+
+    CONFIG_FILE="${CLI_PROXY_REMOTE_DIR}/config.yaml"
+    if [[ ! -f "\$CONFIG_FILE" ]]; then
+      echo "错误：未找到 CliProxyAPI 配置文件 \$CONFIG_FILE"
+      exit 1
+    fi
+
+    if grep -q '^auth-dir:' "\$CONFIG_FILE"; then
+      sed -i 's|^auth-dir:.*$|auth-dir: "/root/.cli-proxy-api"|g' "\$CONFIG_FILE"
+    else
+      printf 'auth-dir: "/root/.cli-proxy-api"\n' >> "\$CONFIG_FILE"
+    fi
+
+    if grep -q '^proxy-url:' "\$CONFIG_FILE"; then
+      sed -i 's|^proxy-url:.*$|proxy-url: "socks5://127.0.0.1:${MIHOMO_SOCKS_PORT}"|g' "\$CONFIG_FILE"
+    else
+      printf 'proxy-url: "socks5://127.0.0.1:%s"\n' "${MIHOMO_SOCKS_PORT}" >> "\$CONFIG_FILE"
+    fi
+CPA_EOF
+
+  ok "远端 CliProxyAPI 配置已修补"
+
+  remote_patch_cli_proxy_config
+}
+
+remote_patch_mihomo_config() {
+  step "修补远端 Mihomo 配置"
+
+  local escaped_subscription_url
+  escaped_subscription_url="$(printf '%s' "$MIHOMO_SUBSCRIPTION_URL" | sed 's/[&|]/\\&/g')"
+
   ssh_cmd bash <<-MIHOMO_EOF
     set -euo pipefail
 
@@ -294,7 +394,6 @@ start_cli_proxy() {
     REMOTE_DIR="${CLI_PROXY_REMOTE_DIR}"
     BINARY="\${REMOTE_DIR}/cli-proxy-api"
     TARGET_VERSION="${version}"
-    HEALTH_PATH="/v0/management/get-auth-status"
 
     ARCH=\$(uname -m)
     case "\$ARCH" in
@@ -352,8 +451,8 @@ start_cli_proxy() {
     fi
 
     for _ in {1..15}; do
-      if curl -fsSL --max-time 3 "http://127.0.0.1:\${CLI_PORT}\${HEALTH_PATH}" >/dev/null 2>&1; then
-        echo "CliProxyAPI v\${TARGET_VERSION} 已启动，PID=\$NEW_PID"
+      if ss -ltn "( sport = :\${CLI_PORT} )" 2>/dev/null | grep -q LISTEN; then
+        echo "CliProxyAPI v\${TARGET_VERSION} 已启动，PID=\$NEW_PID，TCP 端口=\${CLI_PORT}"
         echo "日志: \${REMOTE_DIR}/cli-proxy-api.log"
         exit 0
       fi
@@ -365,7 +464,7 @@ start_cli_proxy() {
       sleep 1
     done
 
-    echo "错误：CliProxyAPI 启动后未通过健康检查，请检查日志："
+    echo "错误：CliProxyAPI 启动后未监听 TCP 端口，请检查日志："
     tail -50 "\${REMOTE_DIR}/cli-proxy-api.log" || true
     exit 1
 PROXY_EOF
@@ -627,6 +726,7 @@ remote_health() {
     check_http "Grafana"       "http://localhost:3000/api/health"
     check_http "Prometheus"    "http://localhost:9090/-/healthy"
     check_http "Mihomo"        "http://127.0.0.1:${MIHOMO_CONTROLLER_PORT}/version"
+    check_http "Mihomo"        "http://127.0.0.1:${MIHOMO_CONTROLLER_PORT}/version"
 
     echo ""
     echo "========== CliProxyAPI =========="
@@ -638,9 +738,10 @@ remote_health() {
     else
       fail "进程未运行"
     fi
-    if bash -lc "exec 3<>/dev/tcp/127.0.0.1/\${CLI_PORT}" >/dev/null 2>&1; then
+    if ss -ltn "( sport = :\${CLI_PORT} )" 2>/dev/null | grep -q LISTEN; then
       ok "TCP 端口 \${CLI_PORT} 监听正常"
     else
+      fail "TCP 端口 \${CLI_PORT} 无响应"
       fail "TCP 端口 \${CLI_PORT} 无响应"
     fi
 
@@ -688,6 +789,11 @@ usage() {
   DEPLOY_DIR             远程项目目录（默认 /opt/notebooklm）
   DEPLOY_SSH_PORT        SSH 端口（默认 22）
   SITE_DOMAIN            必填，生产环境域名（用于 Caddy 自动签发 HTTPS）
+  MIHOMO_CONFIG_FILE     可选，本地 Mihomo 静态配置文件路径（优先级高于订阅 URL）
+  MIHOMO_SUBSCRIPTION_URL 可选，Mihomo 的 Clash 订阅 URL（未使用静态文件时生效）
+  MIHOMO_SOCKS_PORT      Mihomo 本地 Socks5 端口（默认 7891）
+  MIHOMO_MIXED_PORT      Mihomo 本地混合代理端口（默认 7893）
+  MIHOMO_CONTROLLER_PORT Mihomo 本地控制端口（默认 19090）
   MIHOMO_SUBSCRIPTION_URL 必填，Mihomo 的 Clash 订阅 URL
   MIHOMO_MIXED_PORT      Mihomo 本地混合代理端口（默认 7890）
   MIHOMO_CONTROLLER_PORT Mihomo 本地控制端口（默认 9090）
