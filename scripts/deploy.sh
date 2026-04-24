@@ -29,7 +29,6 @@ CLI_PROXY_LOCAL_DIR="${CLI_PROXY_LOCAL_DIR:-$HOME/Documents/CliProxyAPI}"
 CLI_PROXY_REMOTE_DIR="${CLI_PROXY_REMOTE_DIR:-/opt/CliProxyAPI}"
 POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-notebooklm-postgres}"
 SITE_DOMAIN="${SITE_DOMAIN:-}"
-MIHOMO_CONFIG_FILE="${MIHOMO_CONFIG_FILE:-$PROJECT_DIR/docker/mihomo/config.private.yaml}"
 MIHOMO_SUBSCRIPTION_URL="${MIHOMO_SUBSCRIPTION_URL:-}"
 MIHOMO_SOCKS_PORT="${MIHOMO_SOCKS_PORT:-7891}"
 MIHOMO_MIXED_PORT="${MIHOMO_MIXED_PORT:-7893}"
@@ -106,8 +105,8 @@ preflight() {
     exit 1
   fi
 
-  if [[ ! -f "$MIHOMO_CONFIG_FILE" && -z "$MIHOMO_SUBSCRIPTION_URL" ]]; then
-    err "请配置 MIHOMO_CONFIG_FILE（静态配置文件）或 MIHOMO_SUBSCRIPTION_URL（二选一）"
+  if [[ -z "$MIHOMO_SUBSCRIPTION_URL" ]]; then
+    err "请在 .env 中设置 MIHOMO_SUBSCRIPTION_URL（建议使用 Clash 订阅 URL）"
     exit 1
   fi
 
@@ -227,13 +226,6 @@ remote_patch_mihomo_config() {
   local escaped_subscription_url
   escaped_subscription_url="$(printf '%s' "$MIHOMO_SUBSCRIPTION_URL" | sed 's/[&|]/\\&/g')"
 
-  if [[ -f "$MIHOMO_CONFIG_FILE" ]]; then
-    info "使用本地静态 Mihomo 配置: ${MIHOMO_CONFIG_FILE}"
-    rsync -az \
-      -e "ssh ${SSH_OPTS}" \
-      "$MIHOMO_CONFIG_FILE" "${REMOTE_HOST}:${REMOTE_DIR}/docker/mihomo/config.yaml"
-  fi
-
   ssh_cmd bash <<-MIHOMO_EOF
     set -euo pipefail
 
@@ -243,9 +235,7 @@ remote_patch_mihomo_config() {
       exit 1
     fi
 
-    if grep -q '__MIHOMO_SUBSCRIPTION_URL__' "\$CONFIG_FILE"; then
-      sed -i 's|__MIHOMO_SUBSCRIPTION_URL__|${escaped_subscription_url}|g' "\$CONFIG_FILE"
-    fi
+    sed -i 's|__MIHOMO_SUBSCRIPTION_URL__|${escaped_subscription_url}|g' "\$CONFIG_FILE"
 
     if grep -q '^socks-port:' "\$CONFIG_FILE"; then
       sed -i 's|^socks-port:.*$|socks-port: ${MIHOMO_SOCKS_PORT}|g' "\$CONFIG_FILE"
@@ -789,8 +779,7 @@ usage() {
   DEPLOY_DIR             远程项目目录（默认 /opt/notebooklm）
   DEPLOY_SSH_PORT        SSH 端口（默认 22）
   SITE_DOMAIN            必填，生产环境域名（用于 Caddy 自动签发 HTTPS）
-  MIHOMO_CONFIG_FILE     可选，本地 Mihomo 静态配置文件路径（优先级高于订阅 URL）
-  MIHOMO_SUBSCRIPTION_URL 可选，Mihomo 的 Clash 订阅 URL（未使用静态文件时生效）
+  MIHOMO_SUBSCRIPTION_URL 必填，Mihomo 的 Clash 订阅 URL
   MIHOMO_SOCKS_PORT      Mihomo 本地 Socks5 端口（默认 7891）
   MIHOMO_MIXED_PORT      Mihomo 本地混合代理端口（默认 7893）
   MIHOMO_CONTROLLER_PORT Mihomo 本地控制端口（默认 19090）

@@ -125,7 +125,7 @@ services:
     ports:
       - "127.0.0.1:${MIHOMO_SOCKS_PORT:-7891}:7891"
       - "127.0.0.1:${MIHOMO_MIXED_PORT:-7893}:7893"
-      - "127.0.0.1:${MIHOMO_CONTROLLER_PORT:-19090}:9090"
+      - "127.0.0.1:${MIHOMO_CONTROLLER_PORT:-19090}:19090"
     volumes:
       - ./docker/mihomo/config.yaml:/root/.config/mihomo/config.yaml:ro
     healthcheck:

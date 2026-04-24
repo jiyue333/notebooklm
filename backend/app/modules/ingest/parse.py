@@ -37,6 +37,7 @@ _MINERU_SEMAPHORE: asyncio.Semaphore | None = None
 _MINERU_STATE_LOCK = Lock()
 _MINERU_FAILURE_STREAK = 0
 _MINERU_CIRCUIT_OPEN_UNTIL = 0.0
+_TIMED_OUT_BATCHES: set[str] = set()
 
 _PARSE_CACHE_LOCK = Lock()
 _PARSE_RESULT_CACHE: OrderedDict[str, str] = OrderedDict()
@@ -89,9 +90,17 @@ async def parse_to_markdown(
             "poll_existing_batch",
             lambda: _poll_existing_batch(client, mineru_batch_id, mineru_data_id),
         )
-        if md and cache_key:
-            _write_cached_markdown(cache_key, md)
-        return md
+        if md:
+            if cache_key:
+                _write_cached_markdown(cache_key, md)
+            return md
+        logger.warning(
+            "parse.poll_batch_fallthrough",
+            batch_id=mineru_batch_id,
+            data_id=mineru_data_id,
+            route=content.route.value,
+        )
+        # poll 失败，fall through 到 URL/FILE 回退链
 
     # ====== URL 来源: URL batch 优先，回退文件 batch ======
     if content.source_url:
@@ -173,7 +182,13 @@ async def _poll_existing_batch(
     data_id: str,
 ) -> str | None:
     """poll 已提交的 batch，找到 data_id 对应的结果并下载 markdown。"""
+    if batch_id in _TIMED_OUT_BATCHES:
+        logger.warning("parse.skip_timed_out_batch", batch_id=batch_id, data_id=data_id)
+        return None
     results = await client.poll_batch(batch_id, target_data_id=data_id)
+    if not results:
+        _TIMED_OUT_BATCHES.add(batch_id)
+        return None
     item = next((r for r in results if r.data_id == data_id), None)
     if item and item.state == "done" and item.zip_url:
         return await client.download_markdown(item.zip_url)

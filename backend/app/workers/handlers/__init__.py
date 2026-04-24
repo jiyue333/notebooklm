@@ -216,14 +216,15 @@ async def process_article_ingest(job_id: str) -> None:
             )
         except Exception as exc:
             await session.rollback()
-            job = await jobs_repo.get_job(session, job_id) or job
-            await jobs_repo.mark_job_failed(
-                job,
-                error=str(exc)[:500],
-                session=session,
-                retryable=True,
-                error_code="worker_exception",
-            )
+            fresh_job = await jobs_repo.get_job(session, job_id)
+            if fresh_job:
+                await jobs_repo.mark_job_failed(
+                    fresh_job,
+                    error=str(exc)[:500],
+                    session=session,
+                    retryable=True,
+                    error_code="worker_exception",
+                )
             article = await notebooks_repo.get_article_by_id(session, article_id=article_id)
             if article:
                 article.parse_status = "failed"

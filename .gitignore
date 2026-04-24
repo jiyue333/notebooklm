@@ -59,5 +59,10 @@ dist-ssr
 tmp*.png
 image*.png
 plan.md
-docker/mihomo/config.private.yaml
-mihomo-config.yaml
+.github
+.cursor
+.*;
+.omx/
+.omc/
+简历.pdf
+问题.md
